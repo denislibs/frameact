@@ -103,11 +103,16 @@ frameact/vite            — Vite-плагин (обёртка @solidjs/babel-pl
 
 #### Правки в maverick
 
-1. **`update()` ставит `CLEAN` до compute, а не в `finally`.** Иначе запись в
-   собственный источник во время compute (compute компонента вызывает экшен, который
-   пишет в стор, который читает контейнер-предок) теряется: `notify` выходит по
-   `_state >= DIRTY`, а `finally` затирает флаг. Если во время compute узел снова
-   стал грязным — перепланировать после compute (dev-guard: 100 итераций → ошибка).
+1. **Missed-wake latch.** Иначе запись в собственный источник во время compute
+   (compute компонента вызывает экшен, который пишет в стор, который читает
+   контейнер-предок) теряется: `notify` выходит по `_state >= DIRTY`, а `finally`
+   ставит CLEAN. Наивный фикс «CLEAN до compute» неверен: ленивый pull computed'а
+   внутри compute пишет свежий результат и даёт лишний пересчёт (ломает glitch-free
+   «jagged diamond»). Поэтому: узел помечается `_computing`; `notify` на вычисляющийся
+   узел **латчит** запись сигнала (но игнорирует запись результата computed'а — это
+   ленивый pull, прочитанный свежим); по окончании compute залатченный узел
+   ре-дёргается обычным `notify(DIRTY)` (эффект перепланируется; dev-guard: 100
+   итераций → ошибка). Тот же механизм, что `REACTIVE_MISSED_WAKE` в Solid 2.0.
 2. **`runTop` в ядре не используется** (см. жизненный цикл). `updateCheck` на
    `DISPOSED`-узле — no-op, а не перевод в `CLEAN`.
 
@@ -633,7 +638,7 @@ telegram-tt») сошлись на трёх критических дефект�
 | C2 | `requestMeasure(run)` на каждый эффект; гейт в каждом `run`; релиз `once(run)` | три очереди run'ов, одна fasterdom-задача на фазу; гейт один раз на дрен; парковка на scope, одна `once`, релиз через `requestMeasure` в один кадр |
 | C3 | записи из compute в mutate-фазе уезжали в следующий кадр | дрен читает добавления; `mapArray` обновляет строку в том же кадре |
 | C4 | первый `apply` синхронно у всех фасадов | только у mutation/render; остальные через планировщик |
-| C5 | — | правка maverick: `CLEAN` до compute; `updateCheck` на DISPOSED — no-op |
+| C5 | — | правка maverick: missed-wake latch (не «CLEAN до compute» — см. §3.2); `updateCheck` на DISPOSED — no-op |
 | M1 | контейнер = сигнал + один гейченый эффект на props и global | memo по пропсам + bridge-сигнал на scope; `forceOnHeavyAnimation`/`forceSyncOnIOs` на bridge |
 | M2 | контроль `value=` в рантайме | директивы `use:value`/`use:checked`, синхронный откат, IME |
 | M3 | `order="manual"` + `orderKey` | For владеет DOM-диапазоном, наружу DOM-порядок, orderKey per key, dev-assert |
