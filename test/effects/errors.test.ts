@@ -198,12 +198,38 @@ describe('apply runs without an owner', () => {
 });
 
 // Finding 6
-it('DEV: an effect whose apply re-dirties it forever is stopped with an error', async () => {
+it('an effect whose apply re-dirties it forever is reported', async () => {
   const err = mockConsoleError();
   const $n = signal(0);
-  root(() => createEffect(() => $n(), (v) => void $n.set(v + 1)));
+  const dispose = root((d) => { createEffect(() => $n(), (v) => void $n.set(v + 1)); return d; });
   await flushMicrotasks(300);
   expect(loggedText(err)).toContain('infinite');
+  dispose(); // the guard defers the loop to a macrotask instead of dropping it: stop it here
+});
+
+// I4 (final review)
+it('I4: after the self-dirty guard trips the effect keeps working (re-run on a macrotask)', async () => {
+  const err = mockConsoleError();
+  const $n = signal(0);
+  const $other = signal('a');
+  const applied: string[] = [];
+  root(() =>
+    createEffect(
+      () => [$n(), $other()] as const,
+      ([n, o]) => {
+        applied.push(o);
+        if (n < 150) $n.set(n + 1); // 150 self-dirties: trips the guard (100) once, then settles
+      },
+    ),
+  );
+  await flushMicrotasks(400);
+  expect(loggedText(err)).toContain('infinite');
+  await new Promise((r) => setTimeout(r, 0));
+  await flushMicrotasks(400);
+  expect($n()).toBe(150);
+  $other.set('b');
+  await flushMicrotasks();
+  expect(applied.at(-1)).toBe('b');
 });
 
 // Finding 8

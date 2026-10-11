@@ -130,15 +130,16 @@ it('a write to its own source inside compute re-schedules the effect until stabl
   expect(applied.at(-1)).toBe(3);
 });
 
-it('DEV: an effect that re-dirties itself forever is stopped with an error', async () => {
+it('an effect that re-dirties itself forever is reported', async () => {
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   const $n = signal(0);
   const $go = signal(false);
-  root(() => createEffect(() => { const v = $n(); if ($go()) $n.set(v + 1); return 0; }, () => {}));
+  const dispose = root((d) => { createEffect(() => { const v = $n(); if ($go()) $n.set(v + 1); return 0; }, () => {}); return d; });
   await flushMicrotasks();
   $go.set(true);
   await flushMicrotasks(400);
   expect(err.mock.calls.some((c) => String(c[0]).includes('infinite'))).toBe(true);
+  dispose(); // the guard defers the loop to a macrotask instead of dropping it: stop it here
   err.mockRestore();
 });
 

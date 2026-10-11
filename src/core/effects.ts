@@ -135,7 +135,7 @@ function runEffect(node: EffectNode) {
     if (!computeNode(node)) return;
     if (node._applied === NOT_APPLIED || node._value !== node._applied) applyEffect(node);
   } finally {
-    // Reset the DEV self-dirty counter only when the whole run (compute AND apply) ended without
+    // Reset the self-dirty counter only when the whole run (compute AND apply) ended without
     // re-dirtying the node.
     if (node._state === STATE_CLEAN) node._selfDirty = 0;
     // Children that bailed onto us are re-scheduled however this run ended (success or error).
@@ -213,11 +213,21 @@ function logEffectError(node: EffectNode, error: unknown) {
 setEffectScheduler((raw) => {
   const node = raw as EffectNode;
   if (currentEffect === node) {
-    // Dirtied by a write made inside its own compute (patch 1 made this visible).
-    if (DEV && ++node._selfDirty > SELF_DIRTY_LIMIT) {
+    // Dirtied by a write made inside its own compute or apply (patch 1 made this visible).
+    // Always on: a tickEnd self-loop would otherwise starve the event loop with microtasks.
+    if (++node._selfDirty > SELF_DIRTY_LIMIT) {
       console.error(
-        `[frameact] Potential infinite loop: effect${node._name ? ` "${node._name}"` : ''} re-dirtied itself ${SELF_DIRTY_LIMIT} times. Scheduling stopped.`,
+        `[frameact] Potential infinite loop: effect${node._name ? ` "${node._name}"` : ''} re-dirtied itself ${SELF_DIRTY_LIMIT} times. Its next run is deferred to a macrotask.`,
       );
+      node._selfDirty = 0;
+      // The node is DIRTY already (notify set it): dropping the run would freeze it forever.
+      setTimeout(() => {
+        try {
+          node._schedule(node._run, node);
+        } catch (error) {
+          logEffectError(node, error);
+        }
+      }, 0);
       return;
     }
   }

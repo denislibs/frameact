@@ -28,6 +28,16 @@ export const STATE_CLEAN = 0,
 /** >0 while update() writes a computed's result (a lazy pull the computing reader reads fresh). */
 let computedWriteDepth = 0;
 
+/**
+ * Patch 1b (frameact): bumped by every value-changing *signal* write (computedWriteDepth === 0);
+ * the written node records it in `_writtenAt`. update() compares the sources it links for the
+ * first time in a pass against the epoch at compute start: a write to them during the compute
+ * happened while the node was not yet their observer, so notify() could not latch it.
+ * Computed result writes are not stamped: they are lazy pulls the reader reads fresh (stamping
+ * them costs an extra recompute whenever a stale memo is first read in a pass — a glitch).
+ */
+let writeEpoch = 0;
+
 let effectScheduler: (node: Computation) => void = () => {};
 let effectDisposeHook: (node: Computation) => void = () => {};
 
@@ -315,6 +325,7 @@ export function write(this: Computation, newValue: any): any {
 
   if (this._changed(this._value, value)) {
     this._value = value;
+    if (computedWriteDepth === 0) this._writtenAt = ++writeEpoch;
     if (this._observers) {
       for (let i = 0; i < this._observers.length; i++) {
         notify(this._observers[i], STATE_DIRTY);
@@ -378,6 +389,7 @@ const ComputeNode = function Computation(
   this._effect = false;
   this._computing = false;
   this._missedWake = false;
+  this._writtenAt = 0;
   this._sources = null;
   this._observers = null;
   this._value = initialValue;
@@ -443,6 +455,7 @@ export function update(node: Computation) {
   node._computing = true;
   node._missedWake = false;
   let computeStarted = false;
+  const startEpoch = writeEpoch;
 
   try {
     cleanup(node);
@@ -450,7 +463,10 @@ export function update(node: Computation) {
     computeStarted = true;
     const result = compute(node, node._compute!, node);
 
+    const linkFrom = currentObserversIndex;
+    const linksNew = currentObservers !== null;
     updateObservers(node);
+    if (linksNew) checkNewSources(node, linkFrom, startEpoch);
 
     if (!node._effect && node._init) {
       computedWriteDepth++;
@@ -491,6 +507,28 @@ export function update(node: Computation) {
         node._missedWake = false;
         notify(node, STATE_DIRTY); // propagates to observers / schedules an effect
       }
+    }
+  }
+}
+
+/**
+ * Patch 1b (frameact): sources linked for the first time in this pass were not observed while the
+ * compute ran, so a write to them could not be latched by notify(). Re-dirty the node if one of
+ * them was written after the compute started (a signal), or was invalidated after this pass read
+ * it (a memo left DIRTY/CHECK — it would otherwise never notify us: notify() stops at nodes that
+ * are already dirty). Conservative: "wrote, then read" costs at most one extra recompute.
+ */
+function checkNewSources(node: Computation, from: number, startEpoch: number) {
+  const sources = node._sources!;
+  for (let i = from; i < sources.length; i++) {
+    const source = sources[i];
+    if (
+      source._writtenAt > startEpoch ||
+      source._state === STATE_CHECK ||
+      source._state === STATE_DIRTY
+    ) {
+      node._missedWake = true;
+      return;
     }
   }
 }

@@ -29,7 +29,18 @@ const armed: Record<FramePhase, boolean> = { measure: false, mutate: false, refl
 const request: Record<FramePhase, (cb: () => void) => void> = {
   measure: requestMeasure,
   mutate: requestMutation,
-  reflow: (cb) => requestForcedReflow(cb),
+  // Mutate work produced by forced-reflow applies runs in fasterdom's forced-reflow mutate phase of
+  // the SAME frame (and inside flushSync) instead of slipping to the next frame. The mutate drain
+  // already booked for the next frame then finds an empty queue (same trick as releaseParked).
+  reflow: (cb) =>
+    requestForcedReflow(() => {
+      cb();
+      if (queues.mutate.length === 0) return undefined;
+      return () => {
+        armed.mutate = true; // drain's finally resets it
+        drain('mutate');
+      };
+    }),
 };
 
 /** @internal Task 10 installs gating here. Returns the scope that blocks `scope`, or null. */

@@ -12,6 +12,8 @@ export interface Computation<T = any> extends Scope {
   _computing: boolean;
   /** @internal a signal write landed while computing; re-dirty when the compute ends */
   _missedWake: boolean;
+  /** @internal write epoch of this node's last value-changing write (0 = never) */
+  _writtenAt: number;
 
   /** @internal */
   _value: T;

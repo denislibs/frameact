@@ -238,3 +238,32 @@ it('flushSync runs pending frame effects synchronously', () => {
   flushSync();
   expect(applied).toEqual([1, 2]);
 });
+
+// I5 (final review)
+it('I5: mutate work produced by a forced-reflow apply lands in the same frame, in the mutate phase', async () => {
+  const $a = signal(0);
+  const $h = signal(0);
+  const log: string[] = [];
+  root(() => {
+    createEffect(() => $a(), (v) => { if (v) $h.set(v * 10); }, frameForcedReflow);
+    createMutationEffect(() => $h(), (v) => { if (v) log.push(`${v}:${getPhase()}`); });
+  });
+  await frame(raf);
+  $a.set(1);
+  await frame(raf);
+  expect(log).toEqual(['10:mutate']);
+});
+
+it('I5: mutate work produced by a forced-reflow apply runs within the same flushSync()', () => {
+  const $a = signal(0);
+  const $h = signal(0);
+  const log: string[] = [];
+  root(() => {
+    createEffect(() => $a(), (v) => { if (v) $h.set(v * 10); }, frameForcedReflow);
+    createMutationEffect(() => $h(), (v) => { if (v) log.push(`${v}:${getPhase()}`); });
+  });
+  flushSync();
+  $a.set(1);
+  flushSync();
+  expect(log).toEqual(['10:mutate']);
+});
