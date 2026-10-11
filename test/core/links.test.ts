@@ -91,24 +91,34 @@ describe('link reuse', () => {
     expect(subLinks(nodeOf($a)).length).toBe(1);
   });
 
-  it('a nested compute linking the dep between two reads may leave one duplicate: harmless and stable', () => {
-    // The non-adjacent dedup looks at the dep's last subscriber link only (as alien-signals does);
-    // here the nested memo's link sits in between. A duplicate costs one extra no-op visit in
-    // notify() and is reused, not re-added, on the next run in the same order.
+  it('a nested compute linking the dep between two reads does not make a duplicate link', () => {
+    // The dep's last subscriber link is the nested memo's, not ours: found among this run's links.
     const $a = signal(1);
     const $inner = computed(() => $a() * 2); // links $a → inner between the outer's two reads
     const spy = vi.fn(() => $a() + $inner() + $a());
     const $x = computed(spy);
     expect($x()).toBe(4);
-    const links = depLinks(nodeOf($x)).length;
-    expect(links).toBeLessThanOrEqual(3);
+    expect(depsOf(nodeOf($x))).toEqual([nodeOf($a), nodeOf($inner)]);
+    expect(subsOf(nodeOf($a)).filter((n) => n === nodeOf($x)).length).toBe(1);
     for (let i = 2; i < 5; i++) {
       $a.set(i);
       expect($x()).toBe(4 * i);
-      expect(depLinks(nodeOf($x)).length).toBe(links);
+      expect(depLinks(nodeOf($x)).length).toBe(2);
     }
     expect(spy).toHaveBeenCalledTimes(4);
-    expect(new Set(depsOf(nodeOf($x)))).toEqual(new Set([nodeOf($a), nodeOf($inner)]));
+  });
+
+  it('a re-run reading a shared dep twice (others subscribed after us) keeps one link', () => {
+    const $a = signal(1);
+    const $b = signal(2);
+    const $x = computed(() => $a() + $b() + $a());
+    $x();
+    const $other = computed(() => $a()); // subscribes to $a after $x
+    $other();
+    $a.set(2);
+    expect($x()).toBe(6);
+    expect(depsOf(nodeOf($x))).toEqual([nodeOf($a), nodeOf($b)]);
+    expect(subsOf(nodeOf($a))).toEqual([nodeOf($x), nodeOf($other)]);
   });
 });
 
