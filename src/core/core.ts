@@ -561,11 +561,20 @@ export function update(node: Computation) {
     if (linksNew) checkNewSources(node, linkFrom, startEpoch);
 
     if (!node._effect && node._init) {
-      computedWriteDepth++;
-      try {
-        write.call(node, result);
-      } finally {
-        computedWriteDepth--;
+      // A computed's result is a value, never an updater: not routed through write(), which
+      // would call a function-valued result with the previous value. Not epoch-stamped (see
+      // writeEpoch); observers are notified as a computed result write (not latched).
+      if (node._changed(node._value, result)) {
+        node._value = result;
+        const observers = node._observers;
+        if (observers) {
+          computedWriteDepth++;
+          try {
+            for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_DIRTY);
+          } finally {
+            computedWriteDepth--;
+          }
+        }
       }
     } else {
       node._value = result;
