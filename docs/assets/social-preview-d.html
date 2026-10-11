@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>frameact D</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#1a1714;--strip:#0f0d0b;--ink:#f6efe4;--amber:#f3b23e;--cyan:#7fd1d6;--mute:#8a8176;--hole:#2a2521}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1280px;height:640px;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:"DM Mono",monospace;position:relative}
+.strip{position:absolute;left:0;right:0;top:212px;height:296px;background:var(--strip);transform:rotate(-2.2deg) scale(1.06);transform-origin:center}
+.holes{position:absolute;left:0;right:0;height:22px;display:flex;gap:30px;padding-left:14px}
+.holes i{width:34px;height:22px;border-radius:4px;background:var(--hole);flex:none}
+.holes.t{top:14px}.holes.b{bottom:14px}
+.cells{position:absolute;left:60px;right:60px;top:48px;bottom:48px;display:flex;gap:18px}
+.cell{flex:1;border:1px solid rgba(246,239,228,.12);border-radius:6px;position:relative;padding:14px 16px;background:linear-gradient(180deg,rgba(255,255,255,.03),transparent)}
+.cell .no{font-size:12px;letter-spacing:.1em;color:var(--mute)}
+.cell .ms{position:absolute;right:16px;top:14px;font-size:12px;color:var(--mute)}
+.bars{position:absolute;left:16px;right:16px;bottom:18px;display:flex;gap:4px;height:18px}
+.bars i{display:block;height:100%;border-radius:3px}
+.bars .m{background:var(--cyan)}.bars .w{background:var(--amber)}
+.bars .g{background:transparent;border:1px dashed rgba(243,178,62,.5);flex:1}
+.legend{position:absolute;left:16px;bottom:44px;font-size:11px;color:var(--mute);letter-spacing:.06em}
+.hero{position:absolute;left:0;right:0;top:0;height:176px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 88px 0 88px}
+.word{font-family:Syne,sans-serif;font-weight:800;font-size:96px;line-height:.95;letter-spacing:-.03em;position:relative;top:0;z-index:2}
+.word em{font-style:normal;color:var(--amber)}
+.tag{position:absolute;left:88px;bottom:40px;font-family:Syne,sans-serif;font-weight:700;font-size:28px;letter-spacing:-.01em;line-height:1.2}
+.tag span{color:var(--mute);font-weight:700}
+.meta{position:absolute;right:88px;bottom:42px;text-align:right;font-size:13px;line-height:1.9;color:var(--mute);letter-spacing:.04em}
+.meta b{color:var(--ink);font-weight:500}
+</style></head><body>
+<div class="strip">
+  <div class="holes t"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="cells">
+    <div class="cell"><div class="no">FRAME 0241</div><div class="ms">16.7 ms</div><div class="legend">measure · mutate</div><div class="bars"><i class="m" style="width:22%"></i><i class="w" style="width:46%"></i></div></div>
+    <div class="cell"><div class="no">FRAME 0242</div><div class="ms">16.7 ms</div><div class="legend">measure · mutate</div><div class="bars"><i class="m" style="width:16%"></i><i class="w" style="width:58%"></i></div></div>
+    <div class="cell"><div class="no">FRAME 0243</div><div class="ms">16.7 ms</div><div class="legend" style="color:var(--amber)">heavy animation · gated</div><div class="bars"><i class="g"></i></div></div>
+    <div class="cell"><div class="no">FRAME 0244</div><div class="ms">16.7 ms</div><div class="legend">measure · mutate (batched)</div><div class="bars"><i class="m" style="width:28%"></i><i class="w" style="width:66%"></i></div></div>
+  </div>
+  <div class="holes b"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+</div>
+<div class="hero"><div class="word">frame<em>act</em></div></div>
+<div class="tag">Every signal lands on a frame.<br><span>Measure, then mutate. Nothing in between.</span></div>
+<div class="meta"><b>fine-grained</b> signals, no VDOM<br><b>rAF</b> scheduler with phases<br><b>stricterdom</b> dev checks</div>
+</body></html>

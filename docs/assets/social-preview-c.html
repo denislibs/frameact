@@ -1,0 +1,63 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>frameact C</title>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;800&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a2426;--bg2:#06191b;--ink:#f3ead8;--mute:#86a39e;--mint:#8fe8c9;--coral:#ff7f5f;--edge:rgba(143,232,201,.28)}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1280px;height:640px;overflow:hidden}
+body{background:radial-gradient(700px 500px at 78% 50%,#0f3335 0%,transparent 70%),linear-gradient(160deg,var(--bg),var(--bg2));color:var(--ink);font-family:"Geist Mono",monospace;position:relative}
+.head{position:absolute;left:84px;top:150px;width:560px}
+.eyebrow{font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--mint);margin-bottom:26px}
+.word{font-family:Unbounded,sans-serif;font-weight:800;font-size:92px;line-height:1;letter-spacing:-.03em}
+.word em{font-style:normal;color:var(--coral)}
+.tag{margin-top:30px;font-size:19px;line-height:1.55;color:var(--mute);max-width:520px}
+.tag b{color:var(--ink);font-weight:500}
+.foot{position:absolute;left:84px;bottom:64px;display:flex;gap:28px;font-size:14px;letter-spacing:.04em;color:var(--mute)}
+.foot span::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--mint);margin-right:9px;vertical-align:1px}
+.foot span.c::before{background:var(--coral)}
+svg{position:absolute;right:0;top:0}
+.n{font-family:"Geist Mono",monospace;font-size:12px;fill:var(--mute);letter-spacing:.04em}
+.n.k{fill:var(--ink)}
+</style></head><body>
+<div class="head">
+  <div class="eyebrow">reactive graph · frame-scheduled</div>
+  <div class="word">frame<em>act</em></div>
+  <div class="tag">Signals update the graph instantly.<br>The DOM hears about it <b>once, on the next frame</b> — measure first, mutate second.</div>
+</div>
+<div class="foot"><span>signal / memo</span><span class="c">DOM write</span><em style="font-style:normal;margin-left:6px">no VDOM · heavy-animation gating · stricterdom</em></div>
+
+<svg width="600" height="640" viewBox="0 0 600 640"><g transform="translate(-56 0)">
+  <!-- frame tick: the DOM column lives on it -->
+  <line x1="470" y1="60" x2="470" y2="580" stroke="var(--coral)" stroke-width="2" stroke-dasharray="2 8" opacity=".7"/>
+  <text x="470" y="40" text-anchor="middle" class="n k">rAF · mutate</text>
+  <!-- edges: signals -> memos -> effects on the tick -->
+  <g stroke="var(--edge)" stroke-width="1.5" fill="none">
+    <path d="M110 140 C 200 140, 200 200, 280 200"/>
+    <path d="M110 260 C 200 260, 200 200, 280 200"/>
+    <path d="M110 260 C 200 260, 200 330, 280 330"/>
+    <path d="M110 380 C 200 380, 200 330, 280 330"/>
+    <path d="M110 380 C 200 380, 200 470, 280 470"/>
+    <path d="M110 500 C 200 500, 200 470, 280 470"/>
+    <path d="M280 200 C 380 200, 380 170, 470 170"/>
+    <path d="M280 200 C 380 200, 380 290, 470 290"/>
+    <path d="M280 330 C 380 330, 380 290, 470 290"/>
+    <path d="M280 330 C 380 330, 380 410, 470 410"/>
+    <path d="M280 470 C 380 470, 380 410, 470 410"/>
+    <path d="M280 470 C 380 470, 380 520, 470 520"/>
+  </g>
+  <!-- signals -->
+  <g fill="var(--mint)">
+    <circle cx="110" cy="140" r="7"/><circle cx="110" cy="260" r="7"/><circle cx="110" cy="380" r="7"/><circle cx="110" cy="500" r="7"/>
+  </g>
+  <g class="n"><text x="126" y="144">messages</text><text x="126" y="264">selectedId</text><text x="126" y="384">scrollTop</text><text x="126" y="504">theme</text></g>
+  <!-- memos -->
+  <g fill="none" stroke="var(--mint)" stroke-width="2">
+    <circle cx="280" cy="200" r="8"/><circle cx="280" cy="330" r="8"/><circle cx="280" cy="470" r="8"/>
+  </g>
+  <g class="n"><text x="296" y="204">visibleRows</text><text x="296" y="334">isSticky</text><text x="296" y="474">classList</text></g>
+  <!-- DOM effects on the tick -->
+  <g fill="var(--coral)">
+    <rect x="462" y="162" width="16" height="16" rx="3"/><rect x="462" y="282" width="16" height="16" rx="3"/><rect x="462" y="402" width="16" height="16" rx="3"/><rect x="462" y="512" width="16" height="16" rx="3"/>
+  </g>
+  <g class="n"><text x="490" y="174">&lt;For/&gt;</text><text x="490" y="294">el.scrollTop</text><text x="490" y="414">style.transform</text><text x="490" y="524">classList</text></g>
+</g></svg>
+</body></html>

@@ -1,0 +1,36 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>frameact B</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,900&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#ebedf5;--ink:#10131f;--cobalt:#2743ff;--mute:#6b7290;--rule:#10131f}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1280px;height:640px;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:"IBM Plex Mono",monospace;position:relative}
+/* the single frame tick that cuts the wordmark: above = measure, below = mutate */
+.word{position:absolute;left:78px;top:150px;width:1300px;font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:196px;line-height:1;letter-spacing:-.04em;white-space:nowrap}
+.word .top,.word .bot{position:absolute;left:0;top:0}
+.word .top{color:transparent;-webkit-text-stroke:3px var(--ink);clip-path:inset(0 0 45% 0)}
+.word .bot{color:var(--ink);clip-path:inset(55% 0 0 0)}
+.tick{position:absolute;left:0;right:0;top:256px;height:4px;background:var(--cobalt)}
+.tick::before{content:"";position:absolute;left:88px;top:-10px;width:24px;height:24px;border-radius:50%;background:var(--cobalt)}
+.lbl{position:absolute;font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.lbl b{color:var(--cobalt);font-weight:500}
+.l1{left:88px;top:84px}
+.l2{left:88px;top:386px}
+.tag{position:absolute;left:88px;top:470px;width:760px;font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:34px;line-height:1.15;letter-spacing:-.02em}
+.tag span{color:var(--cobalt)}
+.meta{position:absolute;right:88px;top:470px;text-align:right;font-size:15px;line-height:1.9;color:var(--mute)}
+.meta b{color:var(--ink);font-weight:500}
+.bar{position:absolute;left:88px;right:88px;top:560px;height:1px;background:rgba(16,19,31,.2)}
+.ms{position:absolute;top:572px;font-size:13px;color:var(--mute);letter-spacing:.06em}
+</style></head><body>
+<div class="lbl l1">phase 1 · <b>measure</b> — read layout, pure compute</div>
+<div class="word"><span class="top">frameact</span><span class="bot">frameact</span></div>
+<div class="tick"></div>
+<div class="lbl l2">phase 2 · <b>mutate</b> — write DOM, once, in order</div>
+<div class="tag">Fine-grained signals.<br>One commit <span>per frame.</span></div>
+<div class="meta"><b>no VDOM</b> · no re-render<br><b>rAF</b>-scheduled effects<br><b>stricterdom</b> catches phase violations</div>
+<div class="bar"></div>
+<div class="ms" style="left:88px">0 ms</div>
+<div class="ms" style="left:50%;transform:translateX(-50%)">8.3 ms</div>
+<div class="ms" style="right:88px">16.7 ms</div>
+</body></html>

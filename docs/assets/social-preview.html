@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>frameact social preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0c1220;          /* deep navy, not pure black */
+    --bg2:#101a2e;
+    --ink:#eef3ff;
+    --muted:#7f8ba6;
+    --grid:rgba(141,160,204,.10);
+    --measure:#8fd3ff;     /* read layout: cold */
+    --mutate:#ffb257;      /* write DOM: warm */
+    --signal:#c9b8ff;      /* signal writes: violet */
+    --tick:#dbe4ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:1280px;height:640px;overflow:hidden}
+  body{
+    background:
+      radial-gradient(900px 420px at 18% 10%, #16223d 0%, transparent 70%),
+      linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%);
+    color:var(--ink);
+    font-family:"JetBrains Mono", ui-monospace, monospace;
+    position:relative;
+  }
+  /* fine grid ties the whole image to the timeline */
+  .grid{
+    position:absolute; inset:0;
+    background-image:
+      linear-gradient(to right, var(--grid) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+    background-size:80px 80px;
+    mask-image:linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,.9));
+  }
+  .head{position:absolute; left:88px; top:92px}
+  .wordmark{
+    font-family:"Bricolage Grotesque", sans-serif;
+    font-optical-sizing:auto;
+    font-size:136px; font-weight:700; line-height:.9;
+    letter-spacing:-.045em; color:var(--ink);
+    display:flex; align-items:baseline;
+  }
+  .wordmark .act{color:var(--mutate)}
+  .tag{
+    margin-top:34px;
+    font-family:"Bricolage Grotesque", sans-serif;
+    font-weight:500; font-size:30px; letter-spacing:-.01em;
+    color:#c7d2ee; line-height:1.25; max-width:720px;
+  }
+  .tag b{font-weight:700;color:var(--ink)}
+  .chips{position:absolute; right:88px; top:104px; display:flex; flex-direction:column; gap:12px; align-items:flex-end}
+  .chip{
+    font-size:14px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--muted); border:1px solid rgba(141,160,204,.25);
+    padding:8px 14px; border-radius:999px; backdrop-filter:blur(2px);
+  }
+  .chip i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:10px;vertical-align:1px}
+
+  /* ---- the frame timeline ---- */
+  .timeline{position:absolute; left:0; right:0; bottom:0; height:250px}
+  .timeline svg{display:block}
+  .lbl{font-family:"JetBrains Mono",monospace; font-size:13px; fill:var(--muted); letter-spacing:.04em}
+  .lbl.strong{fill:var(--tick)}
+</style>
+</head>
+<body>
+<div class="grid"></div>
+
+<div class="head">
+  <div class="wordmark">frame<span class="act">act</span></div>
+  <div class="tag">Fine-grained signals that commit <b>once per frame</b>:<br>measure, then mutate, never interleaved.</div>
+</div>
+
+<div class="chips">
+  <div class="chip"><i style="background:var(--signal)"></i>signals, no VDOM</div>
+  <div class="chip"><i style="background:var(--measure)"></i>measure → mutate phases</div>
+  <div class="chip"><i style="background:var(--mutate)"></i>heavy-animation gating</div>
+</div>
+
+<div class="timeline">
+<svg width="1280" height="250" viewBox="0 0 1280 250" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="fade" x1="0" x2="1">
+      <stop offset="0" stop-color="#0c1220" stop-opacity="0"/>
+      <stop offset=".06" stop-color="#0c1220" stop-opacity="0"/>
+      <stop offset="1" stop-color="#0c1220" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- baseline -->
+  <line x1="88" y1="178" x2="1192" y2="178" stroke="rgba(141,160,204,.35)" stroke-width="1"/>
+
+  <!-- rAF ticks at 16.7ms; frame width 276px -->
+  <g id="ticks" stroke="var(--tick)" stroke-width="2">
+    <line x1="88"  y1="60" x2="88"  y2="190"/>
+    <line x1="364" y1="60" x2="364" y2="190"/>
+    <line x1="640" y1="60" x2="640" y2="190"/>
+    <line x1="916" y1="60" x2="916" y2="190"/>
+    <line x1="1192" y1="60" x2="1192" y2="190"/>
+  </g>
+  <g class="lbl">
+    <text x="96" y="214" class="lbl strong">rAF</text>
+    <text x="372" y="214" class="lbl">+16.7 ms</text>
+    <text x="648" y="214" class="lbl">+33.3 ms</text>
+    <text x="924" y="214" class="lbl">+50.0 ms</text>
+    <text x="1192" y="214" text-anchor="end" class="lbl">+66.7 ms</text>
+  </g>
+
+  <!-- phase bands right after each tick: measure (cold) then mutate (warm) -->
+  <g id="phases">
+    <!-- frame 1 -->
+    <rect x="90"  y="150" width="46" height="28" rx="3" fill="var(--measure)"/>
+    <rect x="138" y="150" width="92" height="28" rx="3" fill="var(--mutate)"/>
+    <!-- frame 2 -->
+    <rect x="366" y="150" width="38" height="28" rx="3" fill="var(--measure)"/>
+    <rect x="406" y="150" width="118" height="28" rx="3" fill="var(--mutate)"/>
+    <!-- frame 3: gated — heavy animation owns the frame -->
+    <rect x="642" y="150" width="272" height="28" rx="3" fill="none" stroke="rgba(255,178,87,.45)" stroke-dasharray="4 6"/>
+    <!-- frame 4 -->
+    <rect x="918" y="150" width="54" height="28" rx="3" fill="var(--measure)"/>
+    <rect x="974" y="150" width="140" height="28" rx="3" fill="var(--mutate)"/>
+  </g>
+  <g class="lbl">
+    <text x="90"  y="140">measure</text>
+    <text x="152" y="140">mutate</text>
+    <text x="778" y="169" text-anchor="middle" fill="rgba(255,178,87,.85)">heavy animation · deferred</text>
+  </g>
+
+  <!-- signal writes landing between ticks, batched into the NEXT tick -->
+  <g id="signals" stroke="var(--signal)" stroke-width="1.5" fill="none" opacity=".9">
+    <!-- frame 1 → tick 2 -->
+    <path d="M150 86 C 150 120, 364 110, 364 150"/>
+    <path d="M214 74 C 214 120, 364 110, 364 150"/>
+    <path d="M292 98 C 292 130, 364 120, 364 150"/>
+    <!-- frame 2 → tick 3 (gated: held) -->
+    <path d="M430 80 C 430 150, 916 70, 916 150" stroke-dasharray="3 5" opacity=".5"/>
+    <path d="M520 92 C 520 150, 916 80, 916 150" stroke-dasharray="3 5" opacity=".5"/>
+    <!-- frame 3 → tick 4 (held writes released together) -->
+    <path d="M700 70 C 700 120, 916 110, 916 150"/>
+    <path d="M760 100 C 760 125, 916 118, 916 150"/>
+    <path d="M832 82 C 832 120, 916 110, 916 150"/>
+    <path d="M880 108 C 880 130, 916 125, 916 150"/>
+    <!-- frame 4 → off-canvas -->
+    <path d="M980 90 C 980 120, 1192 110, 1192 150"/>
+    <path d="M1080 76 C 1080 120, 1192 110, 1192 150"/>
+  </g>
+  <g fill="var(--signal)" filter="url(#glow)">
+    <circle cx="150" cy="86" r="5"/><circle cx="214" cy="74" r="5"/><circle cx="292" cy="98" r="5"/>
+    <circle cx="430" cy="80" r="5" opacity=".55"/><circle cx="520" cy="92" r="5" opacity=".55"/>
+    <circle cx="700" cy="70" r="5"/><circle cx="760" cy="100" r="5"/><circle cx="832" cy="82" r="5"/><circle cx="880" cy="108" r="5"/>
+    <circle cx="980" cy="90" r="5"/><circle cx="1080" cy="76" r="5"/>
+  </g>
+  <text x="150" y="58" class="lbl">set()</text>
+  <text x="700" y="54" class="lbl">set()</text>
+</svg>
+</div>
+</body>
+</html>
