@@ -551,7 +551,10 @@ export function updateCheck(node: Computation) {
             l = dep._deps;
             continue;
           }
-          if (ds === STATE_DIRTY) update(dep); // may dirty `cur`
+          if (ds === STATE_DIRTY) {
+            update(dep); // may dirty `cur`
+            if ((dep._state as number) === STATE_DIRTY) settleLatched(dep, cur);
+          }
           l = l.nextDep;
           continue;
         }
@@ -559,10 +562,12 @@ export function updateCheck(node: Computation) {
         if (cur._state === STATE_DIRTY) update(cur);
         else if (cur._state === STATE_CHECK) cur._state = STATE_CLEAN;
         if (checkTop === base) return;
-        l = (checkStack[--checkTop] as Link).nextDep;
+        const up = checkStack[--checkTop] as Link;
         checkStack[checkTop] = null;
         cur = checkStack[--checkTop] as Computation;
         checkStack[checkTop] = null;
+        if (up.dep._state === STATE_DIRTY) settleLatched(up.dep, cur);
+        l = up.nextDep;
       }
     } finally {
       // Normally already at `base`; after a throw, drop this call's frames.
@@ -570,6 +575,20 @@ export function updateCheck(node: Computation) {
     }
   }
   if (node._state === STATE_DIRTY) update(node);
+}
+
+/**
+ * frameact: `dep` was just recomputed inside an updateCheck walk and is DIRTY again — it latched a
+ * signal write made during its own compute (update()'s finally re-dirtied it). That re-dirty's
+ * notify() stopped at `sub`, which is already CHECK, so the walk must not resolve `sub` CLEAN on
+ * dep's unsettled value (it would stay stale: nothing would ever wake it). Verify dep once more;
+ * if it is still unsettled (it keeps writing what it reads), recompute `sub` conservatively —
+ * its compute pulls dep again, and dep's next re-dirty latches `sub` (bounded per pull).
+ */
+function settleLatched(dep: Computation, sub: Computation) {
+  if (sub._state !== STATE_CHECK) return; // dep's result changed (sub DIRTY), or sub was disposed
+  update(dep);
+  if (dep._state === STATE_DIRTY && sub._state === STATE_CHECK) sub._state = STATE_DIRTY;
 }
 
 function cleanup(node: Computation) {

@@ -343,11 +343,11 @@ describe('dependency graph: differential fuzz', () => {
     for (const seed of seeds(600, 1)) runFuzz(seed, false);
   });
 
-  // `it.fails` — on the array implementation 50 of these 600 seeds (all stale values) hit the
-  // missed-wake hole pinned in deps-stress.test.ts ("a dep bound for the first time, invalidated
-  // and re-pulled in the same pass"); P4's read-time subscription closes it. One seed (559305) is
-  // left: a dep that re-dirties itself (latched) inside an updateCheck walk — fixed next.
-  it.fails('graphs with writes inside memo/effect computes (latch rules): oracle values after settling, no unexplained re-runs', () => {
+  // On the array implementation 50 of these 600 seeds (all stale values) hit the missed-wake hole
+  // pinned in deps-stress.test.ts ("a dep bound for the first time, invalidated and re-pulled in
+  // the same pass"), closed by P4's read-time subscription; one more seed (559305) hit "a dep that
+  // re-dirties itself (latched) inside an updateCheck walk".
+  it('graphs with writes inside memo/effect computes (latch rules): oracle values after settling, no unexplained re-runs', () => {
     for (const seed of seeds(600, 100_003)) runFuzz(seed, true);
   });
 });

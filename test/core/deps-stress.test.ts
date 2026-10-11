@@ -513,6 +513,78 @@ describe('missed wake: a dep bound for the first time, invalidated and re-pulled
   });
 });
 
+// Found by the differential fuzz (writers mode), also on the array implementation and 995e983:
+// updateCheck recomputes a DIRTY dep of a CHECK node; if that dep latched a write made during its
+// own compute it ends DIRTY again, but its re-dirty notify() stops at the CHECK node — which the
+// walk then resolved CLEAN on the dep's unsettled value. Nothing woke it again: stale forever.
+const f = (v: number) => (v === 2 ? 5 : 0); // the latched run (v = 1) returns the old result 0
+
+const selfLatching = () => {
+  const $s = signal(0);
+  const spy = vi.fn(() => {
+    const v = $s();
+    if (v === 1) $s.set(2); // latched: re-dirties itself at the end of this run
+    return f(v);
+  });
+  return { $s, $d: computed(spy), spy };
+};
+
+describe('a dep that re-dirties itself (latched) inside an updateCheck walk', () => {
+  it('a direct reader is not resolved clean on the unsettled dep', () => {
+    const { $s, $d, spy } = selfLatching();
+    const xSpy = vi.fn(() => $d() * 10);
+    const $x = computed(xSpy);
+    expect($x()).toBe(0);
+    $s.set(1);
+    expect($x()).toBe(50); // was 0, forever
+    expect($x()).toBe(50);
+    expect($d()).toBe(5);
+    expect(spy).toHaveBeenCalledTimes(3); // initial, the latched run, the settling run
+    expect(xSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('a reader one level up (the dep is reached by descending into a CHECK memo)', () => {
+    const { $s, $d } = selfLatching();
+    const ySpy = vi.fn(() => $d() + 1);
+    const $y = computed(ySpy);
+    const $x = computed(() => $y() * 10);
+    expect($x()).toBe(10);
+    $s.set(1);
+    expect($x()).toBe(60); // was 10, forever
+    expect($y()).toBe(6);
+    expect(ySpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('an effect reading the dep applies the settled value', async () => {
+    const { $s, $d } = selfLatching();
+    const seen: number[] = [];
+    const dispose = root((d) => {
+      createEffect(() => $d(), (v) => { seen.push(v); });
+      return d;
+    });
+    await Promise.resolve();
+    $s.set(1);
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(seen).toEqual([0, 5]); // was [0]: the effect resolved clean, never applied 5
+    dispose();
+  });
+
+  it('a dep that keeps writing what it reads is bounded per pull (no hang), the reader keeps up', () => {
+    const $n = signal(0);
+    const dSpy = vi.fn(() => {
+      $n.set($n() + 1); // writes after reading, every run: latched every run
+      return 0; // unchanged result: the reader stays CHECK through the walk
+    });
+    const $d = computed(dSpy);
+    const $x = computed(() => $d() + 1);
+    expect($x()).toBe(1);
+    const before = dSpy.mock.calls.length;
+    $n.set(100);
+    expect($x()).toBe(1);
+    expect(dSpy.mock.calls.length - before).toBeLessThanOrEqual(4);
+  });
+});
+
 describe('dispose detaches links both ways', () => {
   it('a disposed subscriber is gone from every dependency; a disposed dependency has no subscribers', () => {
     const $a = signal(1);
