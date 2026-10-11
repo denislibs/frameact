@@ -345,7 +345,14 @@ setEffectScheduler((raw) => {
       return;
     }
   }
-  node._schedule(node._run, node);
+  try {
+    node._schedule(node._run, node);
+  } catch (error) {
+    // notify() marked the node dirty before calling us: with no run booked it would stay dirty and
+    // never be scheduled again (only the CLEAN → dirty edge schedules). Undo that, then rethrow.
+    if (node._state !== STATE_DISPOSED) node._state = STATE_CLEAN;
+    throw error;
+  }
 });
 
 /** How an apply-cleanup runs when its effect is disposed. Task 9 replaces this to defer DOM cleanups to the mutate phase. */

@@ -578,6 +578,26 @@ describe('a synchronous custom schedule', () => {
     err.mockRestore();
   });
 
+  it('a custom schedule that throws from a write: the error reaches the writer, the next change schedules again', () => {
+    const $s = signal(0);
+    const applied: number[] = [];
+    let fail = false;
+    const flaky = (run: () => void) => {
+      if (fail) throw new Error('schedule boom');
+      run();
+    };
+    const dispose = root((d) => {
+      createEffect(() => $s(), (v) => { applied.push(v); }, flaky);
+      return d;
+    });
+    fail = true;
+    expect(() => $s.set(1)).toThrow('schedule boom');
+    fail = false;
+    $s.set(2); // the failed scheduling must not leave the node dirty with no run booked
+    expect(applied).toEqual([0, 2]);
+    dispose();
+  });
+
   it('effects writing signals from a synchronous run propagate to other synchronous effects', () => {
     const $a = signal(0);
     const $b = signal(0);
