@@ -25,11 +25,9 @@ export const STATE_CLEAN = 0,
   STATE_DIRTY = 2,
   STATE_DISPOSED = 3;
 
-/** >0 while update() writes a computed's result (a lazy pull the computing reader reads fresh). */
-let computedWriteDepth = 0;
-
 /**
- * Patch 1b (frameact): bumped by every value-changing *signal* write (computedWriteDepth === 0);
+ * Patch 1b (frameact): bumped by every value-changing *signal* write (write(); computed results
+ * are written inline by update() and never stamped);
  * the written node records it in `_writtenAt`. update() compares the sources it links for the
  * first time in a pass against the epoch at compute start: a write to them during the compute
  * happened while the node was not yet their observer, so notify() could not latch it.
@@ -365,7 +363,7 @@ export function read(this: Computation): any {
     else currentObservers.push(this);
   }
 
-  if (this._compute) updateCheck(this);
+  if (this._compute !== null && this._state !== STATE_CLEAN) updateCheck(this);
 
   return this._value;
 }
@@ -375,11 +373,10 @@ export function write(this: Computation, newValue: any): any {
 
   if (this._changed(this._value, value)) {
     this._value = value;
-    if (computedWriteDepth === 0) this._writtenAt = ++writeEpoch;
-    if (this._observers) {
-      for (let i = 0; i < this._observers.length; i++) {
-        notify(this._observers[i], STATE_DIRTY);
-      }
+    this._writtenAt = ++writeEpoch;
+    const observers = this._observers;
+    if (observers !== null) {
+      for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_DIRTY, true);
     }
   }
 
@@ -517,8 +514,10 @@ export function updateCheck(node: Computation) {
   if (node._state === STATE_DISPOSED) return;
 
   if (node._state === STATE_CHECK) {
-    for (let i = 0; i < node._sources!.length; i++) {
-      updateCheck(node._sources![i]);
+    const sources = node._sources!;
+    for (let i = 0; i < sources.length; i++) {
+      const source = sources[i];
+      if (source._state !== STATE_CLEAN) updateCheck(source);
       if ((node._state as number) === STATE_DIRTY) {
         // Stop the loop here so we won't trigger updates on other parents unnecessarily
         // If our computation changes to no longer use some sources, we don't
@@ -548,12 +547,18 @@ export function update(node: Computation) {
   node._missedWake = false;
   let computeStarted = false;
   const startEpoch = writeEpoch;
+  const prevScope = currentScope,
+    prevObserver = currentObserver;
 
   try {
     cleanup(node);
 
     computeStarted = true;
-    const result = compute(node, node._compute!, node);
+    currentScope = node;
+    currentObserver = node;
+    const result = node._compute!.call(node);
+    currentScope = prevScope;
+    currentObserver = prevObserver;
 
     const linkFrom = currentObserversIndex;
     const linksNew = currentObservers !== null;
@@ -561,19 +566,14 @@ export function update(node: Computation) {
     if (linksNew) checkNewSources(node, linkFrom, startEpoch);
 
     if (!node._effect && node._init) {
-      // A computed's result is a value, never an updater: not routed through write(), which
-      // would call a function-valued result with the previous value. Not epoch-stamped (see
-      // writeEpoch); observers are notified as a computed result write (not latched).
+      // A computed's result write: a value, never an updater (not routed through write()); not a
+      // signal write either (no epoch stamp, never latched by a reader mid-compute — it is a lazy
+      // pull that reader reads fresh).
       if (node._changed(node._value, result)) {
         node._value = result;
         const observers = node._observers;
-        if (observers) {
-          computedWriteDepth++;
-          try {
-            for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_DIRTY);
-          } finally {
-            computedWriteDepth--;
-          }
+        if (observers !== null) {
+          for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_DIRTY, false);
         }
       }
     } else {
@@ -581,6 +581,8 @@ export function update(node: Computation) {
       node._init = true;
     }
   } catch (error) {
+    currentScope = prevScope;
+    currentObserver = prevObserver;
     // Effects report their own errors (effects.ts); the `initial` hint only fits computeds.
     if (DEV && !node._effect && !node._init && typeof node._value === 'undefined') {
       console.error(
@@ -606,7 +608,7 @@ export function update(node: Computation) {
       node._state = STATE_CLEAN;
       if (node._missedWake) {
         node._missedWake = false;
-        notify(node, STATE_DIRTY); // propagates to observers / schedules an effect
+        notify(node, STATE_DIRTY, true); // propagates to observers / schedules an effect
       }
     }
   }
@@ -659,12 +661,12 @@ function updateObservers(node: Computation) {
   }
 }
 
-function notify(node: Computation, state: number) {
+function notify(node: Computation, state: number, latch: boolean) {
   if (node._computing) {
     // Patch 1 (frameact): a write landing on a node mid-compute. A computed's result write is a
     // lazy pull this pass reads fresh — ignore it (maverick's behavior). A signal write may have
     // changed a value this pass already read: latch it; update() re-dirties the node at the end.
-    if (computedWriteDepth === 0) node._missedWake = true;
+    if (latch) node._missedWake = true;
     return;
   }
 
@@ -675,10 +677,9 @@ function notify(node: Computation, state: number) {
   }
 
   node._state = state;
-  if (node._observers) {
-    for (let i = 0; i < node._observers.length; i++) {
-      notify(node._observers[i], STATE_CHECK);
-    }
+  const observers = node._observers;
+  if (observers !== null) {
+    for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_CHECK, latch);
   }
 }
 
