@@ -307,12 +307,46 @@ export function computedKeyedMapBy<Item, Key, Mapped>(
 function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped>): Mapped[] {
   const newItems = this._list() || [];
   const newLen = newItems.length;
+  const oldLen = this._len;
+  const oldItems = this._items;
+  const oldKeys = this._keys;
 
-  // Transactional like updateKeyedMap: locals first, commit at the end, rows created by a pass
-  // that throws are disposed. Row mappers and keyFn are isolated.
+  // 1) Common prefix: by reference first (same reference ⇒ same key, no keyFn call), then by key.
+  // The key computed where the prefix breaks is kept for the window below (keyFn runs once per item).
+  const min = oldLen < newLen ? oldLen : newLen;
+  let start = 0;
+  let startKey: Key | undefined;
+  let hasStartKey = false;
+  for (; start < min; start++) {
+    const item = newItems[start];
+    if (item === oldItems[start]) continue;
+    const key = keyOf(this, item, start);
+    if (key !== oldKeys[start]) {
+      startKey = key;
+      hasStartKey = true;
+      break;
+    }
+  }
+
+  // 2) Same keys at every position (the common case: one row's item replaced): write the changed
+  // item signals in place and return the previous array — downstream `insert` sees no change.
+  // Nothing is allocated on this path.
+  if (start === newLen && newLen === oldLen) {
+    for (let j = 0; j < newLen; j++) {
+      const item = newItems[j];
+      if (item !== oldItems[j]) {
+        oldItems[j] = item;
+        write.call(this._itemNodes[j], item);
+      }
+    }
+    return this._mappings;
+  }
+
+  // Otherwise transactional like updateKeyedMap: locals first, commit at the end, rows created by
+  // a pass that throws are disposed. Row mappers and keyFn are isolated.
   scoped(() => {
     if (newLen === 0) {
-      if (this._len !== 0) {
+      if (oldLen !== 0) {
         dispose.call(this._scope, false);
         this._keys = [];
         this._items = [];
@@ -324,43 +358,94 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
       return;
     }
 
-    // Resolve keys; a duplicate falls back to an index key (like teact's `key` handling).
-    const newKeys: Key[] = new Array(newLen);
-    const seen = new Set<Key>();
-    for (let j = 0; j < newLen; j++) {
-      let key = keyOf(this, newItems[j], j);
-      if (seen.has(key)) {
-        if (DEV) console.warn('[frameact] mapArray: duplicate key', key, '— falling back to index');
-        key = indexKey(this, j);
+    // 3) Common suffix, the same way.
+    let end = oldLen - 1;
+    let newEnd = newLen - 1;
+    let endKey: Key | undefined;
+    let hasEndKey = false;
+    while (end >= start && newEnd >= start) {
+      const item = newItems[newEnd];
+      if (item !== oldItems[end]) {
+        const key = newEnd === start && hasStartKey ? (startKey as Key) : keyOf(this, item, newEnd);
+        if (key !== oldKeys[end]) {
+          endKey = key;
+          hasEndKey = true;
+          break;
+        }
       }
-      seen.add(key);
-      newKeys[j] = key;
+      end--;
+      newEnd--;
     }
-
-    const oldLen = this._len;
-    const oldIndexByKey = new Map<Key, number>();
-    for (let i = 0; i < oldLen; i++) oldIndexByKey.set(this._keys[i], i);
 
     const mappings: Mapped[] = new Array(newLen);
     const itemNodes: Computation<Item>[] = new Array(newLen);
     const indexNodes: Computation<number>[] = new Array(newLen);
-    const kept = new Uint8Array(oldLen);
+    const keys: Key[] = new Array(newLen);
     const created: Computation[] = [];
+    let removed: Computation[] | null = null;
+
+    for (let j = 0; j < start; j++) {
+      mappings[j] = this._mappings[j];
+      itemNodes[j] = this._itemNodes[j];
+      indexNodes[j] = this._indexNodes[j];
+      keys[j] = oldKeys[j];
+    }
+    for (let j = newEnd + 1, i = end + 1; j < newLen; j++, i++) {
+      mappings[j] = this._mappings[i];
+      itemNodes[j] = this._itemNodes[i];
+      indexNodes[j] = this._indexNodes[i];
+      keys[j] = oldKeys[i];
+    }
 
     try {
-      for (let j = 0; j < newLen; j++) {
-        const i = oldIndexByKey.get(newKeys[j]);
-        if (i !== undefined && !kept[i]) {
-          kept[i] = 1;
-          mappings[j] = this._mappings[i];
-          itemNodes[j] = this._itemNodes[i];
-          indexNodes[j] = this._indexNodes[i];
-        } else {
-          createRow(this, newItems[j], j, mappings, itemNodes, indexNodes, created);
+      // 4) The changed window [start, newEnd] (new) vs [start, end] (old): Map/Set only for it.
+      // Duplicates are resolved within the window (a duplicate of an unchanged prefix/suffix key
+      // gets its own row; identity for duplicate keys is best-effort, as in teact).
+      if (newEnd >= start) {
+        let oldIndexByKey: Map<Key, number> | null = null;
+        let kept: Uint8Array | null = null;
+        if (end >= start) {
+          oldIndexByKey = new Map<Key, number>();
+          kept = new Uint8Array(end - start + 1);
+          for (let i = start; i <= end; i++) oldIndexByKey.set(oldKeys[i], i);
         }
+        const seen = new Set<Key>();
+        for (let j = start; j <= newEnd; j++) {
+          let key =
+            j === start && hasStartKey
+              ? (startKey as Key)
+              : j === newEnd && hasEndKey
+                ? (endKey as Key)
+                : keyOf(this, newItems[j], j);
+          if (seen.has(key)) {
+            if (DEV) console.warn('[frameact] mapArray: duplicate key', key, '— falling back to index');
+            key = indexKey(this, j);
+          }
+          seen.add(key);
+          keys[j] = key;
+          const i = oldIndexByKey !== null ? oldIndexByKey.get(key) : undefined;
+          if (i !== undefined) {
+            oldIndexByKey!.delete(key); // each old row is reused at most once
+            kept![i - start] = 1;
+            mappings[j] = this._mappings[i];
+            itemNodes[j] = this._itemNodes[i];
+            indexNodes[j] = this._indexNodes[i];
+          } else {
+            createRow(this, newItems[j], j, mappings, itemNodes, indexNodes, created);
+          }
+        }
+        // Old window rows that were not reused are removed (at commit).
+        // (by position, not by the Map: a key duplicated in the old window maps to one row only)
+        if (kept !== null) {
+          for (let i = start; i <= end; i++) {
+            if (!kept[i - start]) (removed ??= []).push(this._itemNodes[i]);
+          }
+        }
+      } else if (end >= start) {
+        removed = this._itemNodes.slice(start, end + 1);
       }
 
-      // Reused rows learn their new item and index (no-ops for the rows created above).
+      // 5) Reused rows learn their new item and index (no-ops for the rows created above).
       for (let j = 0; j < newLen; j++) {
         if (itemNodes[j]._value !== newItems[j]) write.call(itemNodes[j], newItems[j]);
         if (indexNodes[j]._value !== j) write.call(indexNodes[j], j);
@@ -370,14 +455,12 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
       throw error;
     }
 
-    const removed: Computation[] = [];
-    for (let i = 0; i < oldLen; i++) if (!kept[i]) removed.push(this._itemNodes[i]);
-    disposeChildren(this._scope, removed);
+    if (removed !== null) disposeChildren(this._scope, removed);
 
     this._mappings = mappings;
     this._itemNodes = itemNodes;
     this._indexNodes = indexNodes;
-    this._keys = newKeys;
+    this._keys = keys;
     this._items = newItems.slice(0);
     this._len = newLen;
   }, this._scope);
@@ -430,6 +513,16 @@ export interface MapArrayOptions<Item> {
   id?: string;
 }
 
+/**
+ * Reactive list mapping. `keyed: fn` is the recommended pattern for large lists (spec §3.5
+ * "Стоимость", B): when every position keeps its key (one row's item replaced by a new object) the
+ * changed item signals are written in place and the previous array is returned, so a downstream
+ * `insert` does not reconcile; otherwise only the window between the common prefix and suffix is
+ * diffed with a Map.
+ *
+ * Rows that read `index()` re-run whenever their position changes — on every prepend, for every
+ * row after it. Message-list rows should not read `index()`.
+ */
 export function mapArray<Item, Mapped>(
   list: ReadSignal<Maybe<readonly Item[]>>,
   mapFn: (item: any, index: any) => Mapped,
