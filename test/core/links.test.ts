@@ -91,34 +91,67 @@ describe('link reuse', () => {
     expect(subLinks(nodeOf($a)).length).toBe(1);
   });
 
-  it('a nested compute linking the dep between two reads does not make a duplicate link', () => {
-    // The dep's last subscriber link is the nested memo's, not ours: found among this run's links.
+  it('a nested compute linking the dep between two reads leaves at most one duplicate, stable across re-runs', () => {
+    // The dep's last subscriber link is the nested memo's: a duplicate is added (as alien-signals
+    // does) — looking the first link up would make linking quadratic (see "linking cost").
     const $a = signal(1);
     const $inner = computed(() => $a() * 2); // links $a → inner between the outer's two reads
     const spy = vi.fn(() => $a() + $inner() + $a());
     const $x = computed(spy);
     expect($x()).toBe(4);
-    expect(depsOf(nodeOf($x))).toEqual([nodeOf($a), nodeOf($inner)]);
-    expect(subsOf(nodeOf($a)).filter((n) => n === nodeOf($x)).length).toBe(1);
+    const links = depLinks(nodeOf($x)).length;
+    expect(links).toBeLessThanOrEqual(3);
+    expect(new Set(depsOf(nodeOf($x)))).toEqual(new Set([nodeOf($a), nodeOf($inner)]));
     for (let i = 2; i < 5; i++) {
       $a.set(i);
       expect($x()).toBe(4 * i);
-      expect(depLinks(nodeOf($x)).length).toBe(2);
+      expect(depLinks(nodeOf($x)).length).toBe(links);
     }
     expect(spy).toHaveBeenCalledTimes(4);
   });
 
-  it('a re-run reading a shared dep twice (others subscribed after us) keeps one link', () => {
+  it('a re-run reading a shared dep twice (others subscribed after us): one duplicate, purged with the dep', () => {
     const $a = signal(1);
     const $b = signal(2);
-    const $x = computed(() => $a() + $b() + $a());
+    const $flag = signal(true);
+    const spy = vi.fn(() => ($flag() ? $a() + $b() + $a() : $b()));
+    const $x = computed(spy);
     $x();
     const $other = computed(() => $a()); // subscribes to $a after $x
     $other();
     $a.set(2);
     expect($x()).toBe(6);
-    expect(depsOf(nodeOf($x))).toEqual([nodeOf($a), nodeOf($b)]);
-    expect(subsOf(nodeOf($a))).toEqual([nodeOf($x), nodeOf($other)]);
+    expect(subsOf(nodeOf($a)).filter((n) => n === nodeOf($x)).length).toBeLessThanOrEqual(2);
+    $a.set(3);
+    expect($x()).toBe(8);
+    expect(spy).toHaveBeenCalledTimes(3); // one run per change despite the duplicate
+    $flag.set(false); // drops $a: every link to it goes
+    expect($x()).toBe(2);
+    expect(subsOf(nodeOf($a))).toEqual([nodeOf($other)]);
+    $a.set(4);
+    expect($x()).toBe(2);
+    expect(spy).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('linking cost', () => {
+  // Review stage 2, Important 1: a dedup scan over the run's links made a first run (or a full
+  // change of deps) O(n²) when the deps had other subscribers — 16k deps: ~270 ms vs ~1 ms.
+  it('a first run over 20 000 signals that already have subscribers stays linear', () => {
+    const N = 20_000;
+    const signals = Array.from({ length: N }, () => signal(1));
+    const others = signals.map((s) => computed(() => s()));
+    for (const o of others) o();
+    const $sum = computed(() => {
+      let t = 0;
+      for (const s of signals) t += s();
+      return t;
+    });
+    const t0 = performance.now();
+    expect($sum()).toBe(N);
+    const ms = performance.now() - t0;
+    expect(ms).toBeLessThan(150); // linear: a few ms; the quadratic scan: hundreds
+    expect(depLinks(nodeOf($sum)).length).toBe(N);
   });
 });
 

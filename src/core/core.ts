@@ -720,9 +720,8 @@ export function update(node: Computation) {
  * P4 (frameact, alien-signals style): track `dep` for `sub` during sub's compute. When deps are
  * read in the same order as last time the next old link is reused (no allocation, no diff);
  * otherwise a new link is inserted (O(1)) into both lists, and old links not reused by the end of
- * the compute are purged. Repeated reads of one dep in a run are deduped (adjacent: the tail; the
- * dep's last link, if it is this compute's; else a scan of this run's links — only for a dep that
- * other readers subscribed to in between, on the new-link path).
+ * the compute are purged. Repeated reads of one dep in a run are deduped when cheap (adjacent: the
+ * tail; otherwise: the dep's last link, if it is this compute's); else a duplicate link is added.
  * Patch 1b (frameact) lives here: a NEW link to a dep written after this compute started missed
  * that write (we were not subscribed yet) — latch it. Old links stay subscribed for the whole
  * compute, and new ones from the end of the read, so later changes reach notify()'s latch.
@@ -737,18 +736,11 @@ function link(dep: Computation, sub: Computation) {
     return;
   }
   const prevSub = dep._subsTail;
-  if (prevSub !== null) {
-    if (prevSub.version === currentCycle && prevSub.sub === sub) return;
-    // A repeated read whose link is no longer the dep's last (another reader subscribed since):
-    // look among the links confirmed in this run (head … depsTail) instead of adding a duplicate
-    // (harmless, but a second visit in every notify() and an object kept per duplicate).
-    if (prevDep !== null) {
-      for (let x = sub._deps!; ; x = x.nextDep!) {
-        if (x.dep === dep) return;
-        if (x === prevDep) break;
-      }
-    }
-  }
+  if (prevSub !== null && prevSub.version === currentCycle && prevSub.sub === sub) return;
+  // A repeated read whose link is no longer the dep's last (another reader subscribed in between)
+  // adds a duplicate link, as in alien-signals: both are confirmed in this run, purged or kept
+  // together, and the second visit in notify() stops at once. Looking the first one up would make
+  // linking O(deps) per new link.
   // A new link missed what happened before it: a write to the dep earlier in this compute, or the
   // dep left unsettled by its pull (it latched a write of its own and re-dirtied itself).
   if (dep._writtenAt > currentStartEpoch || dep._state !== STATE_CLEAN) sub._flags |= F_MISSED;
