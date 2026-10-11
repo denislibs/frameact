@@ -8,31 +8,17 @@ import {
   createMemo,
   createRoot,
   createSignal,
-  type Schedule,
+  flushSync,
 } from "frameact";
 import { retain } from "../util/cleanup";
 import { ReactiveFramework } from "../util/reactiveFramework";
 
 // Effects are two-phase: `compute` is tracked and runs synchronously at creation; re-runs go
-// through the effect's scheduler. The default `tickEnd` is a microtask with a loop guard (at most
-// 100 runs of one effect per macrotask, then runs are moved to setTimeout) — the benchmark
-// drives thousands of synchronous updates within one macrotask, so it would trip that guard.
-// A plain queue drained at the outer batch boundary gives the benchmark's expected semantics
-// (effects have run when withBatch returns), the same shape as the Vue/Oby adapters.
-const queue: (() => void)[] = [];
-const schedule: Schedule = (run) => {
-  queue.push(run);
-};
+// through the effect's scheduler — here the default `tickEnd` (what an app uses), drained
+// synchronously by `flushSync()` at the outer batch boundary, so effects have run when withBatch
+// returns. tickEnd's loop guard counts runs per drain, and every flushSync() is its own drain, so
+// thousands of updates in one macrotask are not mistaken for a loop.
 let batchDepth = 0;
-
-function drain() {
-  try {
-    // Index loop: a running effect may schedule more effects (they are appended).
-    for (let i = 0; i < queue.length; i++) queue[i]();
-  } finally {
-    queue.length = 0;
-  }
-}
 
 const noop = () => {};
 
@@ -51,14 +37,14 @@ export const frameactFramework: ReactiveFramework = {
   },
   computed: (fn) => ({ read: createMemo(fn) }),
   // The work happens in the tracked compute half; the untracked apply half has nothing to do.
-  effect: (fn) => createEffect(fn, noop, schedule),
+  effect: (fn) => createEffect(fn, noop),
   withBatch: (fn) => {
     // Writes never run effects synchronously in frameact, so a "batch" is just the drain point.
     batchDepth++;
     try {
       fn();
     } finally {
-      if (--batchDepth === 0) drain();
+      if (--batchDepth === 0) flushSync();
     }
   },
   withBuild: (fn) => {
@@ -67,8 +53,8 @@ export const frameactFramework: ReactiveFramework = {
       retain(dispose);
       return fn();
     });
-    // First apply of each new effect was queued; run it so the graph is quiet after construction.
-    if (batchDepth === 0) drain();
+    // First apply of each new effect was scheduled on tickEnd; run it so the graph is quiet after construction.
+    if (batchDepth === 0) flushSync();
     return result;
   },
 };
