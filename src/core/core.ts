@@ -535,8 +535,9 @@ export function isFunction(value: unknown): value is Function {
 }
 
 /**
- * Explicit DFS stack for updateCheck (frames: node, link, epoch, rescans). Re-entrant: each call
- * works above its base.
+ * Explicit DFS stack for updateCheck (frames: node, link, scan). `scan` packs the write epoch the
+ * node's scan started at and its rescan count: epoch + rescans / 8 (exact while epoch < 2^49).
+ * Re-entrant: each call works above its base.
  */
 const checkStack: any[] = [];
 let checkTop = 0;
@@ -565,8 +566,7 @@ export function updateCheck(node: Computation) {
     const base = checkTop;
     let cur = node,
       l = node._deps,
-      epoch = writeEpoch,
-      rescans = 0;
+      scan = writeEpoch;
     try {
       for (;;) {
         if (l !== null && cur._state === STATE_CHECK) {
@@ -575,12 +575,10 @@ export function updateCheck(node: Computation) {
           if (ds === STATE_CHECK) {
             checkStack[checkTop++] = cur;
             checkStack[checkTop++] = l;
-            checkStack[checkTop++] = epoch;
-            checkStack[checkTop++] = rescans;
+            checkStack[checkTop++] = scan;
             cur = dep;
             l = dep._deps;
-            epoch = writeEpoch;
-            rescans = 0;
+            scan = writeEpoch;
             continue;
           }
           if (ds === STATE_DIRTY) update(dep); // may dirty `cur`
@@ -588,10 +586,10 @@ export function updateCheck(node: Computation) {
           continue;
         }
         // `cur`'s deps are verified. A write during the scan may have re-dirtied one already passed.
-        if (cur._state === STATE_CHECK && epoch !== writeEpoch && hasDirtyDep(cur)) {
+        if (cur._state === STATE_CHECK && Math.trunc(scan) !== writeEpoch && hasDirtyDep(cur)) {
+          const rescans = (scan - Math.trunc(scan)) * 8;
           if (rescans < MAX_RESCANS) {
-            rescans++;
-            epoch = writeEpoch;
+            scan = writeEpoch + (rescans + 1) / 8;
             l = cur._deps;
             continue;
           }
@@ -601,8 +599,7 @@ export function updateCheck(node: Computation) {
         if (cur._state === STATE_DIRTY) update(cur);
         else if (cur._state === STATE_CHECK) cur._state = STATE_CLEAN;
         if (checkTop === base) return;
-        rescans = checkStack[--checkTop];
-        epoch = checkStack[--checkTop];
+        scan = checkStack[--checkTop];
         l = (checkStack[--checkTop] as Link).nextDep;
         checkStack[checkTop] = null;
         cur = checkStack[--checkTop];
