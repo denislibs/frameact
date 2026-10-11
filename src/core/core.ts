@@ -23,6 +23,9 @@ const NOOP = () => {};
  * F_INIT: the node has a value from a successful compute (survives errors and re-runs).
  * F_COMPUTING / F_MISSED: per-run (update() sets F_COMPUTING and clears F_MISSED on entry and
  * clears both on exit) — true while update() runs the compute / a signal write landed meanwhile.
+ * The F_MISSED clear on entry is only a safety net; the clear on exit (update()'s `finally`, after
+ * reading it) is the one that keeps the latch from leaking into the next run. They are not
+ * duplicates: do not remove either.
  */
 export const F_INIT = 1,
   F_COMPUTING = 2,
