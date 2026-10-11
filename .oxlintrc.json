@@ -10,7 +10,7 @@
   },
   "overrides": [
     {
-      "files": ["src/core/**", "test/core/**", "test/effects/**"],
+      "files": ["src/core/**", "test/core/**"],
       "rules": {
         "no-underscore-dangle": "off",
         "no-shadow": "off",
@@ -19,6 +19,10 @@
         "typescript/no-wrapper-object-types": "off",
         "unicorn/no-new-array": "off"
       }
+    },
+    {
+      "files": ["test/effects/**"],
+      "rules": { "no-underscore-dangle": "off" }
     }
   ],
   "ignorePatterns": ["dist", "node_modules", "coverage"]

@@ -189,34 +189,53 @@ function releaseParked(scope: HeavyAnimationScope) {
   const parked = scope._parked as FrameEntry[];
   scope._parked = [];
   // Release inside a measure task so that both measure and mutate work land in the SAME
-  // next frame, in phase order. Measure entries are drained right here (a requestMeasure
-  // issued from within the measure phase would slip to the frame after); mutate/reflow
-  // entries go through their normal queues, which run later in this frame.
+  // next frame, in phase order. Measure entries are drained right here, unconditionally: a
+  // requestMeasure issued from within the measure phase would slip to the frame after, and an
+  // already-armed measure drain is booked for that later frame too. Mutate/reflow entries go
+  // through their normal queues, which run later in this frame.
   requestMeasure(() => {
     for (const e of parked) {
       if (e.node !== null && e.node._state === STATE_DISPOSED) continue;
       if (e.phase === 'measure') queues.measure.push(e);
       else enqueue(e.phase, e.run, e.node);
     }
-    if (!armed.measure && queues.measure.length) drain('measure');
+    if (queues.measure.length) {
+      armed.measure = true; // drain's finally resets it; a drain booked earlier then finds an empty queue
+      drain('measure');
+    }
   });
 }
 
 function park(scope: HeavyAnimationScope, entry: FrameEntry) {
   try {
     if (!Array.isArray(scope._parked)) scope._parked = [];
-    (scope._parked as FrameEntry[]).push(entry);
-    if (scope._releaseArmed) return;
-    scope._releaseArmed = true;
-    scope.isBlockingAnimating.once(() => {
+    if (!scope.isBlockingAnimating.peek()) {
+      // The scope ended after this drain sampled it (an earlier applier or a deferred cleanup called
+      // end()): its `once` has already fired, so arming a new one would strand the entry until the
+      // scope animates again. Release now; the work still lands in the next frame.
+      scope._parked.push(entry);
+      releaseParked(scope);
+      return;
+    }
+    if (!scope._releaseArmed) {
+      scope._releaseArmed = true;
       try {
-        releaseParked(scope);
+        scope.isBlockingAnimating.once(() => {
+          try {
+            releaseParked(scope);
+          } catch (error) {
+            console.error('[frameact] releasing parked frame effects failed', error);
+          }
+        });
       } catch (error) {
-        console.error('[frameact] releasing parked frame effects failed', error);
+        scope._releaseArmed = false;
+        throw error;
       }
-    });
+    }
+    scope._parked.push(entry);
   } catch (error) {
-    // Could not park: run the entry now rather than leave its effect dirty forever.
+    // Could not park (entry is not in `_parked` unless the release itself failed): run it now rather
+    // than leave its effect dirty forever.
     console.error('[frameact] parking a frame effect failed; running it ungated', error);
     entry.run();
   }

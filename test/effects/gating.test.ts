@@ -5,7 +5,7 @@ import { root } from '../../src/core/core';
 import {
   beginHeavyAnimation, createHeavyAnimationScope, provideHeavyAnimationScope, rootScope,
 } from '../../src/scheduler/heavyAnimation';
-import { getPhase } from '../../src/scheduler/fasterdom';
+import { getPhase, requestMeasure } from '../../src/scheduler/fasterdom';
 import { installFakeRaf } from '../helpers/raf';
 import { frame } from '../helpers/frame';
 import { flushMicrotasks } from '../helpers/micro';
@@ -172,4 +172,86 @@ it('deferUntilIdle returns the placeholder until the scope is idle, then memoize
   expect(content()).toBe('content');
   expect(fn).toHaveBeenCalledTimes(1);
   expect(getPhase()).toBe('measure');
+});
+
+it('a scope that ends mid-drain does not strand its later parked entries', async () => {
+  const S = createHeavyAnimationScope();
+  const $a = signal(0);
+  const log: string[] = [];
+  let endS!: () => void;
+  root(() => {
+    root(() => { provideHeavyAnimationScope(S); createMutationEffect(() => $a(), (v) => { if (v) log.push('g1'); }); });
+    createMutationEffect(() => $a(), (v) => { if (v) { log.push('free'); endS(); } });
+    root(() => { provideHeavyAnimationScope(S); createMutationEffect(() => $a(), (v) => { if (v) log.push('g2'); }); });
+  });
+  endS = S.begin(1000, true);
+  $a.set(1);
+  await frame(raf);
+  await frame(raf);
+  expect(log).toContain('free');
+  expect(log).toContain('g1');
+  expect(log).toContain('g2');
+  expect(S._parked.length).toBe(0);
+  expect(S._releaseArmed).toBe(false);
+});
+
+it('release lands measure before mutate even when a measure drain is already armed', async () => {
+  const $a = signal(0);
+  const $b = signal(0);
+  const log: string[] = [];
+  root(() => {
+    createMeasureEffect(() => $a(), (v) => { if (v) log.push('r1'); });
+    createMutationEffect(() => $a(), (v) => { if (v) log.push('m1'); });
+    createMeasureEffect(() => $b(), (v) => { if (v) log.push('r2'); });
+  });
+  await frame(raf);
+  const end = beginHeavyAnimation(1000, true);
+  $a.set(1);
+  await frame(raf);
+  expect(log).toEqual([]);
+  requestMeasure(() => $b.set(1));
+  end();
+  await frame(raf);
+  expect(log).toContain('r1');
+  expect(log).toContain('m1');
+  expect(log.indexOf('r1')).toBeLessThan(log.indexOf('m1'));
+  await frame(raf);
+  expect(log).toContain('r2');
+});
+
+it('an entry released from an inner scope re-parks on the still-blocking outer scope', async () => {
+  const outer = createHeavyAnimationScope();
+  const inner = createHeavyAnimationScope(outer);
+  const $a = signal(0);
+  const log: string[] = [];
+  root(() => { provideHeavyAnimationScope(inner); createMutationEffect(() => $a(), (v) => { if (v) log.push('x'); }); });
+  const endOuter = outer.begin(1000, true);
+  const endInner = inner.begin(1000, true);
+  $a.set(1);
+  await frame(raf);
+  endInner();
+  await frame(raf);
+  await frame(raf);
+  expect(log).toEqual([]);
+  endOuter();
+  await frame(raf);
+  expect(log).toEqual(['x']);
+});
+
+it('if arming the release throws, the entry runs once and is not left parked', async () => {
+  const S = createHeavyAnimationScope();
+  const $a = signal(0);
+  const applied = vi.fn();
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  root(() => { provideHeavyAnimationScope(S); createMutationEffect(() => $a(), applied); });
+  const once = vi.spyOn(S.isBlockingAnimating, 'once').mockImplementation(() => { throw new Error('boom'); });
+  const end = S.begin(1000, true);
+  $a.set(1);
+  await frame(raf);
+  expect(applied).toHaveBeenCalledTimes(2); // sync first apply + one ungated fallback run
+  expect(S._parked.length).toBe(0);
+  expect(S._releaseArmed).toBe(false);
+  once.mockRestore();
+  err.mockRestore();
+  end();
 });
