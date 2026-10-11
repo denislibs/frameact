@@ -795,6 +795,50 @@ describe('a dep whose pull throws', () => {
   });
 });
 
+describe('review stage 2 minors', () => {
+  it('a pull that disposes the dep it reads does not link the reader to it (no extra run)', () => {
+    const $s = signal(0);
+    let disposeR!: () => void;
+    let $m!: ReadSignal<number>;
+    root((d) => {
+      disposeR = d;
+      $m = computed(() => {
+        if ($s() === 1) disposeR(); // disposes itself during its own compute
+        return $s() * 10;
+      });
+    });
+    const xSpy = vi.fn(() => ($s() === 1 ? $m() : -1)); // first read of $m happens in this run
+    const $x = computed(xSpy);
+    expect($x()).toBe(-1);
+    $s.set(1);
+    expect($x()).toBe(10);
+    expect($x()).toBe(10);
+    expect(xSpy).toHaveBeenCalledTimes(2); // was 3: the new link to the DISPOSED dep latched
+    expect(subsOf(nodeOf($m))).toEqual([]);
+    expect(depsOf(nodeOf($x))).not.toContain(nodeOf($m));
+  });
+
+  it('a first result equal to the initial value a re-entrant reader saw is not announced', () => {
+    const $s = signal(0);
+    const mSpy = vi.fn(() => {
+      $s.set((v) => v + 1);
+      return 7;
+    });
+    const $m = computed(mSpy, { initial: 7 });
+    const e2 = vi.fn(() => ($s() > 0 ? $m() : -1));
+    const seen: number[] = [];
+    const dispose = root((d) => {
+      createEffect(e2, (v) => { seen.push(v); }, sync, { name: 'E2' });
+      createEffect(() => $m(), () => {}, sync, { name: 'E1' }); // $m's first run, re-entered by E2
+      return d;
+    });
+    expect(mSpy).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([-1, 7]);
+    expect(e2).toHaveBeenCalledTimes(2); // was 3: re-run for an announcement of the same value
+    dispose();
+  });
+});
+
 describe('dispose detaches links both ways', () => {
   it('a disposed subscriber is gone from every dependency; a disposed dependency has no subscribers', () => {
     const $a = signal(1);

@@ -387,7 +387,10 @@ export function read(this: Computation): any {
     try {
       updateCheck(this);
     } finally {
-      if (currentObserver !== null && !this._effect) link(this, currentObserver);
+      // (not to a dep the pull disposed: it would revive its abandoned subscriber list)
+      if (currentObserver !== null && !this._effect && this._state !== STATE_DISPOSED) {
+        link(this, currentObserver);
+      }
     }
     return this._value;
   }
@@ -540,8 +543,10 @@ export function isFunction(value: unknown): value is Function {
 
 /**
  * Explicit DFS stack for updateCheck (frames: node, link, scan). `scan` packs the write epoch the
- * node's scan started at and its rescan count: epoch + rescans / 8 (exact while epoch < 2^49).
- * Re-entrant: each call works above its base.
+ * node's scan started at and its rescan count into one number: epoch + rescans / 8 (exact while
+ * epoch < 2^49; rescans ≤ MAX_RESCANS < 8). Usually an integer (a Smi); only after a re-scan — the
+ * rare path — is it fractional, and storing it in the stack allocates a HeapNumber. A fourth slot
+ * per frame measured ~2% slower on kairo. Re-entrant: each call works above its base.
  */
 const checkStack: any[] = [];
 let checkTop = 0;
@@ -617,11 +622,16 @@ export function updateCheck(node: Computation) {
   if (node._state === STATE_DIRTY) update(node);
 }
 
-/** Whether a dep of `node` is CHECK or DIRTY (only asked after a write landed during its scan). */
+/**
+ * Whether a dep of `node` is CHECK or DIRTY (only asked after a write landed during its scan). A
+ * dep still in its own update() (re-entered from a synchronous effect) does not count: a re-scan
+ * could not settle it, and its update() notifies `node` itself if the result changes.
+ */
 function hasDirtyDep(node: Computation): boolean {
   for (let l = node._deps; l !== null; l = l.nextDep) {
-    const ds = l.dep._state;
-    if (ds === STATE_CHECK || ds === STATE_DIRTY) return true;
+    const dep = l.dep;
+    const ds = dep._state;
+    if ((ds === STATE_CHECK || ds === STATE_DIRTY) && !(dep._flags & F_COMPUTING)) return true;
   }
   return false;
 }
@@ -673,11 +683,13 @@ export function update(node: Computation) {
         notifySubs(node);
       }
     } else {
+      const initial = node._value;
       node._value = result;
       node._flags |= F_INIT;
       // A first result is normally not announced (nobody saw a value yet) — unless a reader got
-      // the `initial` value while this first run was still going (see the re-entry guard above).
-      if (node._flags & F_REENTERED) notifySubs(node);
+      // the `initial` value while this first run was still going (see the re-entry guard above)
+      // and the result differs from it. (`!==`, not the user's `equals`: it never sees `initial`.)
+      if (node._flags & F_REENTERED && initial !== result) notifySubs(node);
     }
   } catch (error) {
     currentScope = prevScope;
@@ -742,8 +754,14 @@ function link(dep: Computation, sub: Computation) {
   // together, and the second visit in notify() stops at once. Looking the first one up would make
   // linking O(deps) per new link.
   // A new link missed what happened before it: a write to the dep earlier in this compute, or the
-  // dep left unsettled by its pull (it latched a write of its own and re-dirtied itself).
-  if (dep._writtenAt > currentStartEpoch || dep._state !== STATE_CLEAN) sub._flags |= F_MISSED;
+  // dep left unsettled by its pull (it latched a write of its own and re-dirtied itself). A dep
+  // still in its own update() (re-entered) is not unsettled: it notifies us when it finishes.
+  if (
+    dep._writtenAt > currentStartEpoch ||
+    (dep._state !== STATE_CLEAN && !(dep._flags & F_COMPUTING))
+  ) {
+    sub._flags |= F_MISSED;
+  }
   const newLink: Link = {
     version: currentCycle,
     dep,
