@@ -8,6 +8,10 @@ export interface Computation<T = any> extends Scope {
   _effect: boolean;
   /** @internal */
   _init: boolean;
+  /** @internal true while update() runs this node's compute */
+  _computing: boolean;
+  /** @internal a signal write landed while computing; re-dirty when the compute ends */
+  _missedWake: boolean;
 
   /** @internal */
   _value: T;

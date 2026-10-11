@@ -19,13 +19,17 @@ let scheduledEffects = false,
   effects: Computation[] = [],
   defaultContext = {};
 
-const NOOP = () => {},
-  // For more information about this graph tracking scheme see Reactively:
-  // https://github.com/modderme123/reactively/blob/main/packages/core/src/core.ts#L21
-  STATE_CLEAN = 0,
+const NOOP = () => {};
+
+// For more information about this graph tracking scheme see Reactively:
+// https://github.com/modderme123/reactively/blob/main/packages/core/src/core.ts#L21
+export const STATE_CLEAN = 0,
   STATE_CHECK = 1,
   STATE_DIRTY = 2,
   STATE_DISPOSED = 3;
+
+/** >0 while update() writes a computed's result (a lazy pull the computing reader reads fresh). */
+let computedWriteDepth = 0;
 
 function flushEffects() {
   scheduledEffects = true;
@@ -371,6 +375,8 @@ const ComputeNode = function Computation(
   this._state = compute ? STATE_DIRTY : STATE_CLEAN;
   this._init = false;
   this._effect = false;
+  this._computing = false;
+  this._missedWake = false;
   this._sources = null;
   this._observers = null;
   this._value = initialValue;
@@ -430,6 +436,8 @@ export function update(node: Computation) {
 
   currentObservers = null as Computation[] | null;
   currentObserversIndex = 0;
+  node._computing = true;
+  node._missedWake = false;
 
   try {
     cleanup(node);
@@ -439,7 +447,12 @@ export function update(node: Computation) {
     updateObservers(node);
 
     if (!node._effect && node._init) {
-      write.call(node, result);
+      computedWriteDepth++;
+      try {
+        write.call(node, result);
+      } finally {
+        computedWriteDepth--;
+      }
     } else {
       node._value = result;
       node._init = true;
@@ -461,7 +474,15 @@ export function update(node: Computation) {
   } finally {
     currentObservers = prevObservers;
     currentObserversIndex = prevObserversIndex;
-    node._state = STATE_CLEAN;
+    node._computing = false;
+    // A node disposed during its own compute stays DISPOSED.
+    if (node._state !== STATE_DISPOSED) {
+      node._state = STATE_CLEAN;
+      if (node._missedWake) {
+        node._missedWake = false;
+        notify(node, STATE_DIRTY); // propagates to observers / schedules an effect
+      }
+    }
   }
 }
 
@@ -491,6 +512,14 @@ function updateObservers(node: Computation) {
 }
 
 function notify(node: Computation, state: number) {
+  if (node._computing) {
+    // Patch 1 (frameact): a write landing on a node mid-compute. A computed's result write is a
+    // lazy pull this pass reads fresh — ignore it (maverick's behavior). A signal write may have
+    // changed a value this pass already read: latch it; update() re-dirties the node at the end.
+    if (computedWriteDepth === 0) node._missedWake = true;
+    return;
+  }
+
   if (node._state >= state) return;
 
   if (node._effect && node._state === STATE_CLEAN) {
