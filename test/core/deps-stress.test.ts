@@ -514,9 +514,9 @@ describe('missed wake: a dep bound for the first time, invalidated and re-pulled
 });
 
 // Found by the differential fuzz (writers mode), also on the array implementation and 995e983:
-// updateCheck recomputes a DIRTY dep of a CHECK node; if that dep latched a write made during its
-// own compute it ends DIRTY again, but its re-dirty notify() stops at the CHECK node — which the
-// walk then resolved CLEAN on the dep's unsettled value. Nothing woke it again: stale forever.
+// a signal write made inside an updateCheck walk (by a dep that latched a write of its own, or by
+// a writing memo recomputed later in the walk) re-dirties a dep of a CHECK node, but its notify()
+// stops at that node (already CHECK) — which the walk then resolved CLEAN. Nothing woke it again.
 const f = (v: number) => (v === 2 ? 5 : 0); // the latched run (v = 1) returns the old result 0
 
 const selfLatching = () => {
@@ -529,7 +529,7 @@ const selfLatching = () => {
   return { $s, $d: computed(spy), spy };
 };
 
-describe('a dep that re-dirties itself (latched) inside an updateCheck walk', () => {
+describe('a dep re-dirtied inside an updateCheck walk', () => {
   it('a direct reader is not resolved clean on the unsettled dep', () => {
     const { $s, $d, spy } = selfLatching();
     const xSpy = vi.fn(() => $d() * 10);
@@ -567,6 +567,22 @@ describe('a dep that re-dirties itself (latched) inside an updateCheck walk', ()
     for (let i = 0; i < 4; i++) await Promise.resolve();
     expect(seen).toEqual([0, 5]); // was [0]: the effect resolved clean, never applied 5
     dispose();
+  });
+
+  it('a dep verified earlier in the walk, re-dirtied by a write a later dep makes, is verified again', () => {
+    const $s = signal(0);
+    const $t = signal(0);
+    const $a = computed(() => $s()); // verified clean first …
+    const $w = computed(() => {
+      $s.set($t()); // … then this writer, recomputed later in the same walk, invalidates it
+      return 0; // unchanged: the reader stays CHECK through the walk
+    });
+    const nSpy = vi.fn(() => $a() + $w());
+    const $n = computed(nSpy);
+    expect($n()).toBe(0);
+    $t.set(5);
+    expect($n()).toBe(5); // was 0, forever
+    expect(nSpy).toHaveBeenCalledTimes(2);
   });
 
   it('a dep that keeps writing what it reads is bounded per pull (no hang), the reader keeps up', () => {

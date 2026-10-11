@@ -522,9 +522,14 @@ export function isFunction(value: unknown): value is Function {
   return typeof value === 'function';
 }
 
-/** Explicit DFS stack for updateCheck (pairs: node, link). Re-entrant: each call works above its base. */
-const checkStack: (Computation | Link | null)[] = [];
+/**
+ * Explicit DFS stack for updateCheck (frames: node, link, epoch, rescans). Re-entrant: each call
+ * works above its base.
+ */
+const checkStack: any[] = [];
 let checkTop = 0;
+/** Re-verifications of one node's deps after writes landed during its scan, before giving up. */
+const MAX_RESCANS = 4;
 
 /**
  * P4 (frameact, alien-signals style): iterative pull, same walk as the recursive maverick
@@ -533,12 +538,23 @@ let checkTop = 0;
  * a node stops as soon as it is no longer CHECK. Then it is recomputed (DIRTY) or marked CLEAN.
  * Patch 2 (frameact): a DISPOSED node is never resurrected — it is neither CHECK nor DIRTY, so it
  * is skipped as a dep and left alone as a node (also when it is disposed mid-walk).
+ *
+ * frameact: a signal write made while a node's deps are being verified (by a compute in the walk
+ * — a dep that latched its own write, a writing memo — or a synchronous effect) can re-dirty a
+ * dep already passed, and its notify() stops at the node (already CHECK): marking the node CLEAN
+ * then would leave it stale with nothing to wake it. So each node remembers the write epoch its
+ * scan started at; if it moved and a dep is dirty again, the deps are verified again (a latched
+ * dep settles in a run or two). After MAX_RESCANS (a compute that keeps writing what it reads)
+ * the node is recomputed conservatively — its compute pulls the deps, and their next writes latch
+ * it (bounded per pull).
  */
 export function updateCheck(node: Computation) {
   if (node._state === STATE_CHECK) {
     const base = checkTop;
     let cur = node,
-      l = node._deps;
+      l = node._deps,
+      epoch = writeEpoch,
+      rescans = 0;
     try {
       for (;;) {
         if (l !== null && cur._state === STATE_CHECK) {
@@ -547,27 +563,38 @@ export function updateCheck(node: Computation) {
           if (ds === STATE_CHECK) {
             checkStack[checkTop++] = cur;
             checkStack[checkTop++] = l;
+            checkStack[checkTop++] = epoch;
+            checkStack[checkTop++] = rescans;
             cur = dep;
             l = dep._deps;
+            epoch = writeEpoch;
+            rescans = 0;
             continue;
           }
-          if (ds === STATE_DIRTY) {
-            update(dep); // may dirty `cur`
-            if ((dep._state as number) === STATE_DIRTY) settleLatched(dep, cur);
-          }
+          if (ds === STATE_DIRTY) update(dep); // may dirty `cur`
           l = l.nextDep;
           continue;
+        }
+        // `cur`'s deps are verified. A write during the scan may have re-dirtied one already passed.
+        if (cur._state === STATE_CHECK && epoch !== writeEpoch && hasDirtyDep(cur)) {
+          if (rescans < MAX_RESCANS) {
+            rescans++;
+            epoch = writeEpoch;
+            l = cur._deps;
+            continue;
+          }
+          cur._state = STATE_DIRTY;
         }
         // `cur` resolved: DIRTY → recompute; CHECK with no dirty dep → CLEAN; DISPOSED stays.
         if (cur._state === STATE_DIRTY) update(cur);
         else if (cur._state === STATE_CHECK) cur._state = STATE_CLEAN;
         if (checkTop === base) return;
-        const up = checkStack[--checkTop] as Link;
+        rescans = checkStack[--checkTop];
+        epoch = checkStack[--checkTop];
+        l = (checkStack[--checkTop] as Link).nextDep;
         checkStack[checkTop] = null;
-        cur = checkStack[--checkTop] as Computation;
+        cur = checkStack[--checkTop];
         checkStack[checkTop] = null;
-        if (up.dep._state === STATE_DIRTY) settleLatched(up.dep, cur);
-        l = up.nextDep;
       }
     } finally {
       // Normally already at `base`; after a throw, drop this call's frames.
@@ -577,18 +604,13 @@ export function updateCheck(node: Computation) {
   if (node._state === STATE_DIRTY) update(node);
 }
 
-/**
- * frameact: `dep` was just recomputed inside an updateCheck walk and is DIRTY again — it latched a
- * signal write made during its own compute (update()'s finally re-dirtied it). That re-dirty's
- * notify() stopped at `sub`, which is already CHECK, so the walk must not resolve `sub` CLEAN on
- * dep's unsettled value (it would stay stale: nothing would ever wake it). Verify dep once more;
- * if it is still unsettled (it keeps writing what it reads), recompute `sub` conservatively —
- * its compute pulls dep again, and dep's next re-dirty latches `sub` (bounded per pull).
- */
-function settleLatched(dep: Computation, sub: Computation) {
-  if (sub._state !== STATE_CHECK) return; // dep's result changed (sub DIRTY), or sub was disposed
-  update(dep);
-  if (dep._state === STATE_DIRTY && sub._state === STATE_CHECK) sub._state = STATE_DIRTY;
+/** Whether a dep of `node` is CHECK or DIRTY (only asked after a write landed during its scan). */
+function hasDirtyDep(node: Computation): boolean {
+  for (let l = node._deps; l !== null; l = l.nextDep) {
+    const ds = l.dep._state;
+    if (ds === STATE_CHECK || ds === STATE_DIRTY) return true;
+  }
+  return false;
 }
 
 function cleanup(node: Computation) {

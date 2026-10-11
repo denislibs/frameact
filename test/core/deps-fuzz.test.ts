@@ -48,7 +48,8 @@ function evalSpec(spec: Spec, rd: (j: number) => number, write: ((w: number, v: 
   return v % MOD;
 }
 
-function runFuzz(seed: number, withWriters: boolean) {
+/** `sync`: effects run synchronously from inside notify() (a custom `(run) => run()` schedule). */
+function runFuzz(seed: number, withWriters: boolean, sync = false) {
   const rand = mulberry32(seed);
   const int = (n: number) => Math.floor(rand() * n);
   const shuffle = <T>(arr: T[]) => {
@@ -58,8 +59,12 @@ function runFuzz(seed: number, withWriters: boolean) {
     }
     return arr;
   };
+  // A failure detected inside a compute is thrown there too (the framework may catch and log it:
+  // effects do), so it is also kept and re-thrown after the step.
+  let firstFailure: Error | null = null;
   const fail = (msg: string): never => {
-    throw new Error(`[deps fuzz] seed ${seed} (${withWriters ? 'writers' : 'pure'}): ${msg}`);
+    firstFailure ??= new Error(`[deps fuzz] seed ${seed} (${withWriters ? 'writers' : 'pure'}${sync ? ', sync' : ''}): ${msg}`);
+    throw firstFailure;
   };
 
   const nBase = 2 + int(5);
@@ -126,9 +131,11 @@ function runFuzz(seed: number, withWriters: boolean) {
   let totalRuns = 0;
 
   const queue: (() => void)[] = [];
-  const schedule: Schedule = (run) => {
-    queue.push(run);
-  };
+  const schedule: Schedule = sync
+    ? (run) => run()
+    : (run) => {
+        queue.push(run);
+      };
   const flush = () => {
     runsInFlush.fill(0);
     for (let i = 0; i < queue.length; i++) {
@@ -136,7 +143,7 @@ function runFuzz(seed: number, withWriters: boolean) {
       queue[i]();
     }
     queue.length = 0;
-    if (!withWriters) {
+    if (!withWriters && !sync) {
       for (let i = firstEff; i < total; i++) {
         if (runsInFlush[i] > 1) fail(`effect ${i} ran ${runsInFlush[i]} times in one flush`);
       }
@@ -179,7 +186,10 @@ function runFuzz(seed: number, withWriters: boolean) {
     // Glitch-free / no over-execution: a re-run must be explained by an input that changed since
     // the previous run (checked after this run pulled its memo inputs), unless the previous run
     // overlapped a value-changing write (the latch is conservative: "wrote, then read" re-runs).
-    if (runs[i] > 0 && !allowance[i]) {
+    // (Not with synchronous effects: one that runs in the middle of a notify() walk may read a
+    // memo the walk has not marked yet; the walk then reaches it and correctly runs it again — a
+    // re-run that can repeat inputs another path already showed it. Values are still checked.)
+    if (runs[i] > 0 && !allowance[i] && !sync) {
       let explained = false;
       for (let t = 0; t < prevLog.length; t += 2) {
         if (changeCount[prevLog[t]] !== prevLog[t + 1]) {
@@ -257,7 +267,7 @@ function runFuzz(seed: number, withWriters: boolean) {
       for (const i of order) acc[i]();
       flush();
       if (totalRuns === before) break;
-      if (!withWriters && pass >= 1) fail(`step ${step}: a pure graph needed a second settle pass`);
+      if (!withWriters && !sync && pass >= 1) fail(`step ${step}: a pure graph needed a second settle pass`);
     }
     if (pass === 30) fail(`step ${step}: did not settle`);
     const ov = oracle();
@@ -305,7 +315,15 @@ function runFuzz(seed: number, withWriters: boolean) {
     }
   };
 
-  settle(-1);
+  const settleChecked = (step: number) => {
+    try {
+      settle(step);
+    } catch (error) {
+      throw firstFailure ?? error;
+    }
+    if (firstFailure) throw firstFailure;
+  };
+  settleChecked(-1);
   const steps = 25;
   for (let step = 0; step < steps; step++) {
     const writes = 1 + int(4);
@@ -321,7 +339,7 @@ function runFuzz(seed: number, withWriters: boolean) {
         disposed[e] = true;
       }
     }
-    settle(step);
+    settleChecked(step);
   }
 
   disposeAll();
