@@ -227,19 +227,28 @@ function disposeNode(node: Computation) {
 }
 
 function emptyDisposal(scope: Computation) {
-  try {
-    if (Array.isArray(scope._disposal)) {
-      for (let i = scope._disposal.length - 1; i >= 0; i--) {
-        const callable = scope._disposal![i];
-        callable.call(callable);
-      }
-    } else {
-      scope._disposal!.call(scope._disposal);
-    }
+  // Patch (frameact): every disposal runs in isolation and never throws out of here. A throw
+  // escaping dispose() would abort the sibling dispose loop, skip effectDisposeHook (leaking
+  // apply-cleanups) and, from cleanup() inside update(), unlink the recomputing node from all of
+  // its sources (spec §2: errors never stop the frame).
+  const disposal = scope._disposal!;
+  scope._disposal = null;
+  if (Array.isArray(disposal)) {
+    for (let i = disposal.length - 1; i >= 0; i--) runDisposal(scope, disposal[i]);
+  } else {
+    runDisposal(scope, disposal);
+  }
+}
 
-    scope._disposal = null;
+function runDisposal(scope: Computation, callable: Callable) {
+  try {
+    callable.call(callable);
   } catch (error) {
-    handleError(scope, error);
+    try {
+      handleError(scope, error);
+    } catch (unhandled) {
+      console.error(`[frameact] onCleanup failed${DEV && scope.id ? ` in \`${scope.id}\`` : ''}`, unhandled);
+    }
   }
 }
 
@@ -433,10 +442,12 @@ export function update(node: Computation) {
   currentObserversIndex = 0;
   node._computing = true;
   node._missedWake = false;
+  let computeStarted = false;
 
   try {
     cleanup(node);
 
+    computeStarted = true;
     const result = compute(node, node._compute!, node);
 
     updateObservers(node);
@@ -465,7 +476,9 @@ export function update(node: Computation) {
       );
     }
 
-    updateObservers(node);
+    // A failure before compute (in cleanup) leaves currentObservers empty: updateObservers would
+    // then unlink every source and the node would never wake again. Keep the old sources.
+    if (computeStarted) updateObservers(node);
     handleError(node, error);
   } finally {
     currentObservers = prevObservers;

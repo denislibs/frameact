@@ -91,3 +91,30 @@ it('provide/current scope via owner context', () => {
     root(() => expect(currentHeavyAnimationScope()).toBe(scope)); // inherited by children
   });
 });
+
+it('C1c: a throwing onStart listener does not break begin(); the animation still ends', () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const scope = createHeavyAnimationScope();
+  const off = onHeavyAnimation(() => { throw new Error('start boom'); }, undefined, scope);
+  let end: (() => void) | undefined;
+  try { end = scope.begin(1000, true); } finally { off(); }
+  expect(scope.isAnimating.peek()).toBe(true);
+  expect(scope.isBlockingAnimating.peek()).toBe(true);
+  end!();
+  expect(scope.isAnimating.peek()).toBe(false);
+  expect(scope.isBlockingAnimating.peek()).toBe(false);
+  expect(err).toHaveBeenCalled();
+  err.mockRestore();
+});
+
+it('C1: once-callbacks are isolated from each other', () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const scope = createHeavyAnimationScope();
+  const second = vi.fn();
+  const end = scope.begin(1000, false);
+  scope.isAnimating.once(() => { throw new Error('first'); });
+  scope.isAnimating.once(second);
+  expect(() => end()).not.toThrow();
+  expect(second).toHaveBeenCalledTimes(1);
+  err.mockRestore();
+});

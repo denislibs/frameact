@@ -4,6 +4,15 @@ export type NoneToVoidFunction = () => void;
 export type AnyToVoidFunction = (...args: any[]) => void;
 export type Scheduler = (cb: NoneToVoidFunction) => void;
 
+/** Runs one scheduled callback; a throw is reported, never allowed to drop the rest of its batch. */
+function safeExec(cb: NoneToVoidFunction) {
+  try {
+    cb();
+  } catch (error) {
+    console.error('[frameact] scheduled callback failed', error);
+  }
+}
+
 export function throttle<F extends AnyToVoidFunction>(fn: F, ms: number, shouldRunFirst = true) {
   let interval: ReturnType<typeof setInterval> | undefined;
   let isPending: boolean;
@@ -78,7 +87,7 @@ export function fastRaf(callback: NoneToVoidFunction, withTimeoutFallback = fals
         fastRafFallbackTimeout = undefined;
       }
 
-      currentCallbacks.forEach((cb) => cb());
+      currentCallbacks.forEach(safeExec);
     });
   } else {
     fastRafCallbacks.add(callback);
@@ -105,7 +114,7 @@ export function fastRaf(callback: NoneToVoidFunction, withTimeoutFallback = fals
           fastRafFallbackTimeout = undefined;
         }
 
-        currentTimeoutCallbacks.forEach((cb) => cb());
+        currentTimeoutCallbacks.forEach(safeExec);
       }, FAST_RAF_TIMEOUT_FALLBACK_MS);
     }
   }
@@ -127,7 +136,7 @@ export function flushTickEnd() {
   if (!onTickEndCallbacks) return;
   const currentCallbacks = onTickEndCallbacks;
   onTickEndCallbacks = undefined;
-  currentCallbacks.forEach((cb) => cb());
+  currentCallbacks.forEach(safeExec);
 }
 
 const IDLE_TIMEOUT = 500;
@@ -148,8 +157,7 @@ export function onIdle(callback: NoneToVoidFunction) {
       onIdleCallbacks = undefined;
 
       while (currentCallbacks.length) {
-        const cb = currentCallbacks.shift()!;
-        cb();
+        safeExec(currentCallbacks.shift()!);
 
         if (!deadline.timeRemaining()) break;
       }

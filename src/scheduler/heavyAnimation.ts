@@ -30,7 +30,25 @@ type AnimationListener = (animating: boolean) => void;
 /** onHeavyAnimation listeners, kept per scope (not exposed on the scope object). */
 const scopeListeners = new WeakMap<HeavyAnimationScope, Set<AnimationListener>>();
 
-function createOnceSignal(): [OnceSignal, (v: boolean) => void] {
+function reportCallbackError(error: unknown) {
+  console.error('[frameact] heavy-animation callback failed', error);
+}
+
+/** Calls `fn`; a throw is reported, never propagated (frame bookkeeping must not be cut short). */
+function safeCall(fn: () => void) {
+  try {
+    fn();
+  } catch (error) {
+    reportCallbackError(error);
+  }
+}
+
+/**
+ * `set` updates the value and returns a `notify` that runs the pending `once` callbacks (or null
+ * when the value did not change), so callers can finish all their state updates before any user
+ * code runs.
+ */
+function createOnceSignal(): [OnceSignal, (v: boolean) => (() => void) | null] {
   const $value = signal(false);
   const callbacks = new Set<() => void>();
   const get = (() => $value()) as OnceSignal;
@@ -42,13 +60,14 @@ function createOnceSignal(): [OnceSignal, (v: boolean) => void] {
     };
   };
   const set = (next: boolean) => {
-    if (peek($value) === next) return;
+    if (peek($value) === next) return null;
     $value.set(next);
     // Snapshot: a callback that registers another `once` must wait for the *next* change,
     // otherwise a release that starts a new animation loops inside this flush.
     const current = Array.from(callbacks);
     callbacks.clear();
-    for (const cb of current) cb();
+    // Each callback is isolated: one throwing must not drop the others (frame.ts's release is one).
+    return () => current.forEach(safeCall);
   };
   return [get, set];
 }
@@ -60,6 +79,16 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
   const [isBlockingAnimating, setBlocking] = createOnceSignal();
   const listeners = new Set<AnimationListener>();
 
+  // Counters and both flags are updated first, user code (once callbacks, listeners) runs after:
+  // a throwing callback can then never leave the scope animating/blocking forever.
+  function notify(animatingChanged: (() => void) | null, blockingChanged: (() => void) | null, animating: boolean) {
+    if (animatingChanged) {
+      animatingChanged();
+      listeners.forEach((l) => safeCall(() => l(animating)));
+    }
+    blockingChanged?.();
+  }
+
   const scope: HeavyAnimationScope = {
     parent,
     isAnimating,
@@ -68,14 +97,9 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
     _releaseArmed: false,
     begin(duration = AUTO_END_TIMEOUT, isBlocking = false) {
       counter++;
-      if (counter === 1) {
-        setAnimating(true);
-        listeners.forEach((l) => l(true));
-      }
-      if (isBlocking) {
-        counterBlocking++;
-        if (counterBlocking === 1) setBlocking(true);
-      }
+      if (isBlocking) counterBlocking++;
+      const animatingChanged = counter === 1 ? setAnimating(true) : null;
+      const blockingChanged = isBlocking && counterBlocking === 1 ? setBlocking(true) : null;
 
       const timeout = setTimeout(onEnd, duration);
       let hasEnded = false;
@@ -86,16 +110,13 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
         clearTimeout(timeout);
 
         counter--;
-        if (counter === 0) {
-          setAnimating(false);
-          listeners.forEach((l) => l(false));
-        }
-        if (isBlocking) {
-          counterBlocking--;
-          if (counterBlocking === 0) setBlocking(false);
-        }
+        if (isBlocking) counterBlocking--;
+        const animatingEnded = counter === 0 ? setAnimating(false) : null;
+        const blockingEnded = isBlocking && counterBlocking === 0 ? setBlocking(false) : null;
+        notify(animatingEnded, blockingEnded, false);
       }
 
+      notify(animatingChanged, blockingChanged, true);
       return onEnd;
     },
   };

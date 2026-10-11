@@ -2,6 +2,8 @@ import { createEffect } from '../../src/core/effects';
 import { computed, signal } from '../../src/core/signals';
 import { getScope, onDispose, onError, root, scoped } from '../../src/core/core';
 import { flushMicrotasks } from '../helpers/micro';
+import { onTickEnd } from '../../src/scheduler/schedulers';
+import type { Schedule } from '../../src/core/effects';
 
 const NO_OWNER = 'inside an effect apply has no owner';
 
@@ -215,4 +217,135 @@ it('DEV: a throwing first compute of an effect does not print the computed "init
   await flushMicrotasks();
   expect(loggedText(err)).not.toContain('initial');
   expect(loggedText(err)).toContain('boom');
+});
+
+// C2 (final review)
+it('C2: a throwing onCleanup in a child does not unsubscribe the parent; siblings are still disposed', async () => {
+  const err = mockConsoleError();
+  const $a = signal(1);
+  const parentApplied: number[] = [];
+  const siblingCleanup = vi.fn();
+  root(() => {
+    createEffect(
+      () => {
+        const v = $a();
+        // created first → disposed last (children are disposed in reverse order)
+        createEffect(() => v, () => siblingCleanup);
+        createEffect(() => {
+          onDispose(() => { throw new Error('cleanup boom'); });
+          return v;
+        }, () => {});
+        return v;
+      },
+      (v) => { parentApplied.push(v); },
+    );
+  });
+  await flushMicrotasks();
+  $a.set(2);
+  await flushMicrotasks();
+  $a.set(3);
+  await flushMicrotasks();
+  expect(parentApplied).toEqual([1, 2, 3]);
+  expect(siblingCleanup).toHaveBeenCalledTimes(2);
+  expect(loggedText(err)).toContain('cleanup boom');
+});
+
+it('C2: a throwing onCleanup is offered to onError first', async () => {
+  const handled = vi.fn();
+  const $a = signal(1);
+  const applied: number[] = [];
+  root(() => {
+    onError(handled);
+    createEffect(() => {
+      const v = $a();
+      onDispose(() => { throw new Error('handled boom'); });
+      return v;
+    }, (v) => { applied.push(v); });
+  });
+  await flushMicrotasks();
+  $a.set(2);
+  await flushMicrotasks();
+  $a.set(3);
+  await flushMicrotasks();
+  expect(handled).toHaveBeenCalledTimes(2);
+  expect(applied).toEqual([1, 2, 3]);
+});
+
+// I2 (final review)
+it('I2: a throwing onTickEnd callback does not drop the rest of its batch', async () => {
+  const err = mockConsoleError();
+  const $a = signal(0);
+  const applied: number[] = [];
+  root(() => createEffect(() => $a(), (v) => { applied.push(v); }));
+  await flushMicrotasks();
+  onTickEnd(() => { throw new Error('tick boom'); });
+  $a.set(1); // the effect's run is queued in the same batch, after the throwing callback
+  await flushMicrotasks();
+  expect(applied).toEqual([0, 1]);
+  $a.set(2);
+  await flushMicrotasks();
+  expect(applied).toEqual([0, 1, 2]);
+  expect(loggedText(err)).toContain('tick boom');
+});
+
+// Minors bundled with commit A
+it('a throwing previous apply-cleanup does not skip the next apply', async () => {
+  const err = mockConsoleError();
+  const $a = signal(0);
+  const applied: number[] = [];
+  root(() => createEffect(() => $a(), (v) => {
+    applied.push(v);
+    return () => { throw new Error('apply-cleanup boom'); };
+  }));
+  await flushMicrotasks();
+  $a.set(1);
+  await flushMicrotasks();
+  expect(applied).toEqual([0, 1]);
+  expect(loggedText(err)).toContain('apply-cleanup boom');
+});
+
+it('an apply that disposes its own effect still has its returned cleanup run', async () => {
+  const cleanup = vi.fn();
+  const $go = signal(false);
+  root((dispose) => {
+    createEffect(() => $go(), (go) => {
+      if (!go) return undefined;
+      dispose();
+      return cleanup;
+    });
+  });
+  await flushMicrotasks();
+  $go.set(true);
+  await flushMicrotasks();
+  expect(cleanup).toHaveBeenCalledTimes(1);
+});
+
+it('a throwing custom _schedule while releasing bailed children does not lose the other children', async () => {
+  const err = mockConsoleError();
+  const $a = signal(1);
+  const $t = signal(0);
+  const $src = computed(() => { $t(); return 1; }); // recomputes to the same value
+  let calls = 0;
+  const throwOnRelease: Schedule = (run) => {
+    if (++calls === 3) throw new Error('schedule boom'); // 1: creation, 2: dirty, 3: release
+    onTickEnd(run);
+  };
+  const first = vi.fn();
+  const second = vi.fn();
+  root(() => {
+    createEffect(
+      () => {
+        createEffect(() => $a(), first, throwOnRelease);
+        createEffect(() => $a(), second);
+        return $src();
+      },
+      () => {},
+    );
+  });
+  await flushMicrotasks();
+  $a.set(2); // both children scheduled first …
+  $t.set(1); // … the parent goes CHECK: both bail onto it, it resolves clean and releases them
+  await flushMicrotasks();
+  expect(second).toHaveBeenLastCalledWith(2, 1);
+  expect(loggedText(err)).toContain('schedule boom');
 });

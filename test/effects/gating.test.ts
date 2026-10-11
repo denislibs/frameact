@@ -3,7 +3,7 @@ import { createEffect, tickEnd } from '../../src/core/effects';
 import { signal } from '../../src/core/signals';
 import { root } from '../../src/core/core';
 import {
-  beginHeavyAnimation, createHeavyAnimationScope, provideHeavyAnimationScope, rootScope,
+  beginHeavyAnimation, createHeavyAnimationScope, onHeavyAnimation, provideHeavyAnimationScope, rootScope,
 } from '../../src/scheduler/heavyAnimation';
 import { getPhase, requestMeasure } from '../../src/scheduler/fasterdom';
 import { installFakeRaf } from '../helpers/raf';
@@ -254,4 +254,41 @@ it('if arming the release throws, the entry runs once and is not left parked', a
   once.mockRestore();
   err.mockRestore();
   end();
+});
+
+// C1 (final review): a throwing heavy-animation callback must not freeze frame work.
+it('C1a: a throwing onHeavyAnimation end listener does not leave the scope blocking; parked work applies next frame', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const $a = signal(0);
+  const applied = vi.fn();
+  root(() => createMutationEffect(() => $a(), applied));
+  const off = onHeavyAnimation(undefined, () => { throw new Error('listener boom'); });
+  const end = beginHeavyAnimation(1000, true);
+  $a.set(1);
+  await frame(raf);
+  expect(applied).toHaveBeenCalledTimes(1); // parked
+  try { end(); } finally { off(); }
+  expect(rootScope.isAnimating.peek()).toBe(false);
+  expect(rootScope.isBlockingAnimating.peek()).toBe(false);
+  await frame(raf);
+  expect(applied).toHaveBeenLastCalledWith(1, 0);
+  expect(err.mock.calls.some((c) => String(c[0]).includes('heavy-animation callback failed'))).toBe(true);
+  err.mockRestore();
+});
+
+it('C1b: a throwing user once-callback registered before the release does not strand parked entries', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const $a = signal(0);
+  const applied = vi.fn();
+  root(() => createMutationEffect(() => $a(), applied));
+  const end = beginHeavyAnimation(1000, true);
+  rootScope.isBlockingAnimating.once(() => { throw new Error('once boom'); });
+  $a.set(1);
+  await frame(raf); // parks; the release `once` is registered after the user's
+  end();
+  expect(rootScope._releaseArmed).toBe(false);
+  await frame(raf);
+  expect(applied).toHaveBeenLastCalledWith(1, 0);
+  expect(err.mock.calls.some((c) => String(c[0]).includes('heavy-animation callback failed'))).toBe(true);
+  err.mockRestore();
 });

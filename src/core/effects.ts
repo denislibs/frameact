@@ -151,22 +151,41 @@ function applyEffect(node: EffectNode) {
   currentEffect = node;
   const outerInApply = DEV ? setInEffectApply(true) : false;
   try {
-    cleanup?.();
-    // Untracked and with NO owner (Solid 2.0 model): the apply channel's cleanup is the returned
-    // function only. onCleanup()/owned computations here are a DEV error (core assertApplyOwner).
-    const result = runInScope(null, () => node._apply(node._value, prev), null);
-    if (isFunction(result)) node._applyCleanup = result as () => void;
-    // Only a successful apply advances _applied; a throwing one is retried on the next run.
-    node._applied = node._value;
-  } catch (error) {
+    // The previous cleanup is isolated: a throwing cleanup must not skip this apply.
+    if (cleanup) {
+      try {
+        cleanup();
+      } catch (error) {
+        reportApplyError(node, error);
+      }
+    }
     try {
-      handleError(node, error);
-    } catch (unhandled) {
-      logEffectError(node, unhandled);
+      // Untracked and with NO owner (Solid 2.0 model): the apply channel's cleanup is the returned
+      // function only. onCleanup()/owned computations here are a DEV error (core assertApplyOwner).
+      const result = runInScope(null, () => node._apply(node._value, prev), null);
+      if (isFunction(result)) {
+        // An apply that disposed its own node: the dispose hook already ran, so nothing would ever
+        // call this cleanup. Run it now (deferred to the mutate phase for DOM-writing effects).
+        if (node._state === STATE_DISPOSED) applyCleanupDisposer(node, result as () => void);
+        else node._applyCleanup = result as () => void;
+      }
+      // Only a successful apply advances _applied; a throwing one is retried on the next run.
+      node._applied = node._value;
+    } catch (error) {
+      reportApplyError(node, error);
     }
   } finally {
     if (DEV) setInEffectApply(outerInApply);
     currentEffect = outer;
+  }
+}
+
+/** onError handlers up the owner chain first; unhandled → console. Never throws. */
+function reportApplyError(node: EffectNode, error: unknown) {
+  try {
+    handleError(node, error);
+  } catch (unhandled) {
+    logEffectError(node, unhandled);
   }
 }
 
@@ -175,7 +194,13 @@ function releaseBailed(node: EffectNode) {
   if (!bailed) return;
   node._bailed = null;
   for (const child of bailed) {
-    if (child._state !== STATE_DISPOSED) child._schedule(child._run, child);
+    if (child._state === STATE_DISPOSED) continue;
+    // One throwing custom scheduler must not lose the remaining children.
+    try {
+      child._schedule(child._run, child);
+    } catch (error) {
+      logEffectError(child, error);
+    }
   }
 }
 

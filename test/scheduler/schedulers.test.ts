@@ -49,6 +49,57 @@ describe('onTickEnd', () => {
   });
 });
 
+describe('error isolation (I2)', () => {
+  it('a throwing fastRaf callback does not drop the rest of the frame batch', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cb = vi.fn();
+    fastRaf(() => { throw new Error('raf boom'); });
+    fastRaf(cb);
+    expect(() => raf.frame()).not.toThrow();
+    expect(cb).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  it('a throwing fastRaf callback does not drop the rest of the timeout-fallback batch', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cb = vi.fn();
+    fastRaf(() => { throw new Error('fallback boom'); }, true);
+    fastRaf(cb, true);
+    expect(() => vi.advanceTimersByTime(35)).not.toThrow();
+    expect(cb).toHaveBeenCalledTimes(1);
+    raf.frame();
+    err.mockRestore();
+  });
+
+  it('a throwing flushTickEnd callback does not drop the rest of the batch', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cb = vi.fn();
+    onTickEnd(() => { throw new Error('tick boom'); });
+    onTickEnd(cb);
+    expect(() => flushTickEnd()).not.toThrow();
+    expect(cb).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  it('a throwing onIdle callback does not drop the rest of the idle batch', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const g = globalThis as { requestIdleCallback?: unknown };
+    const pending: Array<(d: { timeRemaining(): number }) => void> = [];
+    g.requestIdleCallback = (fn: (d: { timeRemaining(): number }) => void) => { pending.push(fn); return 1; };
+    try {
+      const cb = vi.fn();
+      onIdle(() => { throw new Error('idle boom'); });
+      onIdle(cb);
+      expect(() => pending.shift()!({ timeRemaining: () => 10 })).not.toThrow();
+      expect(cb).toHaveBeenCalledTimes(1);
+    } finally {
+      delete g.requestIdleCallback;
+      err.mockRestore();
+    }
+  });
+});
+
 describe('onIdle', () => {
   it('falls back to onTickEnd when requestIdleCallback is missing (jsdom)', async () => {
     const cb = vi.fn();
