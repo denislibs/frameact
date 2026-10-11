@@ -307,7 +307,9 @@ drainMutation():
 
 #### Остальное API core
 
-- `createSignal(value, { equals? })` → `[get, set]`; `createMemo(fn, { equals? })`;
+- `createSignal(value, { equals? })` → `[get, set]` — сигнал не регистрируется у текущего owner'а
+  (как в Solid): сигнал переживает dispose своего владельца; подписчики отцепляются при своём
+  dispose. Memo и эффекты владеются как раньше. `createMemo(fn, { equals? })`;
   `createRoot(fn)`; `onCleanup(fn)`; `untrack`; `peek`; `getOwner`; `runWithOwner`;
   `onError`.
 - `createContext(default)` / `useContext(ctx)` поверх `setContext`/`getContext`.

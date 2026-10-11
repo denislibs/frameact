@@ -1,5 +1,6 @@
 import {
-  createComputation, detachedRoot, getScope, onDispose, onError as onErrorRaw, peek, read, scoped, write,
+  createComputation, createSignalNode, detachedRoot, getScope, onDispose, onError as onErrorRaw, peek, read,
+  scoped, write,
 } from './core/core';
 import type { Scope } from './core/types';
 
@@ -18,14 +19,13 @@ function toDirty<T>(equals: SignalOptions<T>['equals']): ((prev: T, next: T) => 
   return undefined;
 }
 
-/** Solid-style tuple over a maverick signal node. `equals: false` → always notify. */
+/**
+ * Solid-style tuple over a maverick signal node. `equals: false` → always notify. The signal is
+ * not owned: it outlives the owner it was created under (readers unlink when they are disposed).
+ */
 export function createSignal<T>(value: T, options?: SignalOptions<T>): [Accessor<T>, Setter<T>] {
   // One node + two bound functions + the tuple: no options object, no maverick wrapper function.
-  const node = createComputation(
-    value,
-    null,
-    options && { id: options.id, dirty: toDirty(options.equals) },
-  );
+  const node = createSignalNode(value, options && { id: options.id, dirty: toDirty(options.equals) });
   return [read.bind(node) as Accessor<T>, write.bind(node) as Setter<T>];
 }
 

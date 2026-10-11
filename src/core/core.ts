@@ -9,6 +9,7 @@ import type {
   Link,
   MaybeDisposable,
   Scope,
+  SignalOptions,
 } from './types';
 
 let currentScope: Scope | null = null,
@@ -507,9 +508,10 @@ const ComputeNode = function Computation(
   initialValue: any,
   compute: any,
   options?: ComputedSignalOptions<any, any>,
+  unowned?: boolean,
 ) {
   if (DEV && compute) assertApplyOwner();
-  initComputationNode(this, initialValue, compute, options, true);
+  initComputationNode(this, initialValue, compute, options, unowned !== true);
 };
 
 /** @internal the prototype every computation kind (signals, computeds, effects, selector nodes) shares */
@@ -523,6 +525,16 @@ export function createComputation<T>(
   options?: ComputedSignalOptions<T>,
 ): Computation<T> {
   return new (ComputeNode as any)(initialValue, compute, options);
+}
+
+/**
+ * P3b (frameact): the node of a public `createSignal` — NOT appended to the current owner (Solid
+ * semantics: a signal is plain state, it owns nothing and is never disposed; its readers unlink
+ * from it when they are disposed). Memos and effects stay owned.
+ */
+export function createSignalNode<T>(initialValue: T, options?: SignalOptions<T>): Computation<T> {
+  // Same constructor as every computation: the same hidden class.
+  return new (ComputeNode as any)(initialValue, null, options, true);
 }
 
 /**
