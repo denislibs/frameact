@@ -211,7 +211,7 @@ svg *{transform-box:fill-box;transform-origin:center}
 <div class="scene" id="s3b">
   <div class="left">
     <div class="kick h">04 · forced reflow</div>
-    <div class="t h">Must read after a write?<br>Say so.</div>
+    <div class="t h">Read after write?<br>Say so.</div>
     <div class="cap h">A forced reflow is an <b>explicit</b> measurement slot after mutate, with its own write slot after it. One extra layout, on purpose, still before paint. Rare by design.</div>
     <div class="code h"><span class="ln"><span class="f">requestMutation</span>(() =&gt; {</span><span class="ln">  list.prepend(...older)            <span class="c">// write</span></span><span class="ln">  <span class="f">requestForcedReflow</span>(() =&gt; {</span><span class="ln">    const top = anchor.offsetTop    <span class="c">// read, mid-frame</span></span><span class="ln">    return () =&gt; list.scrollTop += top <span class="c">// write after</span></span><span class="ln">  })</span><span class="ln">})</span></div>
   </div>
@@ -234,7 +234,7 @@ svg *{transform-box:fill-box;transform-origin:center}
       <g clip-path="url(#vp)">
         <g id="s3bContent">
           <g id="s3bNew" opacity="0">
-            <rect x="12" y="-110" width="196" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="-78" width="150" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="-46" width="176" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="-14" width="120" height="24" rx="4" fill="rgba(39,67,255,.18)"/>
+            <rect x="12" y="26" width="196" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="58" width="150" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="90" width="176" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="122" width="120" height="24" rx="4" fill="rgba(39,67,255,.18)"/>
           </g>
           <rect x="12" y="162" width="160" height="24" rx="4" fill="rgba(16,19,31,.12)"/>
           <rect x="12" y="194" width="196" height="24" rx="4" fill="var(--ink)" id="s3bAnchor"/>

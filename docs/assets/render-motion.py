@@ -4,6 +4,7 @@ import sys, glob
 from PIL import Image
 d, out = sys.argv[1], sys.argv[2]
 fps = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+assert (1000 // fps) % 10 == 0, "GIF frame delay is stored in 1/100 s: use 10, 20, 25 or 50 fps"
 files = sorted(glob.glob(f"{d}/f*.png"))
 frames = [Image.open(f).convert("RGB") for f in files]
 # palette from a strip of evenly sampled frames, so every scene's colors are represented
