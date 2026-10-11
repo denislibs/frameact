@@ -33,6 +33,8 @@ export interface EffectNode<T = any> extends Computation<T> {
   _run: () => void;
   _name: string | undefined;
   _selfDirty: number;
+  /** @internal its apply writes the live DOM: apply-cleanups on dispose are deferred to the mutate phase */
+  _writesDom: boolean;
 }
 
 export interface EffectOptions {
@@ -40,6 +42,23 @@ export interface EffectOptions {
   name?: string;
   /** @internal Apply synchronously at creation (mutation effects, createSelector). */
   immediateApply?: boolean;
+  /**
+   * @internal The apply writes the live DOM (createMutationEffect sets it). Defaults to whether the
+   * scheduler is marked DOM-writing (frameMutation, or gateOnHeavyAnimation over it).
+   */
+  writesDom?: boolean;
+}
+
+const domWritingSchedules = new WeakSet<Schedule>();
+
+/** @internal frame.ts marks frameMutation (and gated wrappers of it) as DOM-writing. */
+export function markWritesDom(schedule: Schedule) {
+  domWritingSchedules.add(schedule);
+}
+
+/** @internal */
+export function isDomWritingSchedule(schedule: Schedule) {
+  return domWritingSchedules.has(schedule);
 }
 
 const SELF_DIRTY_LIMIT = 100;
@@ -68,6 +87,7 @@ export function createEffect<T>(
   node._bailed = null;
   node._name = options?.name;
   node._selfDirty = 0;
+  node._writesDom = options?.writesDom ?? domWritingSchedules.has(schedule);
   node._scope = currentHeavyAnimationScope(node); // appended to the current owner by the constructor
   node._run = () => runEffect(node);
 

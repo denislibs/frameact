@@ -118,3 +118,13 @@ it('C1: once-callbacks are isolated from each other', () => {
   expect(second).toHaveBeenCalledTimes(1);
   err.mockRestore();
 });
+
+it('begin() with a non-finite or negative duration has no auto-end timer', () => {
+  vi.useFakeTimers();
+  const scope = createHeavyAnimationScope();
+  const ends = [scope.begin(Infinity), scope.begin(-1), scope.begin(Number.NaN)];
+  vi.advanceTimersByTime(100_000);
+  expect(scope.isAnimating.peek()).toBe(true);
+  ends.forEach((end) => end());
+  expect(scope.isAnimating.peek()).toBe(false);
+});

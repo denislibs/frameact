@@ -1,5 +1,5 @@
 import {
-  getContext, getScope, onDispose, onError as onErrorRaw, peek as peekRaw, root, scoped, setContext, untrack as untrackRaw,
+  detachedRoot, getScope, onDispose, onError as onErrorRaw, peek, scoped,
 } from './core/core';
 import { computed, signal } from './core/signals';
 import type { ReadSignal, Scope, WriteSignal } from './core/types';
@@ -30,23 +30,26 @@ export function createMemo<T>(fn: () => T, options?: SignalOptions<T>): Accessor
   return () => $c();
 }
 
-export const createRoot = root;
+/**
+ * Solid semantics: the new root is detached — it is not disposed with the enclosing owner — but it
+ * inherits that owner's context and error handlers.
+ */
+export const createRoot = detachedRoot;
 export const onCleanup = onDispose;
-export const untrack = untrackRaw;
-export const peek = peekRaw;
+/** Solid semantics: reads inside `fn` are not tracked, but the owner is kept (context, cleanup). */
+export const untrack: <T>(fn: () => T) => T = peek;
 export const getOwner = getScope;
 export const onError = onErrorRaw;
 export function runWithOwner<T>(owner: Scope | null, fn: () => T): T | undefined {
   return scoped(fn, owner);
 }
-export { getContext as getRawContext, setContext as setRawContext };
 
 export { selector as createSelector } from './core/selector';
-export { mapArray, computedKeyedMap, computedMap, computedKeyedMapBy, type MapArrayOptions } from './core/map';
+export { mapArray, type MapArrayOptions } from './core/map';
 export { createContext, provideContext, useContext, type Context } from './core/context';
 
 export {
-  createEffect, tickEnd, NOT_APPLIED, type Schedule, type EffectNode, type EffectOptions,
+  createEffect, tickEnd, type Schedule, type EffectNode, type EffectOptions,
 } from './core/effects';
 export {
   createMeasureEffect, createMutationEffect, createRenderEffect, createIdleEffect,
@@ -54,9 +57,9 @@ export {
 } from './core/frame';
 
 export {
-  requestMeasure, requestMutation, requestNextMutation, requestForcedReflow, getPhase, onPhaseChange, type Phase,
+  requestMeasure, requestMutation, requestNextMutation, requestForcedReflow, getPhase,
 } from './scheduler/fasterdom';
-export { onTickEnd, onIdle, throttleWith, throttle } from './scheduler/schedulers';
+export { onTickEnd, onIdle, throttleWith } from './scheduler/schedulers';
 export {
   beginHeavyAnimation, getIsHeavyAnimating, getIsBlockingAnimating, createHeavyAnimationScope, rootScope,
   provideHeavyAnimationScope, currentHeavyAnimationScope, onHeavyAnimation, onFullyIdle,

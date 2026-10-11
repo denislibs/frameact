@@ -1,4 +1,4 @@
-import { createMeasureEffect, createMutationEffect, createRenderEffect, drainHooks, frameForcedReflow } from '../../src/core/frame';
+import { createMeasureEffect, createMutationEffect, createRenderEffect, drainHooks, frameForcedReflow, frameMutation, gateOnHeavyAnimation } from '../../src/core/frame';
 import { createEffect } from '../../src/core/effects';
 import { signal } from '../../src/core/signals';
 import { root } from '../../src/core/core';
@@ -266,4 +266,29 @@ it('I5: mutate work produced by a forced-reflow apply runs within the same flush
   $a.set(1);
   flushSync();
   expect(log).toEqual(['10:mutate']);
+});
+
+// Minor (final review): DOM-writing is a node flag, not scheduler identity.
+it('apply-cleanup of a gateOnHeavyAnimation(frameMutation) effect disposed outside mutate is deferred to mutate', async () => {
+  const log: string[] = [];
+  const dispose = root((d) => {
+    createEffect(() => 1, () => () => log.push('cleanup:' + getPhase()), gateOnHeavyAnimation(frameMutation));
+    return d;
+  });
+  await frame(raf); // first apply
+  dispose();
+  expect(log).toEqual([]);
+  await frame(raf);
+  expect(log).toEqual(['cleanup:mutate']);
+});
+
+it('apply-cleanup of a frameForcedReflow effect runs inline on dispose', async () => {
+  const log: string[] = [];
+  const dispose = root((d) => {
+    createEffect(() => 1, () => () => log.push('cleanup'), frameForcedReflow);
+    return d;
+  });
+  await frame(raf);
+  dispose();
+  expect(log).toEqual(['cleanup']);
 });

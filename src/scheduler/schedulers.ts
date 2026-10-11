@@ -139,6 +139,11 @@ export function flushTickEnd() {
   currentCallbacks.forEach(safeExec);
 }
 
+/** @internal core flushSync() loops until nothing is pending. */
+export function hasPendingTickEnd() {
+  return onTickEndCallbacks !== undefined;
+}
+
 const IDLE_TIMEOUT = 500;
 
 let onIdleCallbacks: NoneToVoidFunction[] | undefined;

@@ -101,7 +101,8 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
       const animatingChanged = counter === 1 ? setAnimating(true) : null;
       const blockingChanged = isBlocking && counterBlocking === 1 ? setBlocking(true) : null;
 
-      const timeout = setTimeout(onEnd, duration);
+      // Infinity (or any non-finite/negative duration): no auto-end, the caller must end it.
+      const timeout = Number.isFinite(duration) && duration >= 0 ? setTimeout(onEnd, duration) : undefined;
       let hasEnded = false;
 
       function onEnd() {
@@ -126,7 +127,8 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
 
 export const rootScope: HeavyAnimationScope = createScopeInternal(null);
 
-export function createHeavyAnimationScope(parent: HeavyAnimationScope | null = rootScope) {
+/** `parent` defaults to the scope provided by the current owner (root if none): a nested scope waits for the outer one. */
+export function createHeavyAnimationScope(parent: HeavyAnimationScope | null = currentHeavyAnimationScope()) {
   return createScopeInternal(parent);
 }
 

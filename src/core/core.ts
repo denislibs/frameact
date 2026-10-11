@@ -86,6 +86,24 @@ export function root<T>(init: (dispose: Dispose) => T): T {
 }
 
 /**
+ * frameact (Solid's createRoot): a root that is NOT appended to the current scope — disposing the
+ * enclosing owner does not dispose it — but inherits that owner's context and error handlers.
+ */
+export function detachedRoot<T>(init: (dispose: Dispose) => T): T {
+  const owner = currentScope;
+  return untrack(() =>
+    root((dispose) => {
+      if (owner) {
+        const scope = currentScope!;
+        scope._context = owner._context;
+        scope._handlers = owner._handlers;
+      }
+      return init(dispose);
+    }),
+  );
+}
+
+/**
  * Returns the current value stored inside the given compute function without triggering any
  * dependencies. Use `untrack` if you want to also disable scope tracking.
  *

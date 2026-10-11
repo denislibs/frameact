@@ -6,7 +6,7 @@
   "engines": { "node": ">=22.12" },
   "exports": {
     ".": "./src/index.ts",
-    "./scheduler": "./src/scheduler/fasterdom.ts"
+    "./scheduler": "./src/scheduler/index.ts"
   },
   "scripts": {
     "test": "vitest run",

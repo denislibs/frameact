@@ -105,6 +105,11 @@ export function requestForcedReflow(cb: ReflowTask) {
   runUpdatePassOnRaf();
 }
 
+/** @internal core flushSync() loops until nothing is pending. */
+export function hasPendingFrameTasks() {
+  return pendingMeasureTasks.length > 0 || pendingMutationTasks.length > 0 || pendingForceReflowTasks.length > 0;
+}
+
 /**
  * Run a whole frame pass synchronously (tests, imperative integration code).
  * Does not bypass heavy-animation gating of the core's run queues. Not reentrant.

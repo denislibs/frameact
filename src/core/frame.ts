@@ -2,6 +2,8 @@ import { DEV } from '../env';
 import { STATE_DISPOSED } from './core';
 import {
   createEffect,
+  isDomWritingSchedule,
+  markWritesDom,
   NOT_APPLIED,
   setApplyCleanupDisposer,
   type EffectNode,
@@ -124,6 +126,7 @@ export function drain(phase: FramePhase) {
 export const frameMeasure: Schedule = (run, node) => enqueue('measure', run, node);
 export const frameMutation: Schedule = (run, node) => enqueue('mutate', run, node);
 export const frameForcedReflow: Schedule = (run, node) => enqueue('reflow', run, node);
+markWritesDom(frameMutation);
 
 /** Reads layout. First apply is scheduled (after attach), never synchronous. */
 export function createMeasureEffect<T>(
@@ -140,7 +143,7 @@ export function createMutationEffect<T>(
   apply: (value: T, prev: T | undefined) => void | (() => void),
   options?: EffectOptions,
 ) {
-  createEffect(compute, apply, frameMutation, { name: 'mutation', ...options, immediateApply: true });
+  createEffect(compute, apply, frameMutation, { name: 'mutation', ...options, immediateApply: true, writesDom: true });
 }
 
 /** The name the compiler-facing runtime uses. */
@@ -156,8 +159,7 @@ setApplyCleanupDisposer((node, cleanup) => {
       console.error(`[frameact] Error in effect cleanup${node._name ? ` "${node._name}"` : ''}`, error);
     }
   };
-  const writesDom = node._schedule === frameMutation || node._schedule === frameForcedReflow;
-  if (writesDom && getPhase() !== 'mutate') enqueue('mutate', run, null);
+  if (node._writesDom && getPhase() !== 'mutate') enqueue('mutate', run, null);
   else run();
 });
 
@@ -277,6 +279,7 @@ export function gateOnHeavyAnimation(schedule: Schedule, options: { blocking?: b
     if (animating === null) schedule(run, node);
     else (blocking ? animating.isBlockingAnimating : animating.isAnimating).once(() => gated(run, node));
   };
+  if (isDomWritingSchedule(schedule)) markWritesDom(gated);
   return gated;
 }
 
