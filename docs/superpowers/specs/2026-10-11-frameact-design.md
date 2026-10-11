@@ -89,60 +89,63 @@ frameact/vite            — Vite-плагин (обёртка @solidjs/babel-pl
 `runTop` по owner-цепочке) **не меняется**. Меняется только то, что происходит,
 когда эффект помечается грязным.
 
-#### Эффекты: две половины и фаза
+#### Эффекты: две половины, фаза = планировщик
+
+Принцип тот же, что в teact (`throttleWith(requestMeasure, fn)`): эффект не
+знает про фазы, он знает, **через какую функцию его планировать**. Фазовые
+гарантии даёт fasterdom.
 
 ```ts
-createEffect(compute, apply, options?)
-// compute: (prev) => T          — трекается, чистый, без DOM
-// apply:   (value, prev) => void | cleanup — без трекинга; здесь побочные эффекты
-// options.phase: 'measure' | 'mutate' | 'microtask'   (по умолчанию 'measure')
-// options.equals: (a, b) => boolean | false           (по умолчанию ===)
+type Schedule = (run: () => void) => void;
 
-createRenderEffect(compute, apply)   // = phase 'mutate'; это то, что эмитит компилятор
+// базовый примитив
+createEffect(compute, apply, schedule: Schedule = onTickEnd)
+// compute: (prev) => T                      — трекается, чистый, без DOM
+// apply:   (value, prev) => void | cleanup  — без трекинга; здесь побочные эффекты
+
+// фасады — публичный API для авторов
+createEffect(compute, apply)          // onTickEnd (микротаск): логика без DOM — сеть, стор
+createMeasureEffect(compute, apply)   // requestMeasure: чтение layout
+createMutationEffect(compute, apply)  // requestMutation: запись в живой DOM
+createIdleEffect(compute, apply)      // onFullyIdle: фоновая работа, когда нет анимаций
+createRenderEffect                    // alias createMutationEffect — имя, которое ждёт компилятор
 ```
 
-- `compute` выполняется в pure-подфазе кадра как обычная computation графа.
-  Если результат изменился (по `equals`), `apply` ставится в очередь своей фазы.
-- `apply` получает `(value, prev)`, может вернуть cleanup. Cleanup вызывается
-  перед следующим `apply` и при dispose.
-- **Первый запуск** `apply` — синхронно при создании эффекта (как Solid 1.x).
-  Это нужно, чтобы создание поддерева было атомарным: DOM-узлы в этот момент
-  detached, stricterdom такие записи не считает нарушением (см. 3.4).
-- Однофазной формы `effect(fn)` нет. Для «просто подписаться и что-то сделать» —
-  `createEffect(() => dep(), v => …)`.
+Жизненный цикл:
 
-Фаза `'microtask'` — для логики без DOM (сеть, стор, аналитика): compute+apply
-выполняются в микротаске по maverick'овскому пути (`queueMicrotask(runEffects)`),
-не дожидаясь кадра.
+- Эффект становится грязным (`notify` из maverick, только из состояния `CLEAN` —
+  это и есть дедуп) → ядро вызывает `schedule(run)`.
+- `run`: если узел задиспозен — выход; иначе `runTop` (грязные эффекты-предки
+  раньше), пересчёт `compute` как обычной computation графа; если результат
+  изменился (`!==`) — cleanup предыдущего `apply`, затем `apply(value, prev)`.
+- `apply` может вернуть cleanup; он вызывается перед следующим `apply` и при dispose.
+- **Первый запуск** `apply` — синхронно при создании (как Solid 1.x). Нужно,
+  чтобы создание поддерева было атомарным: DOM-узлы в этот момент detached,
+  stricterdom такие записи не считает нарушением (см. 3.4).
+- Однофазной формы `effect(fn)` нет. Своя сравнивалка результата — через
+  `createMemo(fn, { equals })` в compute-половине; `options.equals` у эффектов нет.
 
-#### Проход кадра со стороны core
+Что из этого следует — без отдельного «прохода кадра» в ядре:
 
-```
-framePass (регистрируется через requestMeasure, throttled):
-  if (isBlockingAnimating()) { isBlockingAnimating.once(framePass); return }
+| Ситуация | Что происходит |
+|---|---|
+| N эффектов загрязнены одной записью | N задач в **одном** rAF (fasterdom батчит), порядок — порядок уведомления |
+| mutate-эффект загрязнён из measure-applier | `requestMutation(run)` → mutate-фаза **этого же** кадра |
+| measure-эффект загрязнён из mutate-applier | `requestMeasure(run)` → следующий кадр |
+| mutate-эффект загрязнён из mutate-applier | следующий кадр (очередь уже забрана) |
+| нужно measure после mutate в том же кадре | `createEffect(c, a, requestForcedReflow)` |
+| родитель пересоздал поддерево | дети задиспозены до своих `run` → пропускаются |
 
-  // фаза measure
-  drainPure()                 // compute-половины всех грязных measure/mutate-эффектов
-                              // + подтягивание грязных computed по пути (runTop)
-  runCleanups(measure); runAppliers(measure)   // чтение layout; могут писать сигналы
-  drainPure()                 // записи из measure-appliers оседают в этом же кадре
+Гейтинг heavy animation — внутри `run` для кадровых планировщиков
+(`requestMeasure`/`requestMutation`/`requestForcedReflow`): если
+`isBlockingAnimating()` — `once(run)` и выход. Сырые `requestMeasure`/`requestMutation`
+для анимаций не гейтятся, как в teact. `onTickEnd`- и `onFullyIdle`-эффекты не
+гейтятся (логика не должна ждать анимацию; idle и так её ждёт).
 
-  requestMutation(() => {
-    runCleanups(mutate); runAppliers(mutate)   // DOM-записи
-    // записи сигналов отсюда → следующий кадр (как в teact)
-  })
-```
-
-Порядок внутри очереди — порядок постановки (= порядок уведомления). `runTop`
-гарантирует, что родительские computations пересчитаны раньше дочерних, а
-владелец, пересоздавший поддерево, диспозит детей до их `apply` — задиспозенные
-appliers пропускаются по `_state === DISPOSED`.
-
-Что здесь принципиально отличается от teact: teact замораживает **всё** на
-blocking-анимации, включая `setState`. У нас запись в сигнал проходит мгновенно
-(значение видно синхронно, например в обработчике), а откладывается только
-проход кадра — и граф, и DOM. Это даёт консистентные чтения без потери
-гейтинга.
+Отличие от teact: teact замораживает **всё** на blocking-анимации, включая
+`setState`. У нас запись в сигнал проходит мгновенно (значение видно
+синхронно, например в обработчике), а откладывается только кадровая работа.
+Консистентные чтения без потери гейтинга.
 
 #### Остальное API core
 
@@ -274,10 +277,12 @@ frameact/
 - core: алмаз зависимостей без глитчей, динамические зависимости, dispose
   поддерева, `mapArray` по ключу (обновление строки на месте при смене ссылки,
   перестановки, удаления).
-- effects: порядок фаз в кадре (`measure-appliers → pure → mutate-appliers`);
-  запись сигнала из measure-applier применяется **в этом же** кадре; из
-  mutate-applier — в следующем; cleanup перед повторным apply и при dispose;
-  `microtask`-эффекты не ждут кадра; ошибка в apply не прерывает остальные.
+- effects: measure-эффекты выполняются раньше mutate-эффектов в кадре; запись
+  сигнала из measure-applier применяется **в этом же** кадре; из mutate-applier —
+  в следующем; одна запись, загрязнившая N эффектов, даёт один rAF; cleanup перед
+  повторным apply и при dispose; `createEffect` (onTickEnd) не ждёт кадра;
+  `createIdleEffect` ждёт окончания heavy animation; кастомный `schedule`
+  (`requestForcedReflow`) вызывается с `run`; ошибка в apply не прерывает остальные.
 - scheduler: порядок очередей fasterdom, throttling, таймаут-фолбэк, forced reflow.
 - heavyAnimation: blocking откладывает проход и выполняет его **один раз** по
   окончании; non-blocking не влияет на ядро; счётчики и авто-таймаут.
