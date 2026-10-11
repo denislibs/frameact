@@ -29,13 +29,16 @@ const NOOP = () => {};
  * F_INIT: the node has a value from a successful compute (survives errors and re-runs).
  * F_COMPUTING / F_MISSED: per-run (update() sets F_COMPUTING and clears F_MISSED on entry and
  * clears both on exit) — true while update() runs the compute / a signal write landed meanwhile.
+ * F_REENTERED: per-run — something read the node while its update() was running (a synchronous
+ * effect woken by a write the compute made); at the end a first result is announced to subscribers.
  * The F_MISSED clear on entry is only a safety net; the clear on exit (update()'s `finally`, after
  * reading it) is the one that keeps the latch from leaking into the next run. They are not
  * duplicates: do not remove either.
  */
 export const F_INIT = 1,
   F_COMPUTING = 2,
-  F_MISSED = 4;
+  F_MISSED = 4,
+  F_REENTERED = 8;
 
 // For more information about this graph tracking scheme see Reactively:
 // https://github.com/modderme123/reactively/blob/main/packages/core/src/core.ts#L21
@@ -375,11 +378,13 @@ export function handleError(scope: Scope | null, error: unknown) {
 export function read(this: Computation): any {
   if (this._state === STATE_DISPOSED) return this._value;
 
-  // P4: subscribe at read time, before pulling — a write that invalidates us later in the
-  // reader's compute reaches the reader's latch through this link.
-  if (currentObserver !== null && !this._effect) link(this, currentObserver);
-
   if (this._compute !== null && this._state !== STATE_CLEAN) updateCheck(this);
+
+  // P4: subscribe as the read completes — from here on, any change to this dep reaches the
+  // reader's latch through the link (notify(): a link confirmed in the running compute means its
+  // value was consumed). Linking after the pull keeps the pull's own result writes from
+  // latching the reader (it reads them fresh: the jagged-diamond rule).
+  if (currentObserver !== null && !this._effect) link(this, currentObserver);
 
   return this._value;
 }
@@ -390,7 +395,7 @@ export function write(this: Computation, newValue: any): any {
   if (this._changed(this._value, value)) {
     this._value = value;
     this._writtenAt = ++writeEpoch;
-    for (let l = this._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, true);
+    for (let l = this._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, true, l);
   }
 
   return this._value;
@@ -620,6 +625,14 @@ function cleanup(node: Computation) {
 }
 
 export function update(node: Computation) {
+  // Re-entry: a synchronous effect, woken by a write this compute made (or by this node's own
+  // result write), reads the node before its update() has finished. It gets the current value;
+  // the running update() notifies it if the result changes. (Recomputing here would let the
+  // outer run overwrite the inner one's newer result with a stale one when it finishes.)
+  if (node._flags & F_COMPUTING) {
+    node._flags |= F_REENTERED;
+    return;
+  }
   node._flags = (node._flags & F_INIT) | F_COMPUTING;
   let computeStarted = false;
   const prevScope = currentScope,
@@ -649,11 +662,16 @@ export function update(node: Computation) {
       // pull that reader reads fresh).
       if (node._changed(node._value, result)) {
         node._value = result;
-        for (let l = node._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, false);
+        for (let l = node._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, false, l);
       }
     } else {
       node._value = result;
       node._flags |= F_INIT;
+      // A first result is normally not announced (nobody saw a value yet) — unless a reader got
+      // the `initial` value while this first run was still going (see the re-entry guard above).
+      if (node._flags & F_REENTERED) {
+        for (let l = node._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, false, l);
+      }
     }
   } catch (error) {
     currentScope = prevScope;
@@ -682,7 +700,7 @@ export function update(node: Computation) {
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;
       if (missed) {
-        notify(node, STATE_DIRTY, true); // propagates to observers / schedules an effect
+        notify(node, STATE_DIRTY, true, null); // propagates to observers / schedules an effect
       }
     } else if (node._deps !== null) {
       // Disposed during its own compute: stays DISPOSED, and drops the links it made after that.
@@ -701,7 +719,7 @@ export function update(node: Computation) {
  * other readers subscribed to in between, on the new-link path).
  * Patch 1b (frameact) lives here: a NEW link to a dep written after this compute started missed
  * that write (we were not subscribed yet) — latch it. Old links stay subscribed for the whole
- * compute, and new ones from the moment of the read, so later writes reach notify()'s latch.
+ * compute, and new ones from the end of the read, so later changes reach notify()'s latch.
  */
 function link(dep: Computation, sub: Computation) {
   const prevDep = sub._depsTail;
@@ -725,7 +743,9 @@ function link(dep: Computation, sub: Computation) {
       }
     }
   }
-  if (dep._writtenAt > currentStartEpoch) sub._flags |= F_MISSED;
+  // A new link missed what happened before it: a write to the dep earlier in this compute, or the
+  // dep left unsettled by its pull (it latched a write of its own and re-dirtied itself).
+  if (dep._writtenAt > currentStartEpoch || dep._state !== STATE_CLEAN) sub._flags |= F_MISSED;
   const newLink: Link = {
     version: currentCycle,
     dep,
@@ -771,6 +791,12 @@ function unlinkDeps(from: Link) {
   }
 }
 
+/** Whether the running compute of `sub` already read the dep behind `link` (P4: link versions). */
+function consumed(sub: Computation, link: Link | null): boolean {
+  const tail = sub._depsTail;
+  return link !== null && tail !== null && link.version === tail.version;
+}
+
 /** Explicit DFS stack for notify (continuation links). Re-entrant: each call works above its base. */
 const notifyStack: (Link | null)[] = [];
 let notifyTop = 0;
@@ -779,18 +805,20 @@ let notifyTop = 0;
  * P4 (frameact, alien-signals style): iterative push with the recursive version's visiting order
  * (pre-order DFS over subscriber lists): `node` gets `state`, everything below it CHECK.
  */
-function notify(node: Computation, state: number, latch: boolean) {
+function notify(node: Computation, state: number, latch: boolean, via: Link | null) {
   const base = notifyTop;
-  let l: Link | null = null; // the link `node` was reached through (null: the root)
+  let l: Link | null = null; // the link `node` was reached through (null: the root, via `via`)
   try {
     for (;;) {
       let subs: Link | null = null;
       const flags = node._flags;
       if (flags & F_COMPUTING) {
-        // Patch 1 (frameact): a write landing on a node mid-compute. A computed's result write is
-        // a lazy pull this pass reads fresh — ignore it (maverick's behavior). A signal write may
-        // have changed a value this pass already read: latch it; update() re-dirties the node.
-        if (latch) node._flags = flags | F_MISSED;
+        // Patch 1 (frameact): a change landing on a node mid-compute. A signal write may have
+        // changed a value this pass already read: latch it; update() re-dirties the node at the
+        // end. A computed's result write is latched only if this pass already consumed that dep
+        // (its link is confirmed in the running compute) — otherwise it is a lazy pull this pass
+        // reads fresh (maverick's behavior; the jagged diamond).
+        if (latch || consumed(node, l !== null ? l : via)) node._flags = flags | F_MISSED;
       } else {
         const prev = node._state;
         if (prev < state) {

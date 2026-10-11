@@ -429,6 +429,51 @@ describe('re-entrancy', () => {
     dispose();
   });
 
+  it('a synchronous effect woken by a memo result write does not recompute that memo again', () => {
+    // E1's run pulls $m; $m's result write wakes E2 (still CLEAN: the walk from $s has not reached
+    // it yet), which runs right there and reads $m — while $m's update() is still finishing.
+    const $s = signal(0);
+    const mSpy = vi.fn(() => $s() * 2);
+    const $m = computed(mSpy);
+    const seen: string[] = [];
+    const dispose = root((d) => {
+      createEffect(() => $m(), (v) => { seen.push(`E1:${v}`); }, sync, { name: 'E1' });
+      createEffect(() => $m(), (v) => { seen.push(`E2:${v}`); }, sync, { name: 'E2' });
+      return d;
+    });
+    expect(mSpy).toHaveBeenCalledTimes(1);
+    $s.set(1);
+    expect(mSpy).toHaveBeenCalledTimes(2); // once per change (was 3: re-entrant update of $m)
+    expect(seen).toEqual(['E1:0', 'E2:0', 'E2:2', 'E1:2']);
+    $s.set(2);
+    expect(mSpy).toHaveBeenCalledTimes(3);
+    dispose();
+  });
+
+  it('a synchronous effect woken by a write made inside a memo compute does not re-enter that compute', () => {
+    // $m's compute writes $s; that wakes E2, which reads $m while $m's update() is still running.
+    // E2 gets $m's current value; when $m finishes with a different result, E2 is notified.
+    const $s = signal(0);
+    const $t = signal(1);
+    const mSpy = vi.fn(() => {
+      $s.set((v) => v + 1);
+      return $t() * 10;
+    });
+    const $m = computed(mSpy);
+    const seen: unknown[] = [];
+    const dispose = root((d) => {
+      createEffect(() => ($s() > 0 ? $m() : -1), (v) => { seen.push(v); }, sync, { name: 'E2' });
+      createEffect(() => $m(), () => {}, sync, { name: 'E1' }); // $m's first run happens here
+      return d;
+    });
+    expect(mSpy).toHaveBeenCalledTimes(1); // not re-entered by E2's read
+    expect(seen.at(-1)).toBe(10); // E2 saw `undefined` mid-run, then was told about the first result
+    $t.set(2);
+    expect(seen.at(-1)).toBe(20);
+    expect($m()).toBe(20);
+    dispose();
+  });
+
   it('a queue drained from inside an effect apply (nested flush) keeps the graph consistent', () => {
     const queue: (() => void)[] = [];
     const schedule: Schedule = (run) => { queue.push(run); };

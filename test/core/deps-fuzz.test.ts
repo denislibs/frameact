@@ -368,4 +368,9 @@ describe('dependency graph: differential fuzz', () => {
   it('graphs with writes inside memo/effect computes (latch rules): oracle values after settling, no unexplained re-runs', () => {
     for (const seed of seeds(600, 100_003)) runFuzz(seed, true);
   });
+
+  it('synchronous effects (run from inside notify), with and without writes in computes: oracle values, structure', () => {
+    for (const seed of seeds(300, 200_003)) runFuzz(seed, false, true);
+    for (const seed of seeds(300, 300_007)) runFuzz(seed, true, true);
+  });
 });
