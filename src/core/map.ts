@@ -1,6 +1,7 @@
 // Adapted from maverick-js/signals v6 (MIT, © 2022 Rahim Alwer) — https://github.com/maverick-js/signals
 // Adapted from: https://github.com/solidjs/solid/blob/main/packages/solid/src/reactive/array.ts#L153
 
+import { DEV } from '../env';
 import { compute, createComputation, createScope, dispose, read, scoped, write } from './core';
 import type { Computation, Maybe, ReadSignal, Scope } from './types';
 
@@ -238,4 +239,143 @@ interface KeyedMapData<Item = any, MappedItem = any> {
   _mappings: MappedItem[];
   _nodes: Computation<number>[];
   _map: (value: any, index: ReadSignal<number>) => any;
+}
+
+// ---- frameact: keyed-by-function map -----------------------------------------
+
+interface KeyedByData<Item, Key, Mapped> {
+  _scope: Scope;
+  _len: number;
+  _list: ReadSignal<Maybe<readonly Item[]>>;
+  _keyFn: (item: Item) => Key;
+  _map: (item: ReadSignal<Item>, index: ReadSignal<number>) => Mapped;
+  _keys: Key[];
+  _items: Item[];
+  _mappings: Mapped[];
+  _itemNodes: Computation<Item>[];
+  _indexNodes: Computation<number>[];
+}
+
+/**
+ * Keyed map where identity is `keyFn(item)`, not the reference. The row's owner is its item
+ * signal node: disposing it disposes everything the mapper created (the index node included).
+ */
+export function computedKeyedMapBy<Item, Key, Mapped>(
+  list: ReadSignal<Maybe<readonly Item[]>>,
+  keyFn: (item: Item) => Key,
+  map: (item: ReadSignal<Item>, index: ReadSignal<number>) => Mapped,
+  options?: { id?: string },
+): ReadSignal<Mapped[]> {
+  return read.bind(
+    createComputation<Mapped[]>(
+      [],
+      (updateKeyedMapBy<Item, Key, Mapped>).bind({
+        _scope: createScope(),
+        _len: 0,
+        _list: list,
+        _keyFn: keyFn,
+        _map: map,
+        _keys: [],
+        _items: [],
+        _mappings: [],
+        _itemNodes: [],
+        _indexNodes: [],
+      } satisfies KeyedByData<Item, Key, Mapped>),
+      options,
+    ),
+  );
+}
+
+function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped>): Mapped[] {
+  const newItems = this._list() || [];
+  const newLen = newItems.length;
+
+  // Resolve keys; a duplicate falls back to an index key (like teact's `key` handling).
+  const newKeys: Key[] = new Array(newLen);
+  const seen = new Set<Key>();
+  for (let j = 0; j < newLen; j++) {
+    let key = this._keyFn(newItems[j]);
+    if (seen.has(key)) {
+      if (DEV) console.warn('[frameact] mapArray: duplicate key', key, '— falling back to index');
+      key = `__index#${j}` as unknown as Key;
+    }
+    seen.add(key);
+    newKeys[j] = key;
+  }
+
+  scoped(() => {
+    if (newLen === 0) {
+      if (this._len !== 0) {
+        dispose.call(this._scope, false);
+        this._keys = [];
+        this._items = [];
+        this._mappings = [];
+        this._itemNodes = [];
+        this._indexNodes = [];
+        this._len = 0;
+      }
+      return;
+    }
+
+    const oldIndexByKey = new Map<Key, number>();
+    for (let i = 0; i < this._len; i++) oldIndexByKey.set(this._keys[i], i);
+
+    const mappings: Mapped[] = new Array(newLen);
+    const itemNodes: Computation<Item>[] = new Array(newLen);
+    const indexNodes: Computation<number>[] = new Array(newLen);
+    const kept = new Uint8Array(this._len);
+
+    for (let j = 0; j < newLen; j++) {
+      const i = oldIndexByKey.get(newKeys[j]);
+      if (i !== undefined && !kept[i]) {
+        kept[i] = 1;
+        mappings[j] = this._mappings[i];
+        itemNodes[j] = this._itemNodes[i];
+        indexNodes[j] = this._indexNodes[i];
+        if (this._items[i] !== newItems[j]) write.call(itemNodes[j], newItems[j]);
+        if (i !== j) write.call(indexNodes[j], j);
+      } else {
+        const itemNode = createComputation<Item>(newItems[j], null);
+        let indexNode!: Computation<number>;
+        itemNodes[j] = itemNode;
+        mappings[j] = compute<Mapped>(
+          itemNode,
+          () => {
+            indexNode = createComputation<number>(j, null); // owned by the row
+            return this._map(read.bind(itemNode), read.bind(indexNode));
+          },
+          null,
+        );
+        indexNodes[j] = indexNode;
+      }
+    }
+
+    for (let i = 0; i < this._len; i++) if (!kept[i]) dispose.call(this._itemNodes[i]);
+
+    this._mappings = mappings;
+    this._itemNodes = itemNodes;
+    this._indexNodes = indexNodes;
+    this._keys = newKeys;
+    this._items = newItems.slice(0);
+    this._len = newLen;
+  }, this._scope);
+
+  return this._mappings;
+}
+
+export interface MapArrayOptions<Item> {
+  /** `true` (default): by reference; `false`: by index; a function: by key. */
+  keyed?: boolean | ((item: Item) => unknown);
+  id?: string;
+}
+
+export function mapArray<Item, Mapped>(
+  list: ReadSignal<Maybe<readonly Item[]>>,
+  mapFn: (item: any, index: any) => Mapped,
+  options: MapArrayOptions<Item> = {},
+): ReadSignal<Mapped[]> {
+  const keyed = options.keyed ?? true;
+  if (keyed === true) return computedKeyedMap(list, mapFn, options);
+  if (keyed === false) return computedMap(list, mapFn, options);
+  return computedKeyedMapBy(list, keyed, mapFn, options);
 }
