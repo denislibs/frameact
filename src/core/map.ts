@@ -2,7 +2,7 @@
 // Adapted from: https://github.com/solidjs/solid/blob/main/packages/solid/src/reactive/array.ts#L153
 
 import { DEV } from '../env';
-import { compute, createComputation, createScope, dispose, handleError, read, scoped, write } from './core';
+import { compute, createComputation, createScope, dispose, disposeChildren, handleError, read, scoped, write } from './core';
 import type { Computation, Maybe, ReadSignal, Scope } from './types';
 
 export * from './selector';
@@ -68,7 +68,7 @@ function updateMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[] {
       }
     }
 
-    for (; i < this._items.length; i++) dispose.call(this._nodes[i]);
+    if (i < this._items.length) disposeChildren(this._scope, this._nodes.slice(i, this._items.length));
 
     this._len = this._nodes.length = newItems.length;
     this._items = newItems.slice(0);
@@ -199,11 +199,11 @@ function updateKeyedMap<Item, MappedItem>(this: KeyedMapData<Item, MappedItem>):
       // 3) moved rows learn their new index
       for (let j = start; j < newLen; j++) write.call(nodes[j], j);
     } catch (error) {
-      for (let k = 0; k < created.length; k++) dispose.call(created[k]);
+      disposeChildren(this._scope, created);
       throw error;
     }
 
-    if (removed) for (let k = 0; k < removed.length; k++) dispose.call(removed[k]);
+    if (removed) disposeChildren(this._scope, removed);
 
     this._mappings = mappings;
     this._nodes = nodes;
@@ -366,11 +366,13 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
         if (indexNodes[j]._value !== j) write.call(indexNodes[j], j);
       }
     } catch (error) {
-      for (let k = 0; k < created.length; k++) dispose.call(created[k]);
+      disposeChildren(this._scope, created);
       throw error;
     }
 
-    for (let i = 0; i < oldLen; i++) if (!kept[i]) dispose.call(this._itemNodes[i]);
+    const removed: Computation[] = [];
+    for (let i = 0; i < oldLen; i++) if (!kept[i]) removed.push(this._itemNodes[i]);
+    disposeChildren(this._scope, removed);
 
     this._mappings = mappings;
     this._itemNodes = itemNodes;

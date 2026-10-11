@@ -216,13 +216,21 @@ export function onDispose(disposable: MaybeDisposable): Dispose {
 export function dispose(this: Scope, self = true) {
   if (this._state === STATE_DISPOSED) return;
 
-  if (this._children) {
-    if (Array.isArray(this._children)) {
-      for (let i = this._children.length - 1; i >= 0; i--) {
-        dispose.call(this._children[i]);
+  // Patch (frameact): linear. Take the whole children list first and detach each child before
+  // disposing it, so it does not search-and-splice itself out of our array (O(n²) for n children).
+  // Order is unchanged: children before self, in reverse creation order.
+  const children = this._children;
+  if (children) {
+    this._children = null;
+    if (Array.isArray(children)) {
+      for (let i = children.length - 1; i >= 0; i--) {
+        const child = children[i];
+        child[SCOPE] = null;
+        dispose.call(child);
       }
     } else {
-      dispose.call(this._children);
+      children[SCOPE] = null;
+      dispose.call(children);
     }
   }
 
@@ -238,6 +246,30 @@ export function dispose(this: Scope, self = true) {
     }
 
     disposeNode(this as Computation);
+  }
+}
+
+/**
+ * frameact: dispose many children of `parent` at once (list rows), then rebuild its children list
+ * in one pass — instead of every child searching-and-splicing itself out of the array (O(n²)).
+ * Each child is disposed like `dispose()` would (its own children first); the given order is kept.
+ */
+export function disposeChildren(parent: Scope, children: readonly Scope[]) {
+  if (children.length === 0) return;
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+    if (child[SCOPE] === parent) child[SCOPE] = null;
+    dispose.call(child);
+  }
+  const list = parent._children;
+  if (Array.isArray(list)) {
+    let n = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i]._state !== STATE_DISPOSED) list[n++] = list[i];
+    }
+    list.length = n;
+  } else if (list && list._state === STATE_DISPOSED) {
+    parent._children = null;
   }
 }
 
