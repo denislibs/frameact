@@ -10,7 +10,7 @@
   },
   "overrides": [
     {
-      "files": ["src/core/**", "test/core/**"],
+      "files": ["src/core/**", "test/core/**", "test/effects/**"],
       "rules": {
         "no-underscore-dangle": "off",
         "no-shadow": "off",

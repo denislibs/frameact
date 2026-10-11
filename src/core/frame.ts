@@ -9,7 +9,8 @@ import {
   type Schedule,
 } from './effects';
 import { getPhase, requestForcedReflow, requestMeasure, requestMutation } from '../scheduler/fasterdom';
-import type { HeavyAnimationScope } from '../scheduler/heavyAnimation';
+import { firstAnimatingScope, onFullyIdle, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
+import { computed, signal } from './signals';
 
 export type FramePhase = 'measure' | 'mutate' | 'reflow';
 
@@ -148,3 +149,113 @@ setApplyCleanupDisposer((node, cleanup) => {
   if (writesDom && getPhase() !== 'mutate') enqueue('mutate', run, null);
   else run();
 });
+
+// ---- heavy-animation gating ----------------------------------------------
+
+// Both hooks run inside the drain's per-entry try/catch, where a throw drops the entry and leaves
+// its effect DIRTY forever. They must therefore never throw: failures degrade to "not gated".
+
+function blockingScopeFor(
+  scope: HeavyAnimationScope,
+  cache: Map<HeavyAnimationScope, HeavyAnimationScope | null>,
+): HeavyAnimationScope | null {
+  // Sampled once per drain per scope: an applier that begins an animation mid-drain
+  // does not split the frame it is part of.
+  try {
+    const path: HeavyAnimationScope[] = [];
+    let result: HeavyAnimationScope | null = null;
+    for (let s: HeavyAnimationScope | null | undefined = scope; s; s = s.parent) {
+      const cached = cache.get(s);
+      if (cached !== undefined) {
+        result = cached;
+        break;
+      }
+      path.push(s);
+      if (s.isBlockingAnimating.peek()) {
+        result = s;
+        break;
+      }
+    }
+    for (const p of path) cache.set(p, result);
+    return result;
+  } catch (error) {
+    console.error('[frameact] heavy-animation gate check failed; running ungated', error);
+    return null;
+  }
+}
+
+function releaseParked(scope: HeavyAnimationScope) {
+  scope._releaseArmed = false;
+  const parked = scope._parked as FrameEntry[];
+  scope._parked = [];
+  // Release inside a measure task so that both measure and mutate work land in the SAME
+  // next frame, in phase order. Measure entries are drained right here (a requestMeasure
+  // issued from within the measure phase would slip to the frame after); mutate/reflow
+  // entries go through their normal queues, which run later in this frame.
+  requestMeasure(() => {
+    for (const e of parked) {
+      if (e.node !== null && e.node._state === STATE_DISPOSED) continue;
+      if (e.phase === 'measure') queues.measure.push(e);
+      else enqueue(e.phase, e.run, e.node);
+    }
+    if (!armed.measure && queues.measure.length) drain('measure');
+  });
+}
+
+function park(scope: HeavyAnimationScope, entry: FrameEntry) {
+  try {
+    if (!Array.isArray(scope._parked)) scope._parked = [];
+    (scope._parked as FrameEntry[]).push(entry);
+    if (scope._releaseArmed) return;
+    scope._releaseArmed = true;
+    scope.isBlockingAnimating.once(() => {
+      try {
+        releaseParked(scope);
+      } catch (error) {
+        console.error('[frameact] releasing parked frame effects failed', error);
+      }
+    });
+  } catch (error) {
+    // Could not park: run the entry now rather than leave its effect dirty forever.
+    console.error('[frameact] parking a frame effect failed; running it ungated', error);
+    entry.run();
+  }
+}
+
+drainHooks.blockingScopeFor = blockingScopeFor;
+drainHooks.park = park;
+
+/** Runs when the browser is idle and nothing in the node's scope chain is animating. */
+export const idle: Schedule = (run, node) => onFullyIdle(run, node._scope);
+
+export function createIdleEffect<T>(
+  compute: (prev: T | undefined) => T,
+  apply: (value: T, prev: T | undefined) => void | (() => void),
+  options?: EffectOptions,
+) {
+  createEffect(compute, apply, idle, { name: 'idle', ...options, immediateApply: false });
+}
+
+/**
+ * Wrap a scheduler so the run also waits for heavy animations in the node's scope chain
+ * (non-blocking by default; frame queues already wait for blocking ones).
+ */
+export function gateOnHeavyAnimation(schedule: Schedule, options: { blocking?: boolean } = {}): Schedule {
+  const blocking = options.blocking ?? false;
+  const gated: Schedule = (run, node) => {
+    const animating = firstAnimatingScope(node._scope, blocking);
+    if (animating === null) schedule(run, node);
+    else (blocking ? animating.isBlockingAnimating : animating.isAnimating).once(() => gated(run, node));
+  };
+  return gated;
+}
+
+/**
+ * Defer creating a heavy subtree until `scope` is idle: returns `placeholder` until then,
+ * then a memoized `fn()`. Scopes gate *updates*, not creation — this is the creation gate.
+ */
+export function deferUntilIdle<T>(scope: HeavyAnimationScope, fn: () => T, placeholder: T): () => T {
+  const ready = signal(false);
+  createEffect(() => undefined, () => { ready.set(true); }, (run) => onFullyIdle(run, scope), { name: 'deferUntilIdle' });
+  return computed(() => (ready() ? fn() : placeholder));
+}
