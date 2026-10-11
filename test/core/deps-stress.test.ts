@@ -646,6 +646,34 @@ describe('a dep re-dirtied inside an updateCheck walk', () => {
   });
 });
 
+describe('a dep whose pull throws', () => {
+  it('a reader that catches the error inside its compute stays subscribed and re-runs on recovery', () => {
+    const $k = signal(1);
+    const $trigger = signal(0);
+    const $m = computed(() => {
+      if ($k() < 0) throw new Error('negative');
+      return $k() * 10;
+    }, { initial: 0 });
+    const spy = vi.fn(() => {
+      $trigger(); // a direct dep: the reader recomputes, and pulls $m inside its own compute
+      try {
+        return $m();
+      } catch {
+        return -1;
+      }
+    });
+    const $r = computed(spy);
+    expect($r()).toBe(10);
+    $k.set(-1);
+    $trigger.set(1);
+    expect($r()).toBe(-1); // the pull threw inside the compute; the reader caught it
+    expect(depsOf(nodeOf($r))).toContain(nodeOf($m));
+    $k.set(2); // reaches the reader only through its link to $m
+    expect($r()).toBe(20);
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('dispose detaches links both ways', () => {
   it('a disposed subscriber is gone from every dependency; a disposed dependency has no subscribers', () => {
     const $a = signal(1);

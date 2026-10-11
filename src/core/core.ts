@@ -378,14 +378,21 @@ export function handleError(scope: Scope | null, error: unknown) {
 export function read(this: Computation): any {
   if (this._state === STATE_DISPOSED) return this._value;
 
-  if (this._compute !== null && this._state !== STATE_CLEAN) updateCheck(this);
-
   // P4: subscribe as the read completes — from here on, any change to this dep reaches the
   // reader's latch through the link (notify(): a link confirmed in the running compute means its
   // value was consumed). Linking after the pull keeps the pull's own result writes from
-  // latching the reader (it reads them fresh: the jagged-diamond rule).
-  if (currentObserver !== null && !this._effect) link(this, currentObserver);
+  // latching the reader (it reads them fresh: the jagged-diamond rule). A pull that throws still
+  // links: a reader that catches the error must wake when the dep recovers.
+  if (this._compute !== null && this._state !== STATE_CLEAN) {
+    try {
+      updateCheck(this);
+    } finally {
+      if (currentObserver !== null && !this._effect) link(this, currentObserver);
+    }
+    return this._value;
+  }
 
+  if (currentObserver !== null && !this._effect) link(this, currentObserver);
   return this._value;
 }
 
