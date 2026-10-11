@@ -402,7 +402,11 @@ export function write(this: Computation, newValue: any): any {
   if (this._changed(this._value, value)) {
     this._value = value;
     this._writtenAt = ++writeEpoch;
-    for (let l = this._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, true, l);
+    // Links confirmed after this point belong to computes that read the new value (see notify()).
+    const c = cycle;
+    for (let l = this._subs; l !== null; l = l.nextSub) {
+      if (l.version <= c) notify(l.sub, STATE_DIRTY, true, l);
+    }
   }
 
   return this._value;
@@ -666,16 +670,14 @@ export function update(node: Computation) {
       // pull that reader reads fresh).
       if (node._changed(node._value, result)) {
         node._value = result;
-        for (let l = node._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, false, l);
+        notifySubs(node);
       }
     } else {
       node._value = result;
       node._flags |= F_INIT;
       // A first result is normally not announced (nobody saw a value yet) — unless a reader got
       // the `initial` value while this first run was still going (see the re-entry guard above).
-      if (node._flags & F_REENTERED) {
-        for (let l = node._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, false, l);
-      }
+      if (node._flags & F_REENTERED) notifySubs(node);
     }
   } catch (error) {
     currentScope = prevScope;
@@ -801,17 +803,36 @@ function consumed(sub: Computation, link: Link | null): boolean {
   return link !== null && tail !== null && link.version === tail.version;
 }
 
-/** Explicit DFS stack for notify (continuation links). Re-entrant: each call works above its base. */
-const notifyStack: (Link | null)[] = [];
+/** A computed's result write: its subscribers are DIRTY (not latched unless consumed: notify()). */
+function notifySubs(node: Computation) {
+  const c = cycle;
+  for (let l = node._subs; l !== null; l = l.nextSub) {
+    if (l.version <= c) notify(l.sub, STATE_DIRTY, false, l);
+  }
+}
+
+/**
+ * Explicit DFS stack for notify (frames: continuation link, the cycle its level was entered at).
+ * Re-entrant: each call works above its base.
+ */
+const notifyStack: any[] = [];
 let notifyTop = 0;
 
 /**
  * P4 (frameact, alien-signals style): iterative push with the recursive version's visiting order
  * (pre-order DFS over subscriber lists): `node` gets `state`, everything below it CHECK.
+ *
+ * Each level remembers the compute cycle it was entered at (`lc`: when its node was marked). A
+ * link confirmed later (`version > lc`) belongs to a compute that started after the mark — it
+ * pulled the node fresh, or re-entered it (then the running update() tells it) — and is skipped.
+ * Without this, a synchronous effect that re-links the node on every run (it creates an owned
+ * node and reads it first) appends a new link behind the walk, which reaches it again, forever.
+ * An effect that ran mid-walk BEFORE a memo it read was marked has an older link: visited.
  */
 function notify(node: Computation, state: number, latch: boolean, via: Link | null) {
   const base = notifyTop;
-  let l: Link | null = null; // the link `node` was reached through (null: the root, via `via`)
+  let l: Link | null = null, // the link `node` was reached through (null: the root, via `via`)
+    lc = 0; // the cycle `l`'s level was entered at
   try {
     for (;;) {
       let subs: Link | null = null;
@@ -834,16 +855,26 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
           subs = node._subs;
         }
       }
-      if (subs !== null) {
-        if (l !== null && l.nextSub !== null) notifyStack[notifyTop++] = l.nextSub;
-        l = subs;
-      } else if (l !== null && l.nextSub !== null) {
-        l = l.nextSub;
-      } else if (notifyTop > base) {
-        l = notifyStack[--notifyTop];
-        notifyStack[notifyTop] = null;
-      } else {
-        return;
+      // Next link in pre-order, skipping links confirmed after their level was entered.
+      for (;;) {
+        if (subs !== null) {
+          if (l !== null && l.nextSub !== null) {
+            notifyStack[notifyTop++] = l.nextSub;
+            notifyStack[notifyTop++] = lc;
+          }
+          l = subs;
+          lc = cycle;
+          subs = null;
+        } else if (l !== null && l.nextSub !== null) {
+          l = l.nextSub;
+        } else if (notifyTop > base) {
+          lc = notifyStack[--notifyTop];
+          l = notifyStack[--notifyTop];
+          notifyStack[notifyTop] = null;
+        } else {
+          return;
+        }
+        if (l!.version <= lc) break;
       }
       node = l!.sub;
       state = STATE_CHECK;

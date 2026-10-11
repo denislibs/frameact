@@ -387,6 +387,89 @@ describe('deep and wide graphs: no stack overflow', () => {
   });
 });
 
+// Review stage 2, Critical 1: under a synchronous schedule an effect whose compute creates an
+// owned node and reads it before the source re-links the source on every run — the new link is
+// appended to the tail of the source's subscriber list while write()'s loop is still walking it,
+// so the walk reached the effect again, forever. A walk must skip links confirmed after it reached
+// their level (their compute read the value fresh) — but still visit an effect that ran mid-walk
+// before a memo it read was marked (P8).
+const effectRuns = (make: () => void) => {
+  let runs = 0;
+  const $s = signal(0);
+  const dispose = root((d) => {
+    createEffect(
+      () => {
+        if (++runs > 50) throw new Error('runaway');
+        make();
+        return $s();
+      },
+      () => {},
+      sync,
+    );
+    return d;
+  });
+  runs = 0;
+  $s.set(1);
+  const n = runs;
+  dispose();
+  return n;
+};
+
+describe('a walk does not chase links appended behind it', () => {
+  it('an effect creating and reading an owned memo before the source runs once per write', () => {
+    expect(effectRuns(() => { computed(() => 1)(); })).toBe(1);
+  });
+
+  it('an effect creating and reading an owned signal before the source runs once per write', () => {
+    expect(effectRuns(() => { signal(1)(); })).toBe(1);
+  });
+
+  it('the same through an intermediate memo', () => {
+    let runs = 0;
+    const $s = signal(0);
+    const $m = computed(() => $s() * 2);
+    const dispose = root((d) => {
+      createEffect(() => { runs++; computed(() => 1)(); return $m(); }, () => {}, sync);
+      return d;
+    });
+    runs = 0;
+    $s.set(1);
+    expect(runs).toBe(1);
+    dispose();
+  });
+
+  it('a memo result loop does not chase them either', () => {
+    let runs = 0;
+    const $s = signal(0);
+    const $m = computed(() => $s() * 2);
+    const dispose = root((d) => {
+      createEffect(() => { runs++; signal(1)(); return $m(); }, () => {}, sync);
+      createEffect(() => $m(), () => {}, sync); // pulls $m first: $m's result write walks its subs
+      return d;
+    });
+    runs = 0;
+    $s.set(1);
+    expect(runs).toBeLessThanOrEqual(2);
+    dispose();
+  });
+
+  it('an effect that read a memo mid-walk before the walk marked it runs again when the walk reaches it', () => {
+    const $s = signal(0);
+    const $a = computed(() => $s());
+    const $t = computed(() => $s());
+    const $u = computed(() => $t());
+    $a(); // $s.subs = [$a, $t]: the walk reaches the effect through $a before it marks $t/$u
+    const seen: number[] = [];
+    const dispose = root((d) => {
+      createEffect(() => $u() + $a() * 10, (v) => { seen.push(v); }, sync);
+      return d;
+    });
+    $s.set(1);
+    expect(seen).toEqual([0, 10, 11]); // 10: $u not marked yet (glitch); 11 once the walk got there
+    dispose();
+  });
+});
+
 describe('re-entrancy', () => {
   it('synchronous effects writing signals mid-walk settle to consistent values', () => {
     const $s = signal(0);
