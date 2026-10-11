@@ -310,9 +310,8 @@ describe('dynamic deps: links reused, reordered and purged', () => {
 describe('deep and wide graphs: no stack overflow', () => {
   const N = 10_000;
 
-  // ARRAY IMPL: recursive notify() overflows the stack at this depth — `it.fails` until P4 makes
-  // notify/updateCheck iterative (the P4 commit flips these to `it`).
-  it.fails(`a ${N}-deep memo chain: notify, updateCheck, effect and dispose`, () => {
+  // The array implementation's recursive notify() overflowed the stack at this depth (P4: iterative).
+  it(`a ${N}-deep memo chain: notify, updateCheck, effect and dispose`, () => {
     const q = recordingQueue();
     const $s = signal(0);
     let tail!: ReadSignal<number>;
@@ -342,7 +341,7 @@ describe('deep and wide graphs: no stack overflow', () => {
     expect(subsOf(nodeOf($s))).toEqual([]);
   });
 
-  it.fails(`a ${N}-deep chain whose middle stays unchanged: the walk stops there (CHECK resolves clean)`, () => {
+  it(`a ${N}-deep chain whose middle stays unchanged: the walk stops there (CHECK resolves clean)`, () => {
     const $s = signal(0);
     let runs = 0;
     const $cut = computed(() => ($s(), 0));
@@ -458,9 +457,9 @@ describe('re-entrancy', () => {
 // read it AND re-pulled (recomputed, CLEAN again) later in the same pass slips through: the reader
 // keeps the value it read first and is never woken again. The array implementation subscribes at
 // the end of the compute, so the invalidation's notify() could not reach the reader to latch it.
-// ARRAY IMPL: `it.fails` — subscribing at read time (P4) closes the hole; the P4 commit flips them.
+// Failed on the array implementation; subscribing at read time (P4) closes the hole.
 describe('missed wake: a dep bound for the first time, invalidated and re-pulled in the same pass', () => {
-  it.fails('a memo whose own compute is latched (it wrote what it read), then re-pulled by the reader', () => {
+  it('a memo whose own compute is latched (it wrote what it read), then re-pulled by the reader', () => {
     const $s = signal(0);
     const $m = computed(() => {
       const v = $s();
@@ -485,7 +484,7 @@ describe('missed wake: a dep bound for the first time, invalidated and re-pulled
     expect(spy).toHaveBeenCalledTimes(3);
   });
 
-  it.fails('a memo invalidated by a write made later in the same pass, then re-pulled through another memo', () => {
+  it('a memo invalidated by a write made later in the same pass, then re-pulled through another memo', () => {
     const $s = signal(0);
     const $t = signal(0);
     const $gate = signal(false);

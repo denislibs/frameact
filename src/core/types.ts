@@ -13,10 +13,14 @@ export interface Computation<T = any> extends Scope {
 
   /** @internal */
   _value: T;
-  /** @internal */
-  _sources: Computation[] | null;
-  /** @internal */
-  _observers: Computation[] | null;
+  /** @internal first link to a dependency (P4: doubly-linked, alien-signals style) */
+  _deps: Link | null;
+  /** @internal last dep link confirmed in the current compute (the old links after it are stale) */
+  _depsTail: Link | null;
+  /** @internal first link from a subscriber */
+  _subs: Link | null;
+  /** @internal last link from a subscriber (new subscribers are appended) */
+  _subsTail: Link | null;
 
   /** @internal */
   _compute: (() => T) | null;
@@ -24,6 +28,20 @@ export interface Computation<T = any> extends Scope {
   _changed: (prev: T, next: T) => boolean;
   /** read */
   call(this: Computation<T>): T;
+}
+
+/**
+ * @internal One dependency edge (P4): a node in both the dep's subscriber list (prevSub/nextSub)
+ * and the subscriber's dep list (prevDep/nextDep). `version`: the compute that last read it.
+ */
+export interface Link {
+  version: number;
+  dep: Computation;
+  sub: Computation;
+  prevDep: Link | null;
+  nextDep: Link | null;
+  prevSub: Link | null;
+  nextSub: Link | null;
 }
 
 export interface ReadSignal<T> {

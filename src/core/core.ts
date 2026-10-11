@@ -6,15 +6,21 @@ import type {
   Computation,
   ComputedSignalOptions,
   Dispose,
+  Link,
   MaybeDisposable,
   Scope,
 } from './types';
 
 let currentScope: Scope | null = null,
   currentObserver: Computation | null = null,
-  currentObservers: Computation[] | null = null,
-  currentObserversIndex = 0,
+  /** write epoch when the current observer's compute started (new-link missed-wake check) */
+  currentStartEpoch = 0,
+  /** the current compute's id: a link's `version` dedupes repeated non-adjacent reads of one dep */
+  currentCycle = 0,
   defaultContext = {};
+
+/** source of compute ids (currentCycle); every update() takes a fresh one */
+let cycle = 0;
 
 const NOOP = () => {};
 
@@ -41,9 +47,9 @@ export const STATE_CLEAN = 0,
 /**
  * Patch 1b (frameact): bumped by every value-changing *signal* write (write(); computed results
  * are written inline by update() and never stamped);
- * the written node records it in `_writtenAt`. update() compares the sources it links for the
- * first time in a pass against the epoch at compute start: a write to them during the compute
- * happened while the node was not yet their observer, so notify() could not latch it.
+ * the written node records it in `_writtenAt`. link() compares a dep it links for the first time
+ * in a pass against the epoch at compute start: a write to it earlier in this compute happened
+ * while the node was not yet subscribed, so notify() could not latch it.
  * Computed result writes are not stamped: they are lazy pulls the reader reads fresh (stamping
  * them costs an extra recompute whenever a stale memo is first read in a pass — a glitch).
  */
@@ -288,10 +294,14 @@ function disposeNode(node: Computation) {
   node._state = STATE_DISPOSED;
   if (node._disposal) emptyDisposal(node);
   if (node._effect) effectDisposeHook(node);
-  if (node._sources) removeSourceObservers(node, 0);
+  if (node._deps) unlinkDeps(node._deps); // (plain scopes have no link fields)
   node[SCOPE] = null;
-  node._sources = null;
-  node._observers = null;
+  node._deps = null;
+  node._depsTail = null;
+  // Subscribers keep their links to us: a disposed dep is skipped by updateCheck, never notifies,
+  // and is dropped from their dep lists on their next run (unlinkDeps skips its abandoned list).
+  node._subs = null;
+  node._subsTail = null;
   node._children = null;
   node._context = defaultContext;
   node._handlers = null;
@@ -365,16 +375,9 @@ export function handleError(scope: Scope | null, error: unknown) {
 export function read(this: Computation): any {
   if (this._state === STATE_DISPOSED) return this._value;
 
-  if (currentObserver && !this._effect) {
-    if (
-      !currentObservers &&
-      currentObserver._sources &&
-      currentObserver._sources[currentObserversIndex] == this
-    ) {
-      currentObserversIndex++;
-    } else if (!currentObservers) currentObservers = [this];
-    else currentObservers.push(this);
-  }
+  // P4: subscribe at read time, before pulling — a write that invalidates us later in the
+  // reader's compute reaches the reader's latch through this link.
+  if (currentObserver !== null && !this._effect) link(this, currentObserver);
 
   if (this._compute !== null && this._state !== STATE_CLEAN) updateCheck(this);
 
@@ -387,10 +390,7 @@ export function write(this: Computation, newValue: any): any {
   if (this._changed(this._value, value)) {
     this._value = value;
     this._writtenAt = ++writeEpoch;
-    const observers = this._observers;
-    if (observers !== null) {
-      for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_DIRTY, true);
-    }
+    for (let l = this._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, true);
   }
 
   return this._value;
@@ -464,8 +464,10 @@ export function initComputationNode(
   node._flags = 0;
   node._effect = false;
   node._writtenAt = 0;
-  node._sources = null;
-  node._observers = null;
+  node._deps = null;
+  node._depsTail = null;
+  node._subs = null;
+  node._subsTail = null;
   node._value = initialValue;
   node._compute = compute || null;
   node._changed = (options && options.dirty) || isNotEqual;
@@ -520,26 +522,54 @@ export function isFunction(value: unknown): value is Function {
   return typeof value === 'function';
 }
 
-export function updateCheck(node: Computation) {
-  // Patch 2 (frameact): a disposed node is never resurrected by a stale observer.
-  if (node._state === STATE_DISPOSED) return;
+/** Explicit DFS stack for updateCheck (pairs: node, link). Re-entrant: each call works above its base. */
+const checkStack: (Computation | Link | null)[] = [];
+let checkTop = 0;
 
+/**
+ * P4 (frameact, alien-signals style): iterative pull, same walk as the recursive maverick
+ * version. A CHECK node's deps are visited in order: a CHECK dep is descended into (explicit
+ * stack instead of recursion), a DIRTY dep is recomputed (which may dirty the node); the walk of
+ * a node stops as soon as it is no longer CHECK. Then it is recomputed (DIRTY) or marked CLEAN.
+ * Patch 2 (frameact): a DISPOSED node is never resurrected — it is neither CHECK nor DIRTY, so it
+ * is skipped as a dep and left alone as a node (also when it is disposed mid-walk).
+ */
+export function updateCheck(node: Computation) {
   if (node._state === STATE_CHECK) {
-    const sources = node._sources!;
-    for (let i = 0; i < sources.length; i++) {
-      const source = sources[i];
-      if (source._state !== STATE_CLEAN) updateCheck(source);
-      if ((node._state as number) === STATE_DIRTY) {
-        // Stop the loop here so we won't trigger updates on other parents unnecessarily
-        // If our computation changes to no longer use some sources, we don't
-        // want to update() a source we used last time, but now don't use.
-        break;
+    const base = checkTop;
+    let cur = node,
+      l = node._deps;
+    try {
+      for (;;) {
+        if (l !== null && cur._state === STATE_CHECK) {
+          const dep = l.dep;
+          const ds = dep._state;
+          if (ds === STATE_CHECK) {
+            checkStack[checkTop++] = cur;
+            checkStack[checkTop++] = l;
+            cur = dep;
+            l = dep._deps;
+            continue;
+          }
+          if (ds === STATE_DIRTY) update(dep); // may dirty `cur`
+          l = l.nextDep;
+          continue;
+        }
+        // `cur` resolved: DIRTY → recompute; CHECK with no dirty dep → CLEAN; DISPOSED stays.
+        if (cur._state === STATE_DIRTY) update(cur);
+        else if (cur._state === STATE_CHECK) cur._state = STATE_CLEAN;
+        if (checkTop === base) return;
+        l = (checkStack[--checkTop] as Link).nextDep;
+        checkStack[checkTop] = null;
+        cur = checkStack[--checkTop] as Computation;
+        checkStack[checkTop] = null;
       }
+    } finally {
+      // Normally already at `base`; after a throw, drop this call's frames.
+      while (checkTop > base) checkStack[--checkTop] = null;
     }
   }
-
   if (node._state === STATE_DIRTY) update(node);
-  else if (node._state !== STATE_DISPOSED) node._state = STATE_CLEAN;
 }
 
 function cleanup(node: Computation) {
@@ -549,31 +579,28 @@ function cleanup(node: Computation) {
 }
 
 export function update(node: Computation) {
-  let prevObservers = currentObservers,
-    prevObserversIndex = currentObserversIndex;
-
-  currentObservers = null as Computation[] | null;
-  currentObserversIndex = 0;
   node._flags = (node._flags & F_INIT) | F_COMPUTING;
   let computeStarted = false;
-  const startEpoch = writeEpoch;
   const prevScope = currentScope,
-    prevObserver = currentObserver;
+    prevObserver = currentObserver,
+    prevStartEpoch = currentStartEpoch,
+    prevCycle = currentCycle;
 
   try {
     cleanup(node);
 
     computeStarted = true;
+    node._depsTail = null; // link() walks the old deps from the start
     currentScope = node;
     currentObserver = node;
+    currentStartEpoch = writeEpoch;
+    currentCycle = ++cycle;
     const result = node._compute!.call(node);
     currentScope = prevScope;
     currentObserver = prevObserver;
-
-    const linkFrom = currentObserversIndex;
-    const linksNew = currentObservers !== null;
-    updateObservers(node);
-    if (linksNew) checkNewSources(node, linkFrom, startEpoch);
+    currentStartEpoch = prevStartEpoch;
+    currentCycle = prevCycle;
+    purgeDeps(node);
 
     if (!node._effect && node._flags & F_INIT) {
       // A computed's result write: a value, never an updater (not routed through write()); not a
@@ -581,10 +608,7 @@ export function update(node: Computation) {
       // pull that reader reads fresh).
       if (node._changed(node._value, result)) {
         node._value = result;
-        const observers = node._observers;
-        if (observers !== null) {
-          for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_DIRTY, false);
-        }
+        for (let l = node._subs; l !== null; l = l.nextSub) notify(l.sub, STATE_DIRTY, false);
       }
     } else {
       node._value = result;
@@ -593,6 +617,8 @@ export function update(node: Computation) {
   } catch (error) {
     currentScope = prevScope;
     currentObserver = prevObserver;
+    currentStartEpoch = prevStartEpoch;
+    currentCycle = prevCycle;
     // Effects report their own errors (effects.ts); the `initial` hint only fits computeds.
     if (DEV && !node._effect && !(node._flags & F_INIT) && typeof node._value === 'undefined') {
       console.error(
@@ -605,104 +631,140 @@ export function update(node: Computation) {
       );
     }
 
-    // A failure before compute (in cleanup) leaves currentObservers empty: updateObservers would
-    // then unlink every source and the node would never wake again. Keep the old sources.
-    if (computeStarted) updateObservers(node);
+    // Keep the deps read before the throw. A failure before compute (in cleanup) keeps them all:
+    // purging would unlink every dep and the node would never wake again.
+    if (computeStarted) purgeDeps(node);
     handleError(node, error);
   } finally {
-    currentObservers = prevObservers;
-    currentObserversIndex = prevObserversIndex;
     const missed = node._flags & F_MISSED;
     node._flags &= F_INIT;
-    // A node disposed during its own compute stays DISPOSED.
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;
       if (missed) {
         notify(node, STATE_DIRTY, true); // propagates to observers / schedules an effect
       }
+    } else if (node._deps !== null) {
+      // Disposed during its own compute: stays DISPOSED, and drops the links it made after that.
+      unlinkDeps(node._deps);
+      node._deps = node._depsTail = null;
     }
   }
 }
 
 /**
- * Patch 1b (frameact): sources linked for the first time in this pass were not observed while the
- * compute ran, so a write to them could not be latched by notify(). Re-dirty the node if one of
- * them was written after the compute started (a signal), or was invalidated after this pass read
- * it (a memo left DIRTY/CHECK — it would otherwise never notify us: notify() stops at nodes that
- * are already dirty). Conservative: "wrote, then read" costs at most one extra recompute.
+ * P4 (frameact, alien-signals style): track `dep` for `sub` during sub's compute. When deps are
+ * read in the same order as last time the next old link is reused (no allocation, no diff);
+ * otherwise a new link is inserted (O(1)) into both lists, and old links not reused by the end of
+ * the compute are purged. Repeated reads of one dep in a run are deduped (adjacent: the tail;
+ * otherwise: the dep's last link, if it is this compute's).
+ * Patch 1b (frameact) lives here: a NEW link to a dep written after this compute started missed
+ * that write (we were not subscribed yet) — latch it. Old links stay subscribed for the whole
+ * compute, and new ones from the moment of the read, so later writes reach notify()'s latch.
  */
-function checkNewSources(node: Computation, from: number, startEpoch: number) {
-  const sources = node._sources!;
-  for (let i = from; i < sources.length; i++) {
-    const source = sources[i];
-    if (
-      source._writtenAt > startEpoch ||
-      source._state === STATE_CHECK ||
-      source._state === STATE_DIRTY
-    ) {
-      node._flags |= F_MISSED;
-      return;
-    }
-  }
-}
-
-function updateObservers(node: Computation) {
-  if (currentObservers) {
-    if (node._sources) removeSourceObservers(node, currentObserversIndex);
-
-    if (node._sources && currentObserversIndex > 0) {
-      node._sources.length = currentObserversIndex + currentObservers.length;
-      for (let i = 0; i < currentObservers.length; i++) {
-        node._sources[currentObserversIndex + i] = currentObservers[i];
-      }
-    } else {
-      node._sources = currentObservers;
-    }
-
-    let source: Computation;
-    for (let i = currentObserversIndex; i < node._sources.length; i++) {
-      source = node._sources[i];
-      if (!source._observers) source._observers = [node];
-      else source._observers.push(node);
-    }
-  } else if (node._sources && currentObserversIndex < node._sources.length) {
-    removeSourceObservers(node, currentObserversIndex);
-    node._sources.length = currentObserversIndex;
-  }
-}
-
-function notify(node: Computation, state: number, latch: boolean) {
-  if (node._flags & F_COMPUTING) {
-    // Patch 1 (frameact): a write landing on a node mid-compute. A computed's result write is a
-    // lazy pull this pass reads fresh — ignore it (maverick's behavior). A signal write may have
-    // changed a value this pass already read: latch it; update() re-dirties the node at the end.
-    if (latch) node._flags |= F_MISSED;
+function link(dep: Computation, sub: Computation) {
+  const prevDep = sub._depsTail;
+  if (prevDep !== null && prevDep.dep === dep) return;
+  const nextDep = prevDep !== null ? prevDep.nextDep : sub._deps;
+  if (nextDep !== null && nextDep.dep === dep) {
+    nextDep.version = currentCycle;
+    sub._depsTail = nextDep;
     return;
   }
+  const prevSub = dep._subsTail;
+  if (prevSub !== null && prevSub.version === currentCycle && prevSub.sub === sub) return;
+  if (dep._writtenAt > currentStartEpoch) sub._flags |= F_MISSED;
+  const newLink: Link = {
+    version: currentCycle,
+    dep,
+    sub,
+    prevDep,
+    nextDep,
+    prevSub,
+    nextSub: null,
+  };
+  sub._depsTail = newLink;
+  dep._subsTail = newLink;
+  if (nextDep !== null) nextDep.prevDep = newLink;
+  if (prevDep !== null) prevDep.nextDep = newLink;
+  else sub._deps = newLink;
+  if (prevSub !== null) prevSub.nextSub = newLink;
+  else dep._subs = newLink;
+}
 
-  const prev = node._state;
-  if (prev >= state) return;
+/** Drop the deps after `_depsTail` (not read in this compute). */
+function purgeDeps(sub: Computation) {
+  const tail = sub._depsTail;
+  const from = tail !== null ? tail.nextDep : sub._deps;
+  if (from === null) return;
+  if (tail !== null) tail.nextDep = null;
+  else sub._deps = null;
+  unlinkDeps(from);
+}
 
-  // The state is set BEFORE the scheduler runs: a synchronous schedule runs the effect right here,
-  // and that run must see the node dirty (else computeNode() skips it as clean and the node is left
-  // DIRTY with no run booked). Scheduled once per dirty period: only on the CLEAN → dirty edge.
-  node._state = state;
-  if (node._effect && prev === STATE_CLEAN) effectScheduler(node);
-
-  const observers = node._observers;
-  if (observers !== null) {
-    for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_CHECK, latch);
+/**
+ * Remove the links `from`, `from.nextDep`, … from their deps' subscriber lists. A removed link
+ * keeps its own pointers: a notify() walk standing on it still reaches the links after it.
+ */
+function unlinkDeps(from: Link) {
+  for (let l: Link | null = from; l !== null; l = l.nextDep) {
+    const dep = l.dep;
+    if (dep._state === STATE_DISPOSED) continue; // its subscriber list is abandoned
+    const prevSub = l.prevSub,
+      nextSub = l.nextSub;
+    if (nextSub !== null) nextSub.prevSub = prevSub;
+    else dep._subsTail = prevSub;
+    if (prevSub !== null) prevSub.nextSub = nextSub;
+    else dep._subs = nextSub;
   }
 }
 
-function removeSourceObservers(node: Computation, index: number) {
-  let source: Computation, swap: number;
-  for (let i = index; i < node._sources!.length; i++) {
-    source = node._sources![i];
-    if (source._observers) {
-      swap = source._observers.indexOf(node);
-      source._observers[swap] = source._observers[source._observers.length - 1];
-      source._observers.pop();
+/** Explicit DFS stack for notify (continuation links). Re-entrant: each call works above its base. */
+const notifyStack: (Link | null)[] = [];
+let notifyTop = 0;
+
+/**
+ * P4 (frameact, alien-signals style): iterative push with the recursive version's visiting order
+ * (pre-order DFS over subscriber lists): `node` gets `state`, everything below it CHECK.
+ */
+function notify(node: Computation, state: number, latch: boolean) {
+  const base = notifyTop;
+  let l: Link | null = null; // the link `node` was reached through (null: the root)
+  try {
+    for (;;) {
+      let subs: Link | null = null;
+      const flags = node._flags;
+      if (flags & F_COMPUTING) {
+        // Patch 1 (frameact): a write landing on a node mid-compute. A computed's result write is
+        // a lazy pull this pass reads fresh — ignore it (maverick's behavior). A signal write may
+        // have changed a value this pass already read: latch it; update() re-dirties the node.
+        if (latch) node._flags = flags | F_MISSED;
+      } else {
+        const prev = node._state;
+        if (prev < state) {
+          // The state is set BEFORE the scheduler runs: a synchronous schedule runs the effect
+          // right here, and that run must see the node dirty. Scheduled once per dirty period:
+          // only on the CLEAN → dirty edge. (Effects have no subscribers.)
+          node._state = state;
+          if (node._effect && prev === STATE_CLEAN) effectScheduler(node);
+          subs = node._subs;
+        }
+      }
+      if (subs !== null) {
+        if (l !== null && l.nextSub !== null) notifyStack[notifyTop++] = l.nextSub;
+        l = subs;
+      } else if (l !== null && l.nextSub !== null) {
+        l = l.nextSub;
+      } else if (notifyTop > base) {
+        l = notifyStack[--notifyTop];
+        notifyStack[notifyTop] = null;
+      } else {
+        return;
+      }
+      node = l!.sub;
+      state = STATE_CHECK;
     }
+  } finally {
+    // Normally already at `base`; after a throwing scheduler, drop this call's frames.
+    while (notifyTop > base) notifyStack[--notifyTop] = null;
   }
 }
