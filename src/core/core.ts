@@ -508,10 +508,9 @@ const ComputeNode = function Computation(
   initialValue: any,
   compute: any,
   options?: ComputedSignalOptions<any, any>,
-  unowned?: boolean,
 ) {
   if (DEV && compute) assertApplyOwner();
-  initComputationNode(this, initialValue, compute, options, unowned !== true);
+  initComputationNode(this, initialValue, compute, options, true);
 };
 
 /** @internal the prototype every computation kind (signals, computeds, effects, selector nodes) shares */
@@ -528,13 +527,40 @@ export function createComputation<T>(
 }
 
 /**
- * P3b (frameact): the node of a public `createSignal` — NOT appended to the current owner (Solid
+ * P3b (frameact): the node of a public `createSignal` is NOT appended to the current owner (Solid
  * semantics: a signal is plain state, it owns nothing and is never disposed; its readers unlink
  * from it when they are disposed). Memos and effects stay owned.
+ *
+ * P5 (frameact): and it is a slim node — only the fields a dependency needs (7 with the DEV id,
+ * vs ~23 on a Computation): never an owner, never an observer, never disposed. It is read through
+ * readSignal() (bound by createSignal) and written through write(). Wherever the core handles a
+ * dep (link, unlinkDeps, updateCheck, hasDirtyDep) it touches only these fields — `_state` is
+ * always CLEAN, so the reads guarded by a non-CLEAN state (`_deps`, `_flags`) never reach it.
+ * Typed as a Computation for those shared paths.
  */
+const SignalNode = function SignalNode(
+  this: Computation,
+  value: unknown,
+  changed: Computation['_changed'],
+  id: string | undefined,
+) {
+  this._state = STATE_CLEAN;
+  this._writtenAt = 0;
+  this._value = value;
+  this._subs = null;
+  this._subsTail = null;
+  this._changed = changed;
+  if (DEV) this.id = id ?? 'signal';
+};
+
 export function createSignalNode<T>(initialValue: T, options?: SignalOptions<T>): Computation<T> {
-  // Same constructor as every computation: the same hidden class.
-  return new (ComputeNode as any)(initialValue, null, options, true);
+  return new (SignalNode as any)(initialValue, (options && options.dirty) || isNotEqual, options?.id);
+}
+
+/** P5: read a createSignal node (the slim read(): no pull, never disposed, never an effect). */
+export function readSignal(this: Computation): any {
+  if (currentObserver !== null) link(this, currentObserver);
+  return this._value;
 }
 
 /**

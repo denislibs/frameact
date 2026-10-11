@@ -6,7 +6,7 @@
 // rules). Oracle: each node's pure function re-evaluated from the current signal values.
 // Deterministic (seeded PRNG); a failure names its seed and mode — rerun one with FUZZ_SEED.
 import { computed, signal } from '../../src/core/signals';
-import { getScope, root, untrack } from '../../src/core/core';
+import { createSignalNode, getScope, readSignal, root, untrack, write } from '../../src/core/core';
 import { createEffect, type Schedule } from '../../src/core/effects';
 import type { Computation, ReadSignal, WriteSignal } from '../../src/core/types';
 import { depsOf, subsOf } from './helpers/graph';
@@ -194,8 +194,20 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
     nodes[i] = node;
     idOf.set(node, i);
   };
+  // Stage 3 (P5): signals are a mix of maverick signal() nodes (full Computation shape) and
+  // createSignal's slim nodes (createSignalNode + readSignal, exactly what createSignal binds), so
+  // the dep paths see both shapes. Own stream: the graphs of existing seeds are unchanged.
+  const rand3 = mulberry32(seed ^ 0x85ebca6b);
   for (let i = 0; i < firstMemo; i++) {
-    const s = signal(0);
+    let s: WriteSignal<number>;
+    if (rand3() < 0.5) {
+      s = signal(0);
+    } else {
+      const node = createSignalNode(0);
+      s = readSignal.bind(node) as WriteSignal<number>;
+      s.set = write.bind(node) as WriteSignal<number>['set'];
+      s.node = node;
+    }
     sigs[i] = s;
     acc[i] = s;
     register(i, s.node!);

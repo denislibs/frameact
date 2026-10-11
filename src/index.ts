@@ -1,6 +1,6 @@
 import {
   createComputation, createSignalNode, detachedRoot, getScope, onDispose, onError as onErrorRaw, peek, read,
-  scoped, write,
+  readSignal, scoped, write,
 } from './core/core';
 import type { Scope } from './core/types';
 
@@ -26,7 +26,7 @@ function toDirty<T>(equals: SignalOptions<T>['equals']): ((prev: T, next: T) => 
 export function createSignal<T>(value: T, options?: SignalOptions<T>): [Accessor<T>, Setter<T>] {
   // One node + two bound functions + the tuple: no options object, no maverick wrapper function.
   const node = createSignalNode(value, options && { id: options.id, dirty: toDirty(options.equals) });
-  return [read.bind(node) as Accessor<T>, write.bind(node) as Setter<T>];
+  return [readSignal.bind(node) as Accessor<T>, write.bind(node) as Setter<T>];
 }
 
 export function createMemo<T>(fn: () => T, options?: SignalOptions<T>): Accessor<T> {
