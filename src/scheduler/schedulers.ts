@@ -121,27 +121,57 @@ export function fastRaf(callback: NoneToVoidFunction, withTimeoutFallback = fals
 }
 
 let onTickEndCallbacks: NoneToVoidFunction[] | undefined;
+/** Nesting depth of flushTickEnd(): > 0 while a drain is running (a callback may call flushSync()). */
+let tickDrainDepth = 0;
+/** Bumped once at the start of every outermost flushTickEnd() drain that has work to do. */
+let tickDrainEpoch = 0;
 
 export function onTickEnd(callback: NoneToVoidFunction) {
   if (!onTickEndCallbacks) {
     onTickEndCallbacks = [callback];
-    Promise.resolve().then(flushTickEnd);
+    // While draining, the running drain picks the new callback up: no extra microtask.
+    if (tickDrainDepth === 0) Promise.resolve().then(flushTickEnd);
   } else {
     onTickEndCallbacks.push(callback);
   }
 }
 
-/** Run every pending onTickEnd callback now. Used by the microtask itself and by flushSync(). */
+/**
+ * Run pending onTickEnd callbacks until none are left: callbacks queued while flushing run in this
+ * same flush, so a cascade (effect → write → effect ...) completes in one drain. Used by the
+ * microtask itself and by flushSync(). A re-entrant call (a callback calling flushSync()) drains
+ * the pending callbacks too, within the same drain epoch.
+ */
 export function flushTickEnd() {
   if (!onTickEndCallbacks) return;
-  const currentCallbacks = onTickEndCallbacks;
-  onTickEndCallbacks = undefined;
-  currentCallbacks.forEach(safeExec);
+  if (tickDrainDepth === 0) tickDrainEpoch++;
+  tickDrainDepth++;
+  try {
+    while (onTickEndCallbacks) {
+      const currentCallbacks = onTickEndCallbacks;
+      onTickEndCallbacks = undefined;
+      for (let i = 0; i < currentCallbacks.length; i++) safeExec(currentCallbacks[i]);
+    }
+  } finally {
+    // Only reached with work left if something escaped safeExec (e.g. a throwing console.error):
+    // re-book the microtask that onTickEnd skipped while we were draining, or the queue would stall.
+    if (--tickDrainDepth === 0 && onTickEndCallbacks) Promise.resolve().then(flushTickEnd);
+  }
 }
 
 /** @internal core flushSync() loops until nothing is pending. */
 export function hasPendingTickEnd() {
   return onTickEndCallbacks !== undefined;
+}
+
+/** @internal The epoch of the current (or, outside a drain, the last) flushTickEnd() drain. */
+export function getTickDrainEpoch() {
+  return tickDrainEpoch;
+}
+
+/** @internal True while a flushTickEnd() drain is running. */
+export function isTickDraining() {
+  return tickDrainDepth > 0;
 }
 
 const IDLE_TIMEOUT = 500;
