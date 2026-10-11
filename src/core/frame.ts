@@ -11,23 +11,38 @@ import {
   type Schedule,
 } from './effects';
 import { getPhase, requestForcedReflow, requestMeasure, requestMutation } from '../scheduler/fasterdom';
-import { firstAnimatingScope, onFullyIdle, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
+import { firstAnimatingScope, isAnyScopeBlocking, onFullyIdle, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
 import { computed, signal } from './signals';
 
 export type FramePhase = 'measure' | 'mutate' | 'reflow';
 
-/** @internal A queued run. `node === null` for detached work (deferred apply-cleanups). */
+/**
+ * @internal A queued run that is not simply "run this effect": created only when parking (the
+ * release needs the phase) or when a custom scheduler passes a run other than the node's own.
+ */
 export interface FrameEntry {
   run: () => void;
   node: EffectNode | null;
   phase: FramePhase;
 }
 
+/**
+ * P3b: queues hold the EffectNode itself in the common case (its `_run` is the run), plain
+ * functions for detached work (deferred apply-cleanups), and FrameEntry objects only as above —
+ * no per-entry allocation on the hot path.
+ */
+type QueueItem = EffectNode | FrameEntry | (() => void);
+
 /** Max runs of one effect within one drain before it is treated as a loop. */
 const LOOP_LIMIT = 100;
 
-const queues: Record<FramePhase, FrameEntry[]> = { measure: [], mutate: [], reflow: [] };
+const queues: Record<FramePhase, QueueItem[]> = { measure: [], mutate: [], reflow: [] };
 const armed: Record<FramePhase, boolean> = { measure: false, mutate: false, reflow: false };
+const drainers: Record<FramePhase, () => void> = {
+  measure: () => drain('measure'),
+  mutate: () => drain('mutate'),
+  reflow: () => drain('reflow'),
+};
 const request: Record<FramePhase, (cb: () => void) => void> = {
   measure: requestMeasure,
   mutate: requestMutation,
@@ -57,13 +72,17 @@ export const drainHooks: {
   park: () => {},
 };
 
-/** @internal used by Task 10's release path */
-export function enqueue(phase: FramePhase, run: () => void, node: EffectNode | null) {
-  queues[phase].push({ run, node, phase });
+function push(phase: FramePhase, item: QueueItem) {
+  queues[phase].push(item);
   if (!armed[phase]) {
     armed[phase] = true;
-    request[phase](() => drain(phase));
+    request[phase](drainers[phase]);
   }
+}
+
+/** @internal used by Task 10's release path */
+export function enqueue(phase: FramePhase, run: () => void, node: EffectNode | null) {
+  push(phase, node === null ? run : run === node._run ? node : { run, node, phase });
   // Only re-dirties warn: a measure effect created during a mutate drain legitimately schedules its first run.
   if (DEV && phase === 'measure' && getPhase() === 'mutate' && node !== null && node._applied !== NOT_APPLIED) {
     console.warn(
@@ -77,41 +96,56 @@ export function isArmed(phase: FramePhase) {
   return armed[phase];
 }
 
+/** Bumped by every drain; effects count their runs per drain epoch (`_drainEpoch`/`_drainRuns`). */
+let drainEpoch = 0;
+
 /**
  * @internal Drain one phase queue. Entries added while draining are processed in this same drain.
  * A loop guard counts runs per effect (not queue entries): an effect that would run more than
  * LOOP_LIMIT times in one drain is reported once and its further runs are carried to the next frame.
+ * Gating is sampled once per drain: while no scope blocks, the gate hook is never consulted.
  */
 export function drain(phase: FramePhase) {
   const queue = queues[phase];
-  const blockCache = new Map<HeavyAnimationScope, HeavyAnimationScope | null>();
-  const runs = new Map<EffectNode, number>();
-  const overflow: FrameEntry[] = [];
+  const epoch = ++drainEpoch;
+  const gating = isAnyScopeBlocking();
+  let blockCache: Map<HeavyAnimationScope, HeavyAnimationScope | null> | null = null;
+  let overflow: QueueItem[] | null = null;
   try {
     for (let i = 0; i < queue.length; i++) {
-      const entry = queue[i];
+      const item = queue[i];
       try {
-        const node = entry.node;
+        if (typeof item === 'function') {
+          item();
+          continue;
+        }
+        const isNode = (item as EffectNode)._effect === true;
+        const node = isNode ? (item as EffectNode) : (item as FrameEntry).node;
         if (node !== null) {
           if (node._state === STATE_DISPOSED) continue;
-          const blocker = drainHooks.blockingScopeFor(node._scope, blockCache);
-          if (blocker !== null) {
-            drainHooks.park(blocker, entry);
-            continue;
+          if (gating) {
+            const blocker = drainHooks.blockingScopeFor(node._scope, (blockCache ??= new Map()));
+            if (blocker !== null) {
+              drainHooks.park(blocker, isNode ? { run: node._run, node, phase } : (item as FrameEntry));
+              continue;
+            }
           }
-          const count = (runs.get(node) ?? 0) + 1;
-          runs.set(node, count);
-          if (count > LOOP_LIMIT) {
-            if (count === LOOP_LIMIT + 1) {
+          if (node._drainEpoch !== epoch) {
+            node._drainEpoch = epoch;
+            node._drainRuns = 0;
+          }
+          if (++node._drainRuns > LOOP_LIMIT) {
+            if (node._drainRuns === LOOP_LIMIT + 1) {
               console.error(
                 `[frameact] ${phase} drain limit: effect${node._name ? ` "${node._name}"` : ''} ran ${LOOP_LIMIT} times in one drain — likely a loop. Remaining runs moved to the next frame.`,
               );
             }
-            overflow.push(entry);
+            (overflow ??= []).push(item);
             continue;
           }
         }
-        entry.run();
+        if (isNode) node!._run();
+        else (item as FrameEntry).run();
       } catch (error) {
         console.error(`[frameact] ${phase} drain: entry failed`, error);
       }
@@ -120,7 +154,7 @@ export function drain(phase: FramePhase) {
     queues[phase] = [];
     armed[phase] = false;
   }
-  for (const e of overflow) enqueue(e.phase, e.run, e.node);
+  if (overflow !== null) for (let i = 0; i < overflow.length; i++) push(phase, overflow[i]);
 }
 
 export const frameMeasure: Schedule = (run, node) => enqueue('measure', run, node);

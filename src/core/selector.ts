@@ -1,5 +1,5 @@
 // Adapted from maverick-js/signals v6 (MIT, © 2022 Rahim Alwer) — https://github.com/maverick-js/signals
-import { isNotEqual, onDispose, read, write } from './core';
+import { computationPrototype, initComputationNode, onDispose, read, write } from './core';
 import { createEffect } from './effects';
 import { Computation, ReadSignal } from './types';
 
@@ -48,17 +48,17 @@ interface Selector<T = any> extends Computation {
   call(): void;
 }
 
+// Patch P3a (frameact): the full computation field set first (not owned: selector nodes are shared
+// across owners and ref-counted), then the selector's own fields.
 function Selector<T>(this: Selector<T>, key: T, initialValue: boolean, nodes: Map<T, Selector>) {
-  this._state = /** CLEAN */ 0;
+  initComputationNode(this, initialValue, null, undefined, false);
   this._key = key;
-  this._value = initialValue;
   this._refs = 0;
   this._nodes = nodes;
-  this._observers = null;
 }
 
-const SelectorProto = Selector.prototype;
-SelectorProto._changed = isNotEqual;
+const SelectorProto = (Selector.prototype = Object.create(computationPrototype));
+// `call` is the disposal entry (the node registers itself with onDispose); reads go through read.bind.
 SelectorProto.call = function (this: Selector) {
   this._refs -= 1;
   if (!this._refs) {

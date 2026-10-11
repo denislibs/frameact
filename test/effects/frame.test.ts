@@ -6,6 +6,7 @@ import { getPhase, flushSync } from '../../src/scheduler/fasterdom';
 import { installFakeRaf } from '../helpers/raf';
 import { frame } from '../helpers/frame';
 import { flushMicrotasks } from '../helpers/micro';
+import { createHeavyAnimationScope } from '../../src/scheduler/heavyAnimation';
 
 let raf: ReturnType<typeof installFakeRaf>;
 beforeEach(() => { raf = installFakeRaf(); });
@@ -196,11 +197,14 @@ it('an error thrown inside the drain loop is isolated per entry; the rest of the
     if (calls++ === 0) throw new Error('hook boom');
     return original(scope, cache);
   };
+  // The gate hook is only consulted while some scope blocks: block an unrelated scope.
+  const endUnrelated = createHeavyAnimationScope(null).begin(Infinity, true);
   try {
     $a.set(1);
     await frame(raf);
   } finally {
     drainHooks.blockingScopeFor = original;
+    endUnrelated();
   }
   expect(applied).toEqual(['second']);
   expect(err.mock.calls.some((c) => String(c[0]).includes('drain: entry failed'))).toBe(true);
@@ -291,4 +295,24 @@ it('apply-cleanup of a frameForcedReflow effect runs inline on dispose', async (
   await frame(raf);
   dispose();
   expect(log).toEqual(['cleanup']);
+});
+
+// P3b (perf review): the drain's gating fast path.
+it('a drain with no blocking animation never consults the gate hook', async () => {
+  const $a = signal(0);
+  const applied = vi.fn();
+  root(() => { for (let i = 0; i < 200; i++) createMutationEffect(() => $a(), applied); });
+  const gate = vi.spyOn(drainHooks, 'blockingScopeFor');
+  const nonBlocking = createHeavyAnimationScope(null).begin(Infinity, false); // non-blocking does not gate frames
+  let gateCalls = -1;
+  try {
+    $a.set(1);
+    await frame(raf);
+    gateCalls = gate.mock.calls.length; // read before mockRestore() resets the spy
+  } finally {
+    nonBlocking();
+    gate.mockRestore();
+  }
+  expect(applied).toHaveBeenCalledTimes(400);
+  expect(gateCalls).toBe(0);
 });

@@ -1,9 +1,10 @@
 import { DEV } from '../env';
 import {
   assertApplyOwner,
-  compute as runInScope,
-  createComputation,
+  callUnowned,
+  computationPrototype,
   handleError,
+  initComputationNode,
   isFunction,
   setEffectDisposeHook,
   setEffectScheduler,
@@ -39,6 +40,10 @@ export interface EffectNode<T = any> extends Computation<T> {
   _tickEpoch: number;
   /** @internal tickEnd loop guard: runs scheduled within `_tickEpoch` */
   _tickRuns: number;
+  /** @internal frame drain loop guard: the drain `_drainRuns` counts runs in (frame.ts) */
+  _drainEpoch: number;
+  /** @internal frame drain loop guard: runs within `_drainEpoch` */
+  _drainRuns: number;
 }
 
 export interface EffectOptions {
@@ -121,29 +126,54 @@ export function createEffect<T>(
   options?: EffectOptions,
 ): void {
   if (DEV) assertApplyOwner();
-  const node = createComputation<T>(undefined as T, null) as EffectNode<T>;
-  node._compute = function (this: EffectNode<T>) {
-    return compute(this._init ? this._value : undefined);
-  };
-  node._effect = true;
-  node._apply = apply;
-  node._applied = NOT_APPLIED;
-  node._applyCleanup = null;
-  node._schedule = schedule;
-  node._bailed = null;
-  node._name = options?.name;
-  node._selfDirty = 0;
-  node._tickEpoch = 0;
-  node._tickRuns = 0;
-  node._writesDom = options?.writesDom ?? domWritingSchedules.has(schedule);
-  node._scope = currentHeavyAnimationScope(node); // appended to the current owner by the constructor
-  node._run = () => runEffect(node);
+  const node: EffectNode<T> = new (Effect as any)(
+    function (this: EffectNode<T>) {
+      return compute(this._init ? this._value : undefined);
+    },
+    apply,
+    schedule,
+    options,
+  );
 
   // First compute: synchronous, tracked, under the owner that created the effect.
   if (!computeNode(node)) return;
   if (options?.immediateApply) applyEffect(node);
   else schedule(node._run, node);
 }
+
+/**
+ * P3a: effect nodes get their own constructor (sharing the Computation prototype chain) that
+ * initialises every effect field up front, in one order — one hidden class for all effects.
+ */
+function Effect(
+  this: EffectNode,
+  compute: () => unknown,
+  apply: EffectNode['_apply'],
+  schedule: Schedule,
+  options: EffectOptions | undefined,
+) {
+  // compute is attached after init: an effect starts CLEAN (its first compute runs right away).
+  initComputationNode(this, undefined, null, undefined, true);
+  this._compute = compute;
+  this._effect = true;
+  if (DEV) this.id = options?.name ?? 'effect';
+  this._apply = apply;
+  this._applied = NOT_APPLIED;
+  this._applyCleanup = null;
+  this._schedule = schedule;
+  this._scope = currentHeavyAnimationScope(this); // after the append: reads the owner's context
+  this._bailed = null;
+  const node = this;
+  this._run = () => runEffect(node);
+  this._name = options?.name;
+  this._selfDirty = 0;
+  this._writesDom = options?.writesDom ?? domWritingSchedules.has(schedule);
+  this._tickEpoch = 0;
+  this._tickRuns = 0;
+  this._drainEpoch = 0;
+  this._drainRuns = 0;
+}
+Effect.prototype = computationPrototype;
 
 /**
  * Recompute the node's compute half. Returns false if the node died or threw, and also when the
@@ -230,7 +260,7 @@ function applyEffect(node: EffectNode) {
     try {
       // Untracked and with NO owner (Solid 2.0 model): the apply channel's cleanup is the returned
       // function only. onCleanup()/owned computations here are a DEV error (core assertApplyOwner).
-      const result = runInScope(null, () => node._apply(node._value, prev), null);
+      const result = callUnowned(node._apply, node._value, prev);
       if (isFunction(result)) {
         // An apply that disposed its own node: the dispose hook already ran, so nothing would ever
         // call this cleanup. Run it now (deferred to the mutate phase for DOM-writing effects).

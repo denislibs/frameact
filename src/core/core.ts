@@ -386,17 +386,28 @@ export function write(this: Computation, newValue: any): any {
   return this._value;
 }
 
+/**
+ * Patch P3a (frameact): every node initialises its full field set in one fixed order, so nodes of
+ * one kind share one hidden class (the vendored version left some fields on the prototype and
+ * added others later — signals, `dirty` signals, computeds and effects all ended up with
+ * different shapes, making read/write/notify polymorphic). Scope fields come first.
+ */
+function initScope(node: Scope) {
+  node[SCOPE] = null;
+  node._state = STATE_CLEAN;
+  node._children = null;
+  node._context = defaultContext;
+  node._handlers = null;
+  node._disposal = null;
+  node._compute = null;
+}
+
 const ScopeNode = function Scope(this: Scope) {
-  this[SCOPE] = null;
-  this._children = null;
+  initScope(this);
   if (currentScope) currentScope.append(this);
 };
 
 const ScopeProto = ScopeNode.prototype;
-ScopeProto._context = defaultContext;
-ScopeProto._handlers = null;
-ScopeProto._compute = null;
-ScopeProto._disposal = null;
 
 ScopeProto.append = function (this: Scope, child: Scope) {
   child[SCOPE] = this;
@@ -425,6 +436,34 @@ export function createScope(): Scope {
   return new (ScopeNode as any)();
 }
 
+/**
+ * @internal Initialise `node` with the complete computation field set (scope fields first), as the
+ * Computation constructor does. Effects and selector nodes have their own constructors (sharing
+ * the Computation prototype chain) and call this first. `owned`: append to the current scope.
+ */
+export function initComputationNode(
+  node: Computation,
+  initialValue: any,
+  compute: any,
+  options: ComputedSignalOptions<any, any> | undefined,
+  owned: boolean,
+) {
+  initScope(node);
+  if (owned && currentScope) currentScope.append(node);
+  node._state = compute ? STATE_DIRTY : STATE_CLEAN;
+  node._init = false;
+  node._effect = false;
+  node._computing = false;
+  node._missedWake = false;
+  node._writtenAt = 0;
+  node._sources = null;
+  node._observers = null;
+  node._value = initialValue;
+  node._compute = compute || null;
+  node._changed = (options && options.dirty) || isNotEqual;
+  if (DEV) node.id = options?.id ?? (compute ? 'computed' : 'signal');
+}
+
 const ComputeNode = function Computation(
   this: Computation,
   initialValue: any,
@@ -432,27 +471,13 @@ const ComputeNode = function Computation(
   options?: ComputedSignalOptions<any, any>,
 ) {
   if (DEV && compute) assertApplyOwner();
-  ScopeNode.call(this);
-
-  this._state = compute ? STATE_DIRTY : STATE_CLEAN;
-  this._init = false;
-  this._effect = false;
-  this._computing = false;
-  this._missedWake = false;
-  this._writtenAt = 0;
-  this._sources = null;
-  this._observers = null;
-  this._value = initialValue;
-
-  if (DEV) this.id = options?.id ?? (this._compute ? 'computed' : 'signal');
-  if (compute) this._compute = compute;
-  if (options && options.dirty) this._changed = options.dirty;
+  initComputationNode(this, initialValue, compute, options, true);
 };
 
-const ComputeProto: Computation = ComputeNode.prototype;
-Object.setPrototypeOf(ComputeProto, ScopeProto);
-ComputeProto._changed = isNotEqual;
-ComputeProto.call = read;
+/** @internal the prototype every computation kind (signals, computeds, effects, selector nodes) shares */
+export const computationPrototype: Computation = ComputeNode.prototype;
+Object.setPrototypeOf(computationPrototype, ScopeProto);
+computationPrototype.call = read;
 
 export function createComputation<T>(
   initialValue: T,
@@ -460,6 +485,23 @@ export function createComputation<T>(
   options?: ComputedSignalOptions<T>,
 ): Computation<T> {
   return new (ComputeNode as any)(initialValue, compute, options);
+}
+
+/**
+ * Patch P3b (frameact): call `fn(a, b)` with no owner and no observer — like
+ * `compute(null, () => fn(a, b), null)` without allocating a closure per call (effect applies).
+ */
+export function callUnowned<A, B, R>(fn: (a: A, b: B) => R, a: A, b: B): R {
+  const prevScope = currentScope,
+    prevObserver = currentObserver;
+  currentScope = null;
+  currentObserver = null;
+  try {
+    return fn(a, b);
+  } finally {
+    currentScope = prevScope;
+    currentObserver = prevObserver;
+  }
 }
 
 export function isNotEqual(a: unknown, b: unknown) {

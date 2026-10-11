@@ -33,6 +33,17 @@ export interface HeavyAnimationScope {
 
 type AnimationListener = (animating: boolean) => void;
 
+/** Number of scopes currently in a blocking animation (any scope, any chain). */
+let blockingScopes = 0;
+
+/**
+ * @internal Frame drains skip heavy-animation gating entirely (no scope-chain walk, no cache
+ * allocation) while no scope blocks — the common case.
+ */
+export function isAnyScopeBlocking(): boolean {
+  return blockingScopes !== 0;
+}
+
 /** onHeavyAnimation listeners, kept per scope (not exposed on the scope object). */
 const scopeListeners = new WeakMap<HeavyAnimationScope, Set<AnimationListener>>();
 
@@ -106,6 +117,7 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
       if (isBlocking) counterBlocking++;
       const animatingChanged = counter === 1 ? setAnimating(true) : null;
       const blockingChanged = isBlocking && counterBlocking === 1 ? setBlocking(true) : null;
+      if (isBlocking && counterBlocking === 1) blockingScopes++;
 
       // Only an explicit Infinity is manual (no timer, the caller must end it). NaN, negative or
       // non-number durations fall back to the default: an animation that never ends would gate
@@ -122,6 +134,7 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
         if (isBlocking) counterBlocking--;
         const animatingEnded = counter === 0 ? setAnimating(false) : null;
         const blockingEnded = isBlocking && counterBlocking === 0 ? setBlocking(false) : null;
+        if (isBlocking && counterBlocking === 0) blockingScopes--;
         notify(animatingEnded, blockingEnded, false);
       }
 
