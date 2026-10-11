@@ -21,3 +21,25 @@ export function subsOf(node: Computation): Computation[] {
   for (let l = n._subs; l; l = l.nextSub) out.push(l.sub);
   return out;
 }
+
+/** The owned children of `scope`, in creation order (array `_children` or the intrusive list). */
+export function childrenOf(scope: object): any[] {
+  const n = scope as AnyNode;
+  if ('_children' in n) {
+    const c = n._children;
+    return c == null ? [] : Array.isArray(c) ? [...c] : [c];
+  }
+  // Back to the first child through `_prevSibling`, then forward through `_nextSibling` (both
+  // directions are exercised: a broken link in either shows up as a missing child).
+  const out: any[] = [];
+  let c = n._lastChild;
+  if (!c) return out;
+  let back = 1;
+  while (c._prevSibling) {
+    c = c._prevSibling;
+    back++;
+  }
+  for (; c; c = c._nextSibling) out.push(c);
+  if (out.length !== back) throw new Error(`children list: ${back} nodes backwards, ${out.length} forwards`);
+  return out;
+}

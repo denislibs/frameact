@@ -77,8 +77,12 @@ export interface Scope {
   _state: number;
   /** @internal */
   _compute: unknown;
-  /** @internal */
-  _children: Scope | Scope[] | null;
+  /** @internal last owned child: children form an intrusive doubly-linked list (P3a) */
+  _lastChild: Scope | null;
+  /** @internal previous sibling under the same owner */
+  _prevSibling: Scope | null;
+  /** @internal next sibling under the same owner */
+  _nextSibling: Scope | null;
   /** @internal */
   _context: ContextRecord | null;
   /** @internal */

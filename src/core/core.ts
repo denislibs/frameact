@@ -233,64 +233,74 @@ export function onDispose(disposable: MaybeDisposable): Dispose {
   };
 }
 
+/**
+ * Explicit stack for dispose(): the owners on the path from the node being disposed down to the
+ * current one. Re-entrant (a cleanup may dispose anything): each call works above its base.
+ */
+const disposeStack: (Scope | null)[] = [];
+let disposeTop = 0;
+
+/**
+ * P3a (frameact): owned children form an intrusive doubly-linked list (`_lastChild`, siblings):
+ * O(1) append, O(1) self-removal. Dispose is iterative (no recursion-depth limit on deep owner
+ * chains) and walks the live list: children before their owner, in reverse creation order, each
+ * child's subtree before the child (post-order). A node is unlinked from its owner right before
+ * its own disposal, so a cleanup that disposes a sibling, a descendant or an ancestor sees a
+ * consistent tree; nodes it disposed are not disposed again.
+ */
 export function dispose(this: Scope, self = true) {
   if (this._state === STATE_DISPOSED) return;
 
-  // Patch (frameact): linear. Take the whole children list first and detach each child before
-  // disposing it, so it does not search-and-splice itself out of our array (O(n²) for n children).
-  // Order is unchanged: children before self, in reverse creation order.
-  const children = this._children;
-  if (children) {
-    this._children = null;
-    if (Array.isArray(children)) {
-      for (let i = children.length - 1; i >= 0; i--) {
-        const child = children[i];
-        child[SCOPE] = null;
-        dispose.call(child);
+  const base = disposeTop;
+  let cur: Scope = this;
+  try {
+    for (;;) {
+      const last = cur._lastChild;
+      if (last !== null) {
+        disposeStack[disposeTop++] = cur;
+        cur = last;
+        continue;
       }
-    } else {
-      children[SCOPE] = null;
-      dispose.call(children);
+      if (disposeTop === base) break; // back at `this`: its children are gone
+      const owner = disposeStack[--disposeTop]!;
+      disposeStack[disposeTop] = null;
+      // (a cleanup may have disposed `cur` already, together with the rest of its subtree)
+      if (cur._state !== STATE_DISPOSED) {
+        unlinkChild(owner, cur);
+        disposeNode(cur as Computation);
+      }
+      cur = owner;
     }
+  } finally {
+    // Normally already at `base`; after a throw (disposals never throw), drop this call's frames.
+    while (disposeTop > base) disposeStack[--disposeTop] = null;
   }
 
-  if (self) {
-    const parent = this[SCOPE];
-
-    if (parent) {
-      if (Array.isArray(parent._children)) {
-        parent._children.splice(parent._children.indexOf(this), 1);
-      } else {
-        parent._children = null;
-      }
-    }
-
+  if (self && this._state !== STATE_DISPOSED) {
+    const owner = this[SCOPE];
+    if (owner !== null) unlinkChild(owner, this);
     disposeNode(this as Computation);
   }
 }
 
+/** Remove `child` from `owner`'s children list (O(1)). */
+function unlinkChild(owner: Scope, child: Scope) {
+  const prev = child._prevSibling,
+    next = child._nextSibling;
+  if (prev !== null) prev._nextSibling = next;
+  if (next !== null) next._prevSibling = prev;
+  else if (owner._lastChild === child) owner._lastChild = prev;
+  child._prevSibling = null;
+  child._nextSibling = null;
+  child[SCOPE] = null;
+}
+
 /**
- * frameact: dispose many children of `parent` at once (list rows), then rebuild its children list
- * in one pass — instead of every child searching-and-splicing itself out of the array (O(n²)).
- * Each child is disposed like `dispose()` would (its own children first); the given order is kept.
+ * frameact: dispose many children of `parent` at once (list rows), in the given order. Each child
+ * is disposed like `dispose()` would (its own children first) and unlinks itself in O(1).
  */
-export function disposeChildren(parent: Scope, children: readonly Scope[]) {
-  if (children.length === 0) return;
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i];
-    if (child[SCOPE] === parent) child[SCOPE] = null;
-    dispose.call(child);
-  }
-  const list = parent._children;
-  if (Array.isArray(list)) {
-    let n = 0;
-    for (let i = 0; i < list.length; i++) {
-      if (list[i]._state !== STATE_DISPOSED) list[n++] = list[i];
-    }
-    list.length = n;
-  } else if (list && list._state === STATE_DISPOSED) {
-    parent._children = null;
-  }
+export function disposeChildren(_parent: Scope, children: readonly Scope[]) {
+  for (let i = 0; i < children.length; i++) dispose.call(children[i]);
 }
 
 function disposeNode(node: Computation) {
@@ -305,7 +315,7 @@ function disposeNode(node: Computation) {
   // and is dropped from their dep lists on their next run (unlinkDeps skips its abandoned list).
   node._subs = null;
   node._subsTail = null;
-  node._children = null;
+  node._lastChild = null;
   node._context = defaultContext;
   node._handlers = null;
 }
@@ -424,7 +434,9 @@ export function write(this: Computation, newValue: any): any {
 function initScope(node: Scope) {
   node[SCOPE] = null;
   node._state = STATE_CLEAN;
-  node._children = null;
+  node._lastChild = null;
+  node._prevSibling = null;
+  node._nextSibling = null;
   node._context = defaultContext;
   node._handlers = null;
   node._disposal = null;
@@ -441,13 +453,10 @@ const ScopeProto = ScopeNode.prototype;
 ScopeProto.append = function (this: Scope, child: Scope) {
   child[SCOPE] = this;
 
-  if (!this._children) {
-    this._children = child;
-  } else if (Array.isArray(this._children)) {
-    this._children.push(child);
-  } else {
-    this._children = [this._children, child];
-  }
+  const last = this._lastChild;
+  child._prevSibling = last;
+  if (last !== null) last._nextSibling = child;
+  this._lastChild = child;
 
   child._context =
     child._context === defaultContext ? this._context : { ...this._context, ...child._context };
@@ -637,7 +646,7 @@ function hasDirtyDep(node: Computation): boolean {
 }
 
 function cleanup(node: Computation) {
-  if (node._children) dispose.call(node, false);
+  if (node._lastChild !== null) dispose.call(node, false);
   if (node._disposal) emptyDisposal(node);
   node._handlers = node[SCOPE] ? node[SCOPE]._handlers : null;
 }

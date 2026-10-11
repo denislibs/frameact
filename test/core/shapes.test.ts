@@ -44,7 +44,7 @@ it('a scope initialises the shared scope fields: its key list is the prefix of a
   expect(Object.keys(scope)).toEqual(comp.slice(0, Object.keys(scope).length));
   expect(keysOf(nested)).toEqual(keysOf(scope));
   expect(Reflect.ownKeys(scope)).toContain(SCOPE);
-  for (const k of ['_context', '_handlers', '_disposal', '_compute', '_state', '_children']) {
+  for (const k of ['_context', '_handlers', '_disposal', '_compute', '_state', '_lastChild', '_prevSibling', '_nextSibling']) {
     expect(keysOf(scope)).toContain(k);
   }
 });
