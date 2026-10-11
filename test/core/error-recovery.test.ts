@@ -103,9 +103,10 @@ it('a walk cut short by a throwing scheduler: the next write through the dirty m
 });
 
 it('a recomputed memo marks its CHECK subscriber DIRTY without walking below it — unless that one was left unsure by an error', () => {
-  // M1 = M2 + M3. E reads M1. M2 throws once: E's pull aborts, M1 stays CHECK, E is CLEAN (error
-  // handled). Then M3 changes and another reader pulls M3 first: the result write reaches M1
-  // (CHECK). A shallow mark would stop at M1 and E would never run again.
+  // M1 = M2 + M3, E reads M1. M3 and M2 both change; E's pull reaches M2 first, which throws: the
+  // pull aborts with M1 CHECK (M3 still DIRTY, never pulled) and E CLEAN (error handled). Then
+  // another reader pulls M3: its result write reaches M1 (CHECK) — no write walk passes M1 again.
+  // A shallow mark would stop at M1 and E would never run again.
   const { schedule, flush } = queue();
   const $s = signal(0);
   const $t = signal(0);
@@ -120,12 +121,35 @@ it('a recomputed memo marks its CHECK subscriber DIRTY without walking below it 
   const $other = computed(() => $m3() + 1);
   expect($other()).toBe(1);
   flush();
-  $s.set(1);
-  flush();
-  expect(seen).toEqual([0]);
   $t.set(1);
-  expect($other()).toBe(101); // recomputes M3 → its result write reaches M1 (CHECK)
-  $s.set(0); // M2 recovers to its old value: no change from M2 itself
+  $s.set(1);
+  flush(); // E's pull: M2 throws before M3 is checked
+  expect(seen).toEqual([0]);
+  expect($other()).toBe(101); // recomputes M3: its result write reaches M1 (CHECK)
   flush();
-  expect(seen).toEqual([0, 100]);
+  expect(seen).toEqual([0, 100]); // E ran again (M2 kept its last value, 0)
+});
+
+it('shallow marking: a computing reader that consumed the memo was latched by the walk that made it CHECK', () => {
+  const $s = signal(0);
+  const $y = computed(() => $s());
+  const $x = computed(() => $y() + 1);
+  const $w = computed(() => $y() * 2);
+  let wrote = false;
+  const spy = vi.fn(() => {
+    const a = $x(); // consumed
+    if (!wrote) {
+      wrote = true;
+      $s.set(5); // walk: $y DIRTY → $x CHECK → this compute (computing, latched)
+      $w(); // pulls $y: its result write reaches $x (CHECK) — marked DIRTY without a walk below
+    }
+    return a;
+  });
+  const $z = computed(spy);
+  expect($z()).toBe(1); // the run that wrote returns what it read; it is re-dirtied (latched)
+  expect($z()).toBe(6);
+  expect(spy).toHaveBeenCalledTimes(2);
+  expect($z()).toBe(6);
+  expect(spy).toHaveBeenCalledTimes(2);
+  expect($w()).toBe(10);
 });

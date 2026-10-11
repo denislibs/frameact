@@ -876,11 +876,26 @@ function consumed(sub: Computation, link: Link | null): boolean {
   return link !== null && tail !== null && link.version === tail.version;
 }
 
-/** A computed's result write: its subscribers are DIRTY (not latched unless consumed: notify()). */
+/**
+ * A computed's result write: its subscribers are DIRTY (not latched unless consumed: notify()).
+ *
+ * Stage 3 (frameact, alien-signals' shallow propagation): a CHECK subscriber is just set DIRTY,
+ * without walking below it. It became CHECK through a walk that also marked everything below it
+ * (or is still marking it: a walk paused in a synchronous effect resumes there), and a computing
+ * node below that had already consumed it was latched by that walk. Its own subscribers only need
+ * to hear from it again if its value changes — its update() notifies them then. Walking down again
+ * re-visited every subscriber's subscribers: on a dense graph, fan-out² visits per changed memo.
+ * Not for a computing subscriber (latch rules: notify()), nor one left F_UNSURE by an aborted
+ * pull or walk (some of its subscribers may be CLEAN: notify() descends there).
+ */
 function notifySubs(node: Computation) {
   const c = cycle;
   for (let l = node._subs; l !== null; l = l.nextSub) {
-    if (l.version <= c) notify(l.sub, STATE_DIRTY, false, l);
+    if (l.version > c) continue;
+    const sub = l.sub;
+    const state = sub._state;
+    if (state === STATE_CHECK && !(sub._flags & (F_COMPUTING | F_UNSURE))) sub._state = STATE_DIRTY;
+    else if (state < STATE_DIRTY || sub._flags & (F_COMPUTING | F_UNSURE)) notify(sub, STATE_DIRTY, false, l);
   }
 }
 
