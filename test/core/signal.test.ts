@@ -1,7 +1,5 @@
 import { signal } from '../../src/core/signals';
-import { tick } from '../../src/core/core';
 
-afterEach(() => tick());
 
 it('should store and return value on read', () => {
   const $a = signal(10);
@@ -28,15 +26,12 @@ it('should accept dirty option', () => {
   });
 
   $a.set(11);
-  tick();
   expect($a()).toBe(10);
 
   $a.set(12);
-  tick();
   expect($a()).toBe(12);
 
   $a.set(13);
-  tick();
   expect($a()).toBe(12);
 });
 

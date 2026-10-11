@@ -1,7 +1,7 @@
-import { computed, effect, signal } from '../../src/core/signals';
-import { onError, root, tick } from '../../src/core/core';
-
-afterEach(() => tick());
+import { computed, signal } from '../../src/core/signals';
+import { onError, root } from '../../src/core/core';
+import { createEffect } from '../../src/core/effects';
+import { flushMicrotasks } from '../helpers/micro';
 
 it('should store and return value on read', () => {
   const $a = signal(10);
@@ -9,7 +9,6 @@ it('should store and return value on read', () => {
   const $c = computed(() => $a() + $b());
 
   expect($c()).toBe(20);
-  tick();
 
   // Try again to ensure state is maintained.
   expect($c()).toBe(20);
@@ -103,7 +102,6 @@ it('should only re-compute whats needed', () => {
   expect($e()).toBe(20);
 
   $a.set(20);
-  tick();
 
   $e();
   expect(computeC).toHaveBeenCalledTimes(2);
@@ -111,7 +109,6 @@ it('should only re-compute whats needed', () => {
   expect($e()).toBe(30);
 
   $b.set(20);
-  tick();
 
   $e();
   expect(computeC).toHaveBeenCalledTimes(2);
@@ -134,15 +131,13 @@ it('should discover new dependencies', () => {
   expect($c()).toBe(1);
 
   $a.set(0);
-  tick();
   expect($c()).toBe(0);
 
   $b.set(10);
-  tick();
   expect($c()).toBe(10);
 });
 
-it('should accept dirty option', () => {
+it('should accept dirty option', async () => {
   const $a = signal(0);
 
   const $b = computed(() => $a(), {
@@ -151,22 +146,24 @@ it('should accept dirty option', () => {
   });
 
   const effectA = vi.fn();
-  effect(() => {
-    $b();
-    effectA();
-  });
+  createEffect(
+    () => $b(),
+    () => effectA(),
+  );
+  // maverick's effect ran synchronously at creation; the apply half runs on tickEnd.
+  await flushMicrotasks();
 
   expect($b()).toBe(0);
   expect(effectA).toHaveBeenCalledTimes(1);
 
   $a.set(2);
-  tick();
+  await flushMicrotasks();
   expect($b()).toBe(2);
   expect(effectA).toHaveBeenCalledTimes(2);
 
   // no-change
   $a.set(3);
-  tick();
+  await flushMicrotasks();
   expect($b()).toBe(2);
   expect(effectA).toHaveBeenCalledTimes(2);
 });

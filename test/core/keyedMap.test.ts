@@ -1,6 +1,7 @@
-import { signal, effect } from '../../src/core/signals';
-import { tick } from '../../src/core/core';
+import { signal } from '../../src/core/signals';
+import { createEffect } from '../../src/core/effects';
 import { computedKeyedMap } from '../../src/core/map';
+import { flushMicrotasks } from '../helpers/micro';
 
 it('should compute keyed map', () => {
   const source = signal([{ id: 'a' }, { id: 'b' }, { id: 'c' }]),
@@ -31,7 +32,6 @@ it('should compute keyed map', () => {
     p[0] = tmp;
     return [...p];
   });
-  tick();
 
   const [a2, b2, c2] = map();
   expect(a2.id).toBe('b');
@@ -47,7 +47,6 @@ it('should compute keyed map', () => {
 
   // Add new value
   source.set((p) => [...p, { id: 'd' }]);
-  tick();
 
   expect(map().length).toBe(4);
   expect(map()[map().length - 1].id).toBe('d');
@@ -56,7 +55,6 @@ it('should compute keyed map', () => {
 
   // Remove value
   source.set((p) => p.slice(1));
-  tick();
 
   expect(map().length).toBe(3);
   expect(map()[0].id).toBe('a');
@@ -65,13 +63,12 @@ it('should compute keyed map', () => {
 
   // Empty
   source.set([]);
-  tick();
 
   expect(map().length).toBe(0);
   expect(compute).toHaveBeenCalledTimes(4);
 });
 
-it('should notify observer', () => {
+it('should notify observer', async () => {
   const source = signal([{ id: 'a' }, { id: 'b' }, { id: 'c' }]),
     map = computedKeyedMap(
       source,
@@ -84,9 +81,14 @@ it('should notify observer', () => {
       map();
     });
 
-  effect($effect);
+  createEffect(
+    () => map(),
+    () => $effect(),
+  );
+  // maverick's effect ran synchronously at creation; the apply half runs on tickEnd.
+  await flushMicrotasks();
 
   source.set((prev) => prev.slice(1));
-  tick();
+  await flushMicrotasks();
   expect($effect).toHaveBeenCalledTimes(2);
 });

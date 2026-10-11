@@ -1,6 +1,6 @@
 // Adapted from maverick-js/signals v6 (MIT, © 2022 Rahim Alwer) — https://github.com/maverick-js/signals
 import { isNotEqual, onDispose, read, write } from './core';
-import { effect } from './signals';
+import { createEffect } from './effects';
 import { Computation, ReadSignal } from './types';
 
 export interface SelectorSignal<T> {
@@ -15,14 +15,18 @@ export function selector<T>(source: ReadSignal<T>): SelectorSignal<T> {
   let currentKey: T | undefined,
     nodes = new Map<T, Selector<T>>();
 
-  effect(() => {
-    const newKey = source(),
-      prev = nodes.get(currentKey!),
-      next = nodes.get(newKey);
-    prev && write.call(prev, false);
-    next && write.call(next, true);
-    currentKey = newKey;
-  });
+  createEffect(
+    () => source(),
+    (newKey) => {
+      const prev = nodes.get(currentKey!),
+        next = nodes.get(newKey);
+      prev && write.call(prev, false);
+      next && write.call(next, true);
+      currentKey = newKey;
+    },
+    undefined,
+    { immediateApply: true },
+  );
 
   return function observeSelector(key: T) {
     let node = nodes.get(key);

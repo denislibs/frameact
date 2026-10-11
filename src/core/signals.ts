@@ -1,14 +1,12 @@
 // Adapted from maverick-js/signals v6 (MIT, © 2022 Rahim Alwer) — https://github.com/maverick-js/signals
 import { DEV } from '../env';
-import { createComputation, dispose, isFunction, onDispose, read, update, write } from './core';
+import { createComputation, isFunction, read, write } from './core';
 import { SCOPE } from './symbols';
 import type {
   ComputedSignalOptions,
-  Effect,
   MaybeSignal,
   ReadSignal,
   SignalOptions,
-  StopEffect,
   WriteSignal,
 } from './types';
 
@@ -60,35 +58,6 @@ export function computed<T, R = never>(
   (signal as any)[SCOPE] = true;
   if (DEV) signal.node = node;
   return signal;
-}
-
-/**
- * Invokes the given function each time any of the signals that are read inside are updated
- * (i.e., their value changes). The effect is immediately invoked on initialization.
- *
- * @see {@link https://github.com/maverick-js/signals#effect}
- */
-export function effect(effect: Effect, options?: { id?: string }): StopEffect {
-  const signal = createComputation<null>(
-    null,
-    function runEffect() {
-      let effectResult = effect();
-      isFunction(effectResult) && onDispose(effectResult);
-      return null;
-    },
-    DEV ? { id: options?.id ?? 'effect' } : void 0,
-  );
-
-  signal._effect = true;
-  update(signal);
-
-  if (DEV) {
-    return function stopEffect() {
-      dispose.call(signal, true);
-    };
-  }
-
-  return dispose.bind(signal, true);
 }
 
 /**

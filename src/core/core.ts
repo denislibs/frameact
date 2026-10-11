@@ -10,13 +10,10 @@ import type {
   Scope,
 } from './types';
 
-let scheduledEffects = false,
-  runningEffects = false,
-  currentScope: Scope | null = null,
+let currentScope: Scope | null = null,
   currentObserver: Computation | null = null,
   currentObservers: Computation[] | null = null,
   currentObserversIndex = 0,
-  effects: Computation[] = [],
   defaultContext = {};
 
 const NOOP = () => {};
@@ -31,38 +28,16 @@ export const STATE_CLEAN = 0,
 /** >0 while update() writes a computed's result (a lazy pull the computing reader reads fresh). */
 let computedWriteDepth = 0;
 
-function flushEffects() {
-  scheduledEffects = true;
-  queueMicrotask(runEffects);
+let effectScheduler: (node: Computation) => void = () => {};
+let effectDisposeHook: (node: Computation) => void = () => {};
+
+/** effects.ts installs the function that schedules a dirty effect (called once per CLEAN→dirty transition). */
+export function setEffectScheduler(fn: (node: Computation) => void) {
+  effectScheduler = fn;
 }
-
-function runEffects() {
-  if (!effects.length) {
-    scheduledEffects = false;
-    return;
-  }
-
-  runningEffects = true;
-
-  for (let i = 0; i < effects.length; i++) {
-    if (effects[i]._state !== STATE_CLEAN) runTop(effects[i]);
-  }
-
-  effects = [];
-  scheduledEffects = false;
-  runningEffects = false;
-}
-
-function runTop(node: Computation<any>) {
-  let ancestors = [node];
-
-  while ((node = node[SCOPE] as Computation<any>)) {
-    if (node._effect && node._state !== STATE_CLEAN) ancestors.push(node);
-  }
-
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    updateCheck(ancestors[i]);
-  }
+/** effects.ts installs apply-cleanup handling for disposed effect nodes. */
+export function setEffectDisposeHook(fn: (node: Computation) => void) {
+  effectDisposeHook = fn;
 }
 
 /**
@@ -94,16 +69,6 @@ export function peek<T>(fn: () => T): T {
  */
 export function untrack<T>(fn: () => T): T {
   return compute<T>(null, fn, null);
-}
-
-/**
- * By default, signal updates are batched on the microtask queue which is an async process. You can
- * flush the queue synchronously to get the latest updates by calling `tick()`.
- *
- * @see {@link https://github.com/maverick-js/signals#tick}
- */
-export function tick(): void {
-  if (!runningEffects) runEffects();
 }
 
 /**
@@ -226,6 +191,7 @@ export function dispose(this: Scope, self = true) {
 function disposeNode(node: Computation) {
   node._state = STATE_DISPOSED;
   if (node._disposal) emptyDisposal(node);
+  if (node._effect) effectDisposeHook(node);
   if (node._sources) removeSourceObservers(node, 0);
   node[SCOPE] = null;
   node._sources = null;
@@ -271,7 +237,7 @@ export function compute<Result>(
   }
 }
 
-function handleError(scope: Scope | null, error: unknown) {
+export function handleError(scope: Scope | null, error: unknown) {
   if (!scope || !scope._handlers) throw error;
 
   let i = 0,
@@ -526,8 +492,7 @@ function notify(node: Computation, state: number) {
   if (node._state >= state) return;
 
   if (node._effect && node._state === STATE_CLEAN) {
-    effects.push(node);
-    if (!scheduledEffects) flushEffects();
+    effectScheduler(node);
   }
 
   node._state = state;
