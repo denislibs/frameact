@@ -225,6 +225,7 @@ drainMutation():
 | mutate-эффект загрязнён из measure-applier | mutate-фаза этого же кадра |
 | measure-эффект загрязнён из mutate-applier | следующий кадр; в dev — предупреждение «measure-эффект X загрязнён из mutate-фазы — уедет на кадр» |
 | нужно measure после mutate в том же кадре | `frameForcedReflow` |
+| mutate-эффект загрязнён из forced-reflow applier (FLIP: mutate → измерение → mutate) | forced-reflow mutate-фаза **этого же** кадра (и в `flushSync`) |
 | applier №3 начал blocking-анимацию | №4…N **выполняются** — гейт сэмплирован на входе в дрен; кадр атомарен |
 | родитель пересоздал поддерево | дети задиспозены до своих `run` → пропускаются |
 
