@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.12" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./scheduler": "./src/scheduler/fasterdom.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
