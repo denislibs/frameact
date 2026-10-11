@@ -1,0 +1,142 @@
+<p align="center">
+  <img src="docs/assets/social-preview-b.png" alt="frameact — fine-grained сигналы, один коммит на кадр" width="100%">
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> · <b>Русский</b> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+# frameact
+
+**Fine-grained сигналы. Один коммит на кадр.**
+
+frameact — реактивный UI-фреймворк для приложений, где важен каждый кадр: мессенджер с историей на тысячи
+сообщений, список чатов, который перестраивается прямо под пальцем, анимации, которые не должны дёргаться
+на среднем телефоне. Он соединяет **fine-grained сигналы** (без виртуального DOM, компонент выполняется один
+раз, обновляются только биндинги) с **дисциплиной кадра из [teact](https://github.com/Ajaxy/teact)** —
+фреймворка, на котором написан Telegram Web A:
+
+- **один проход на кадр** — вся реактивная работа и все записи в DOM собираются в один `requestAnimationFrame`;
+- **явные фазы** — `measure → mutate → forced-reflow measure → forced-reflow mutate`: чтение layout никогда не
+  перемежается с записью в DOM (нет layout thrashing);
+- **гейтинг тяжёлых анимаций** — пока идёт блокирующая анимация, кадровая работа паркуется и выпускается одним
+  кадром после её окончания — глобально или только для одного поддерева;
+- **stricterdom** *(в планах)* — dev-режим, который ловит нарушения фаз на уровне DOM API и называет виновный эффект.
+
+> **Статус: ранняя разработка.** Реактивное ядро реализовано, прошло ревью и смержено
+> ([PR #1](https://github.com/denislibs/frameact/pull/1)); следующим идёт DOM-рантайм и интеграция с
+> JSX-компилятором. В npm пока не опубликован, API может меняться.
+
+## Зачем
+
+Фреймворки на сигналах (Solid, Vue, Svelte 5, Preact Signals) флашат эффекты в микротаске, и каждый эффект
+пишет в DOM сразу, как только выполнился. Если один эффект читает layout, а другой пишет, чтения и записи
+перемежаются, и браузер снова и снова пересчитывает layout внутри одного кадра.
+
+teact решает это для VDOM-рендерера библиотекой **fasterdom**: каждая операция с DOM — либо *измерение*, либо
+*мутация*, и они раскладываются по разным фазам одного кадра анимации. frameact переносит ту же дисциплину на
+fine-grained реактивность, где обновление — это один биндинг, а не ре-рендер компонента.
+
+| | teact | Solid 1.x / 2.0 | frameact |
+|---|---|---|---|
+| Модель обновления | VDOM-дифф, ре-рендер компонента | fine-grained | fine-grained |
+| Когда флашится | rAF, один проход | микротаск | rAF, один проход |
+| Фазы measure / mutate | да | нет | да |
+| Гейтинг анимаций | глобальный | нет | глобальный + по поддереву |
+| Проверка нарушений фаз | stricterdom | нет | stricterdom + атрибуция до эффекта *(в планах)* |
+
+## Как это работает
+
+Эффект делится на две половины: отслеживаемый чистый **compute** и неотслеживаемый **apply**, который делает
+побочное действие. *Фаза — это планировщик*: момент выполнения apply выбирается выбором фасада.
+
+```ts
+import {
+  createSignal, createEffect, createMeasureEffect, createMutationEffect, createIdleEffect,
+} from 'frameact';
+
+const [height, setHeight] = createSignal(0);
+const [expanded, setExpanded] = createSignal(false);
+
+// фаза measure: читаем layout
+createMeasureEffect(() => expanded(), () => setHeight(panel.offsetHeight));
+
+// фаза mutate того же кадра: пишем в DOM
+createMutationEffect(() => height(), (h) => { spacer.style.height = `${h}px`; });
+
+// микротаск: логика без DOM (сеть, стор)
+createEffect(() => expanded(), (open) => analytics.track('panel', { open }));
+
+// когда браузер простаивает и ничего не анимируется
+createIdleEffect(() => expanded(), () => prefetchDetails());
+```
+
+Что гарантирует кадр:
+
+- N эффектов, загрязнённых одной записью → **один** rAF, одна задача на фазу;
+- сигнал, записанный в measure-apply, доходит до mutation-эффектов **в этом же кадре**;
+- записи, сделанные во время вычислений в mutate-фазе (например, keyed-список обновляет свои строки),
+  попадают **в тот же дрен**;
+- measure-эффект, загрязнённый из mutate-фазы, выполняется в следующем кадре (в dev — с предупреждением);
+- `frameForcedReflow` — для редкого случая «mutate → measure → mutate» (FLIP), всё ещё в одном кадре.
+
+Тяжёлые анимации:
+
+```ts
+import { beginHeavyAnimation, createHeavyAnimationScope, provideHeavyAnimationScope } from 'frameact';
+
+const end = beginHeavyAnimation(300, /* isBlocking */ true); // запарковать всю кадровую работу до 300 мс
+// …или только для поддерева: список чатов продолжает обновляться, пока колонка чата выезжает
+const scope = createHeavyAnimationScope();
+provideHeavyAnimationScope(scope);
+scope.begin(300, true);
+```
+
+Компоненты будут писаться в чистом Solid-стиле — выполняются один раз, пропсы-геттеры — и компилироваться
+JSX-компилятором Solid 2.0, настроенным на рантайм frameact.
+
+## Вдохновение и благодарности
+
+- **[teact](https://github.com/Ajaxy/teact)** Александра Зинчука — отсюда дисциплина кадра, fasterdom,
+  stricterdom и гейтинг тяжёлых анимаций. На teact работают Telegram Web A (Telegram Air) и MyTonWallet.
+  Статья, в которой объясняется идея:
+  **[Fasterdom: Optimized Browser Rendering](https://ajaxy.github.io/teact/Fasterdom-Optimized-Browser-Rendering/)** —
+  почему измерение сразу после мутации вызывает reflow и как `requestMeasure`, `requestMutation`,
+  `requestNextMutation` и `requestForcedReflow` делят кадр на фазы.
+- **[Telegram Web A](https://github.com/Ajaxy/telegram-tt)** — эталонная нагрузка: длинные списки, перестановка
+  через CSS-трансформации, тяжёлые переходы, задержка ввода на мобильных.
+- **[maverick-js/signals](https://github.com/maverick-js/signals)** Рахима Алвера — реактивный граф
+  (вендорен и доработан), построенный на алгоритме Reactively.
+- **[SolidJS](https://github.com/solidjs/solid)** и **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
+  Райана Карниато — модель компонентов, JSX-компилятор и устройство DOM-рантайма.
+
+Сторонний код распространяется по MIT, авторство указано в каждом адаптированном файле.
+
+## Дорожная карта
+
+| План | Что входит | Статус |
+|---|---|---|
+| 1 · core | сигналы, двухфазные эффекты, кадровые очереди, гейтинг анимаций, `mapArray`, context | ✅ готово — [PR #1](https://github.com/denislibs/frameact/pull/1) |
+| 2 · dom | рантайм для JSX-компилятора, `For`/`Show`/`Switch`, контролируемые инпуты, списки с ручным порядком, Vite-плагин | 🛠 планирование |
+| 3 · store | глобальный стор в стиле TeactN (`withGlobal`, action handlers) с распространением, учитывающим анимации | ⏳ |
+| 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта | ⏳ |
+| 5 · benchmark | teact vs Solid 2.0 vs frameact на сценариях мессенджера (Chromium + WebKit, CPU ×4) | ⏳ |
+
+Дизайн: [`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md) ·
+планы: [`docs/superpowers/plans/`](docs/superpowers/plans/).
+
+## Разработка
+
+Нужны Node ≥ 22.12 и pnpm.
+
+```bash
+pnpm install
+pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
+```
+
+Тулчейн: TypeScript 7 (нативный), Vite 8 / Vitest 5 + jsdom, oxlint.
+
+## Лицензия
+
+Собственная лицензия frameact пока не выбрана. Вендоренный и адаптированный сторонний код
+(maverick-js/signals, teact, dom-expressions) — MIT, см. [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
