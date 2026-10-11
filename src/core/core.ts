@@ -407,7 +407,10 @@ export function isFunction(value: unknown): value is Function {
   return typeof value === 'function';
 }
 
-function updateCheck(node: Computation) {
+export function updateCheck(node: Computation) {
+  // Patch 2 (frameact): a disposed node is never resurrected by a stale observer.
+  if (node._state === STATE_DISPOSED) return;
+
   if (node._state === STATE_CHECK) {
     for (let i = 0; i < node._sources!.length; i++) {
       updateCheck(node._sources![i]);
@@ -421,7 +424,7 @@ function updateCheck(node: Computation) {
   }
 
   if (node._state === STATE_DIRTY) update(node);
-  else node._state = STATE_CLEAN;
+  else if (node._state !== STATE_DISPOSED) node._state = STATE_CLEAN;
 }
 
 function cleanup(node: Computation) {
