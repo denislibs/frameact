@@ -680,13 +680,15 @@ function notify(node: Computation, state: number, latch: boolean) {
     return;
   }
 
-  if (node._state >= state) return;
+  const prev = node._state;
+  if (prev >= state) return;
 
-  if (node._effect && node._state === STATE_CLEAN) {
-    effectScheduler(node);
-  }
-
+  // The state is set BEFORE the scheduler runs: a synchronous schedule runs the effect right here,
+  // and that run must see the node dirty (else computeNode() skips it as clean and the node is left
+  // DIRTY with no run booked). Scheduled once per dirty period: only on the CLEAN → dirty edge.
   node._state = state;
+  if (node._effect && prev === STATE_CLEAN) effectScheduler(node);
+
   const observers = node._observers;
   if (observers !== null) {
     for (let i = 0; i < observers.length; i++) notify(observers[i], STATE_CHECK, latch);

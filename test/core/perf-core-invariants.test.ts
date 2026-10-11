@@ -511,3 +511,86 @@ describe('error in compute: documented state (node CLEAN, previous value, retrie
     expect(applied).toEqual([1, 3]);
   });
 });
+
+// Stage-2 Part A: notify() used to call the effect scheduler while the node was still CLEAN, so a
+// synchronous schedule ran an effect that computeNode() saw as clean (no compute, no apply), and
+// the node was then marked DIRTY with no run booked — it never applied again.
+const sync = (run: () => void) => run();
+
+describe('a synchronous custom schedule', () => {
+  it('runs the effect on every change: set twice → applied [0, 1, 2]', () => {
+    const $s = signal(0);
+    const applied: number[] = [];
+    const compute = vi.fn(() => $s());
+    const dispose = root((d) => {
+      createEffect(compute, (v) => { applied.push(v); }, sync);
+      return d;
+    });
+    expect(applied).toEqual([0]);
+    $s.set(1);
+    expect(applied).toEqual([0, 1]);
+    $s.set(2);
+    expect(applied).toEqual([0, 1, 2]);
+    expect(compute).toHaveBeenCalledTimes(3);
+    dispose();
+    $s.set(3);
+    expect(applied).toEqual([0, 1, 2]);
+  });
+
+  it('an effect behind a memo runs once per change and sees the settled memo value', () => {
+    const $s = signal(1);
+    const $m = computed(() => $s() * 10);
+    const applied: number[] = [];
+    const dispose = root((d) => {
+      createEffect(() => $m() + $s(), (v) => { applied.push(v); }, sync);
+      return d;
+    });
+    $s.set(2);
+    $s.set(3);
+    expect(applied.at(-1)).toBe(33);
+    expect(applied[0]).toBe(11);
+    expect(applied).toContain(22);
+    dispose();
+  });
+
+  it('an effect whose compute writes its own source is cut by the self-dirty guard (no stack overflow)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const $n = signal(0);
+    let computes = 0;
+    let dispose!: () => void;
+    const create = () =>
+      root((d) => {
+        dispose = d;
+        createEffect(() => { computes++; const v = $n(); $n.set(v + 1); return v; }, () => {}, sync, { name: 'self' });
+      });
+    expect(create).not.toThrow();
+    // Cut every SELF_DIRTY_LIMIT (100) re-dirties; creation enters twice (first compute, first run).
+    expect(computes).toBeGreaterThan(100);
+    expect(computes).toBeLessThanOrEqual(2 * 101 + 1);
+    const loops = err.mock.calls.map((c) => String(c[0])).filter((m) => /infinite loop/i.test(m));
+    expect(loops.length).toBeGreaterThanOrEqual(1);
+    expect(loops.length).toBeLessThanOrEqual(2);
+    expect(loops.every((m) => m.includes('"self"') && m.includes('re-dirtied itself'))).toBe(true);
+    dispose(); // the deferred runs find the node disposed
+    const settled = computes;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(computes).toBe(settled);
+    err.mockRestore();
+  });
+
+  it('effects writing signals from a synchronous run propagate to other synchronous effects', () => {
+    const $a = signal(0);
+    const $b = signal(0);
+    const seen: number[] = [];
+    const dispose = root((d) => {
+      createEffect(() => $a(), (v) => { $b.set(v * 10); }, sync);
+      createEffect(() => $b(), (v) => { seen.push(v); }, sync);
+      return d;
+    });
+    $a.set(1);
+    $a.set(2);
+    expect(seen).toEqual([0, 10, 20]);
+    expect($b()).toBe(20);
+    dispose();
+  });
+});

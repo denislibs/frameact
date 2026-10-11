@@ -198,9 +198,9 @@ it('7: a custom synchronous scheduler with a self-writing effect is still stoppe
   const $n = signal(0);
   let applies = 0;
   let dispose: (() => void) | undefined;
-  // A synchronous scheduler runs the effect from inside the write. The first apply writes the
-  // effect's own source: write → schedule → run → apply (not yet marked applied) → write ... — a
-  // recursion only the self-dirty guard cuts (the scheduler hook runs while the node is still CLEAN).
+  // A synchronous scheduler runs the effect from inside the write. Every apply writes the effect's
+  // own source: write → notify (node DIRTY) → schedule → run → compute → apply → write ... — a
+  // recursion only the self-dirty guard cuts.
   const create = () =>
     root((d) => {
       dispose = d;
