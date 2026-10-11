@@ -1,3 +1,3 @@
-// Build-time dev flag. Bundlers replace process.env.NODE_ENV; vitest sets it to 'test'.
-export const DEV: boolean =
-  typeof process !== 'undefined' ? process.env.NODE_ENV !== 'production' : true;
+// Build-time dev flag. Bundlers textually replace `process.env.NODE_ENV` (keep it literal and
+// unguarded so the replacement — and dead-code elimination of `if (DEV)` — works); vitest sets 'test'.
+export const DEV: boolean = process.env.NODE_ENV !== 'production';
