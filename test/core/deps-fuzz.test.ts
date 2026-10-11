@@ -28,8 +28,13 @@ interface Spec {
   a: number[];
   b: number[];
   k: number;
-  /** writer: reads `inputs` unconditionally, then writes W signal `target` = g(inputs) */
-  writer: { target: number; inputs: number[]; before: boolean } | null;
+  /**
+   * writer: reads `inputs` unconditionally, then writes W signal `target` = g(inputs). `viaDirty`
+   * (memos): after its first run the write is made by the memo's `dirty` (equals) callback.
+   */
+  writer: { target: number; inputs: number[]; before: boolean; viaDirty: boolean } | null;
+  /** 1 / 2: the compute creates an owned memo / signal and reads it first (re-linked every run) */
+  owned: number;
 }
 
 const MOD = 5; // small value domain: equal results are common (equality cut-offs are exercised)
@@ -51,6 +56,8 @@ function evalSpec(spec: Spec, rd: (j: number) => number, write: ((w: number, v: 
 /** `sync`: effects run synchronously from inside notify() (a custom `(run) => run()` schedule). */
 function runFuzz(seed: number, withWriters: boolean, sync = false) {
   const rand = mulberry32(seed);
+  // Features added later draw from their own stream, so older seeds keep their graphs.
+  const rand2 = mulberry32(seed ^ 0x9e3779b9);
   const int = (n: number) => Math.floor(rand() * n);
   const shuffle = <T>(arr: T[]) => {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -103,9 +110,11 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
       const allowed: number[] = [];
       for (let j = 0; j < Math.min(i, firstEff); j++) if (mask[j] < 1 << k) allowed.push(j);
       const inputs = Array.from({ length: 1 + int(2) }, () => allowed[int(allowed.length)]);
-      writer = { target: firstW + k, inputs, before: rand() < 0.4 };
+      writer = { target: firstW + k, inputs, before: rand() < 0.4, viaDirty: false };
     }
-    const spec: Spec = { kind: i < firstEff ? 'memo' : 'effect', cond, a, b, k: int(MOD), writer };
+    const spec: Spec = { kind: i < firstEff ? 'memo' : 'effect', cond, a, b, k: int(MOD), writer, owned: 0 };
+    if (writer && spec.kind === 'memo') writer.viaDirty = rand2() < 0.4;
+    if (rand2() < 0.15) spec.owned = rand2() < 0.5 ? 1 : 2;
     specs[i] = spec;
     let m = 0;
     for (const j of [...a, ...b, ...(cond >= 0 ? [cond] : []), ...(writer ? writer.inputs : [])]) m |= mask[j];
@@ -122,6 +131,13 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   const changeCount = new Array<number>(total).fill(0);
   const runs = new Array<number>(total).fill(0);
   const runsInFlush = new Array<number>(total).fill(0);
+  const runsInStep = new Array<number>(total).fill(0);
+  let stepWrites = 1;
+  let stepSerial = 0;
+  // With synchronous effects, a node may run again whenever a walk reaches it after it ran
+  // mid-walk; bounded by the graph per write (the step's writes and the changing W writes made
+  // in computes). An unbounded walk — a link chased forever — trips it.
+  const syncRunBound = () => (stepWrites + (writeSerial - stepSerial) + 1) * (nMemo + nEff);
   const logs: number[][] = Array.from({ length: total }, () => []);
   const allowance = new Array<boolean>(total).fill(false);
   const lastValue = new Array<number>(total).fill(NaN);
@@ -172,8 +188,10 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
     sigs[j].set(v);
   };
 
+  const pendingW = new Array<number>(total).fill(-1);
   const runNode = (i: number) => {
     const spec = specs[i]!;
+    if (sync && runsInStep[i] >= syncRunBound()) fail(`node ${i} ran ${runsInStep[i]} times in one step`);
     const prevLog = logs[i];
     const startSerial = writeSerial;
     const log: number[] = [];
@@ -182,7 +200,11 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
       log.push(j, changeCount[j]);
       return v;
     };
-    const value = evalSpec(spec, rd, writeSig);
+    // An owned node created and read first: the node re-links its later deps on every run.
+    if (spec.owned === 1) computed(() => 1)();
+    else if (spec.owned === 2) signal(1)();
+    const deferred = spec.writer !== null && spec.writer.viaDirty && runs[i] > 0;
+    const value = evalSpec(spec, rd, deferred ? (_w, v) => { pendingW[i] = v; } : writeSig);
     // Glitch-free / no over-execution: a re-run must be explained by an input that changed since
     // the previous run (checked after this run pulled its memo inputs), unless the previous run
     // overlapped a value-changing write (the latch is conservative: "wrote, then read" re-runs).
@@ -206,13 +228,28 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
     allowance[i] = writeSerial !== startSerial;
     if (runs[i] > 1 && value !== lastValue[i]) changeCount[i]++;
     lastValue[i] = value;
+    runsInStep[i]++;
     return value;
+  };
+  /** A writing `dirty` (equals): makes the deferred write of a `viaDirty` writer memo. */
+  const dirtyOf = (i: number) => (prev: number, next: number) => {
+    const w = specs[i]!.writer!;
+    if (pendingW[i] >= 0) {
+      const before = writeSerial;
+      writeSig(w.target, pendingW[i]);
+      pendingW[i] = -1;
+      if (writeSerial !== before) allowance[i] = true; // it wrote while still computing
+    }
+    return prev !== next;
   };
 
   const effectDisposers: (() => void)[] = [];
   const disposeAll = root((dispose) => {
     for (let i = firstMemo; i < firstEff; i++) {
-      const c = computed(() => runNode(i));
+      const w = specs[i]!.writer;
+      // `initial: 0`: a synchronous effect can read a memo while its first run is still going
+      // (re-entry); it gets 0 rather than undefined (NaN would never compare equal: a write loop).
+      const c = computed(() => runNode(i), w && w.viaDirty ? { initial: 0, dirty: dirtyOf(i) } : { initial: 0 });
       acc[i] = c;
       register(i, c.node!);
     }
@@ -294,7 +331,7 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
         if (depsOf(node).length) fail(`step ${step}: disposed effect ${i} still has deps`);
         continue;
       }
-      const deps = depsOf(node);
+      const deps = depsOf(node).filter((d) => idOf.has(d)); // (owned nodes are not tracked)
       const read = new Set<number>();
       for (let t = 0; t < logs[i].length; t += 2) read.add(logs[i][t]);
       const linked = new Set(deps.map((d) => idOf.get(d)!));
@@ -326,7 +363,10 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   settleChecked(-1);
   const steps = 25;
   for (let step = 0; step < steps; step++) {
+    runsInStep.fill(0);
     const writes = 1 + int(4);
+    stepWrites = writes;
+    stepSerial = writeSerial;
     for (let w = 0; w < writes; w++) {
       writeSig(int(nBase), int(MOD));
       if (rand() < 0.3) acc[firstMemo + int(nMemo)](); // a partial read mid-batch
@@ -369,7 +409,7 @@ describe('dependency graph: differential fuzz', () => {
     for (const seed of seeds(600, 100_003)) runFuzz(seed, true);
   });
 
-  it('synchronous effects (run from inside notify), with and without writes in computes: oracle values, structure', () => {
+  it('synchronous effects (run from inside notify), with and without writes in computes: oracle values, structure, bounded runs per write', () => {
     for (const seed of seeds(300, 200_003)) runFuzz(seed, false, true);
     for (const seed of seeds(300, 300_007)) runFuzz(seed, true, true);
   });
