@@ -35,6 +35,10 @@ export interface EffectNode<T = any> extends Computation<T> {
   _selfDirty: number;
   /** @internal its apply writes the live DOM: apply-cleanups on dispose are deferred to the mutate phase */
   _writesDom: boolean;
+  /** @internal tickEnd loop guard: the macrotask epoch `_tickRuns` counts runs in */
+  _tickEpoch: number;
+  /** @internal tickEnd loop guard: runs scheduled within `_tickEpoch` */
+  _tickRuns: number;
 }
 
 export interface EffectOptions {
@@ -66,7 +70,49 @@ const SELF_DIRTY_LIMIT = 100;
 /** The effect whose apply/compute is currently running (dev attribution for stricterdom). */
 export let currentEffect: EffectNode | null = null;
 
-export const tickEnd: Schedule = (run) => onTickEnd(run);
+/** Max tickEnd runs of one effect within one macrotask before it is treated as a loop. */
+const TICK_LIMIT = 100;
+
+/** Advanced by a macrotask armed when an effect starts counting in the current epoch. */
+let tickEpoch = 1;
+let tickEpochArmed = false;
+
+function advanceTickEpoch() {
+  tickEpochArmed = false;
+  tickEpoch++;
+}
+
+/**
+ * Runs at the end of the current tick (a microtask). Loop guard: effects dirtying each other (or
+ * themselves through a third party) would otherwise spin the microtask queue forever and starve
+ * the event loop. Each effect may run TICK_LIMIT times per macrotask; further runs are reported
+ * and moved to macrotasks, so input, timers and rendering keep running between them.
+ */
+export const tickEnd: Schedule = (run, node) => {
+  if (node._tickEpoch !== tickEpoch) {
+    node._tickEpoch = tickEpoch;
+    node._tickRuns = 0;
+    if (!tickEpochArmed) {
+      tickEpochArmed = true;
+      setTimeout(advanceTickEpoch, 0);
+    }
+  }
+  if (++node._tickRuns > TICK_LIMIT) {
+    if (node._tickRuns === TICK_LIMIT + 1) {
+      console.error(
+        `[frameact] Potential infinite loop: effect${node._name ? ` "${node._name}"` : ''} ran ${TICK_LIMIT} times on tickEnd within one macrotask. Its further runs are deferred to macrotasks.`,
+      );
+    }
+    setTimeout(() => {
+      // A macrotask hop breaks the loop: the self-dirty guard restarts its count too (it would
+      // otherwise trip on the very next self-write and add a second hop).
+      node._selfDirty = 0;
+      run();
+    }, 0);
+    return;
+  }
+  onTickEnd(run);
+};
 
 export function createEffect<T>(
   compute: (prev: T | undefined) => T,
@@ -87,6 +133,8 @@ export function createEffect<T>(
   node._bailed = null;
   node._name = options?.name;
   node._selfDirty = 0;
+  node._tickEpoch = 0;
+  node._tickRuns = 0;
   node._writesDom = options?.writesDom ?? domWritingSchedules.has(schedule);
   node._scope = currentHeavyAnimationScope(node); // appended to the current owner by the constructor
   node._run = () => runEffect(node);

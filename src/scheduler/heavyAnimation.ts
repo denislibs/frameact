@@ -6,6 +6,12 @@ import type { Scope } from '../core/types';
 import { onIdle } from './schedulers';
 
 const AUTO_END_TIMEOUT = 1000;
+const MAX_TIMEOUT = 2 ** 31 - 1;
+
+function toTimeout(duration: unknown): number {
+  if (typeof duration !== 'number' || !(duration >= 0)) return AUTO_END_TIMEOUT;
+  return duration > MAX_TIMEOUT ? MAX_TIMEOUT : duration;
+}
 
 export interface OnceSignal {
   (): boolean;
@@ -101,8 +107,10 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
       const animatingChanged = counter === 1 ? setAnimating(true) : null;
       const blockingChanged = isBlocking && counterBlocking === 1 ? setBlocking(true) : null;
 
-      // Infinity (or any non-finite/negative duration): no auto-end, the caller must end it.
-      const timeout = Number.isFinite(duration) && duration >= 0 ? setTimeout(onEnd, duration) : undefined;
+      // Only an explicit Infinity is manual (no timer, the caller must end it). NaN, negative or
+      // non-number durations fall back to the default: an animation that never ends would gate
+      // the UI forever. Finite values are clamped to the timer maximum (larger ones fire at once).
+      const timeout = duration === Infinity ? undefined : setTimeout(onEnd, toTimeout(duration));
       let hasEnded = false;
 
       function onEnd() {

@@ -146,3 +146,27 @@ it('an effect that re-dirties itself forever is reported', async () => {
 it('exposes NOT_APPLIED for the runtime', () => {
   expect(typeof NOT_APPLIED).toBe('symbol');
 });
+
+// M2 (perf+sec review): mutually-dirtying tickEnd effects must not starve the event loop.
+it('M2: two tickEnd effects dirtying each other are reported and yield to macrotasks', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const LIMIT = 5000; // safety bound: without the guard the loop runs to here in one macrotask
+  const $a = signal(0);
+  const $b = signal(0);
+  const $go = signal(false);
+  const dispose = root((d) => {
+    createEffect(() => [$go(), $a()] as const, ([go, v]) => { if (go && v < LIMIT) $b.set(v + 1); }, undefined, { name: 'A' });
+    createEffect(() => $b(), (v) => { $a.set(v); }, undefined, { name: 'B' });
+    return d;
+  });
+  await flushMicrotasks();
+  let valueWhenMacrotaskRan = -1;
+  const macrotask = new Promise<void>((resolve) => setTimeout(() => { valueWhenMacrotaskRan = $a(); resolve(); }, 0));
+  $go.set(true);
+  await macrotask;
+  expect(valueWhenMacrotaskRan).toBeGreaterThan(0);
+  expect(valueWhenMacrotaskRan).toBeLessThan(LIMIT); // the macrotask ran while the loop was still going
+  expect(err.mock.calls.some((c) => /infinite loop/i.test(String(c[0])) && /"A"|"B"/.test(String(c[0])))).toBe(true);
+  dispose();
+  err.mockRestore();
+});

@@ -2,7 +2,7 @@
 // Adapted from: https://github.com/solidjs/solid/blob/main/packages/solid/src/reactive/array.ts#L153
 
 import { DEV } from '../env';
-import { compute, createComputation, createScope, dispose, read, scoped, write } from './core';
+import { compute, createComputation, createScope, dispose, handleError, read, scoped, write } from './core';
 import type { Computation, Maybe, ReadSignal, Scope } from './types';
 
 export * from './selector';
@@ -114,111 +114,126 @@ function updateKeyedMap<Item, MappedItem>(this: KeyedMapData<Item, MappedItem>):
   const newItems = this._list() || [],
     indexed = this._map.length > 1;
 
+  // Patch (frameact): transactional. The pass builds new arrays in locals and commits them only
+  // when it completes; a throw disposes the rows created in this pass and keeps the previous state
+  // (the vendored version mutated `_mappings/_nodes` in place and updated `_items` last, so one
+  // throw left rows rendering other items' content). Each row's mapper is isolated (mapRow).
   scoped(() => {
-    let newLen = newItems.length,
-      i: number,
-      j: number,
-      mapper = indexed
-        ? () => this._map(newItems[j], read.bind(this._nodes[j]))
-        : () => (this._map as (value: Item) => MappedItem)(newItems[j]);
+    const newLen = newItems.length,
+      oldLen = this._len;
 
     // fast path for empty arrays
     if (newLen === 0) {
-      if (this._len !== 0) {
+      if (oldLen !== 0) {
         dispose.call(this._scope, false);
         this._nodes = [];
         this._items = [];
         this._mappings = [];
         this._len = 0;
       }
+      return;
     }
-    // fast path for new create
-    else if (this._len === 0) {
-      this._mappings = new Array(newLen);
 
-      for (j = 0; j < newLen; j++) {
-        this._items[j] = newItems[j];
-        this._mappings[j] = compute<MappedItem>(
-          (this._nodes[j] = createComputation(j, null)),
-          mapper,
-          null,
-        );
-      }
+    const oldItems = this._items,
+      oldMappings = this._mappings,
+      oldNodes = this._nodes,
+      mappings: MappedItem[] = new Array(newLen),
+      nodes: Computation<number>[] = new Array(newLen),
+      created: Computation[] = [];
+    let removed: Computation[] | null = null,
+      start = 0,
+      end = oldLen - 1,
+      newEnd = newLen - 1;
 
-      this._len = newLen;
-    } else {
-      let start: number,
-        end: number,
-        newEnd: number,
-        item: Item,
-        newIndices: Map<Item, number>,
-        newIndicesNext: number[],
-        temp: MappedItem[] = new Array(newLen),
-        tempNodes: Computation[] = new Array(newLen);
+    try {
+      if (oldLen !== 0) {
+        // skip common prefix
+        for (const min = Math.min(oldLen, newLen); start < min && oldItems[start] === newItems[start]; start++) {
+          mappings[start] = oldMappings[start];
+          nodes[start] = oldNodes[start];
+        }
 
-      // skip common prefix
-      for (
-        start = 0, end = Math.min(this._len, newLen);
-        start < end && this._items[start] === newItems[start];
-        start++
-      );
+        // common suffix
+        for (; end >= start && newEnd >= start && oldItems[end] === newItems[newEnd]; end--, newEnd--) {
+          mappings[newEnd] = oldMappings[end];
+          nodes[newEnd] = oldNodes[end];
+        }
 
-      // common suffix
-      for (
-        end = this._len - 1, newEnd = newLen - 1;
-        end >= start && newEnd >= start && this._items[end] === newItems[newEnd];
-        end--, newEnd--
-      ) {
-        temp[newEnd] = this._mappings[end];
-        tempNodes[newEnd] = this._nodes[end];
-      }
-
-      // 0) prepare a map of all indices in newItems, scanning backwards so we encounter them in natural order
-      newIndices = new Map<Item, number>();
-      newIndicesNext = new Array(newEnd + 1);
-      for (j = newEnd; j >= start; j--) {
-        item = newItems[j];
-        i = newIndices.get(item)!;
-        newIndicesNext[j] = i === undefined ? -1 : i;
-        newIndices.set(item, j);
-      }
-
-      // 1) step through all old items and see if they can be found in the new set; if so, save them in a temp array and mark them moved; if not, exit them
-      for (i = start; i <= end; i++) {
-        item = this._items[i];
-        j = newIndices.get(item)!;
-        if (j !== undefined && j !== -1) {
-          temp[j] = this._mappings[i];
-          tempNodes[j] = this._nodes[i];
-          j = newIndicesNext[j];
+        // 0) a map of all indices in the new window, scanning backwards so we encounter them in natural order
+        const newIndices = new Map<Item, number>(),
+          newIndicesNext: number[] = new Array(newEnd + 1);
+        for (let j = newEnd; j >= start; j--) {
+          const item = newItems[j],
+            i = newIndices.get(item);
+          newIndicesNext[j] = i === undefined ? -1 : i;
           newIndices.set(item, j);
-        } else dispose.call(this._nodes[i]);
-      }
+        }
 
-      // 2) set all the new values, pulling from the temp array if copied, otherwise entering the new value
-      for (j = start; j < newLen; j++) {
-        if (j in temp) {
-          this._mappings[j] = temp[j];
-          this._nodes[j] = tempNodes[j];
-          write.call(this._nodes[j], j);
-        } else {
-          this._mappings[j] = compute<MappedItem>(
-            (this._nodes[j] = createComputation(j, null)),
-            mapper,
-            null,
-          );
+        // 1) old items found in the new window keep their row; the others are removed (at commit)
+        for (let i = start; i <= end; i++) {
+          const item = oldItems[i],
+            j = newIndices.get(item);
+          if (j !== undefined && j !== -1) {
+            mappings[j] = oldMappings[i];
+            nodes[j] = oldNodes[i];
+            newIndices.set(item, newIndicesNext[j]);
+          } else (removed ??= []).push(oldNodes[i]);
         }
       }
 
-      // 3) in case the new set is shorter than the old, set the length of the mapped array
-      this._mappings = this._mappings.slice(0, (this._len = newLen));
+      // 2) create the rows that are new
+      for (let j = start; j <= newEnd; j++) {
+        if (nodes[j] !== undefined) continue;
+        const item = newItems[j],
+          node = createComputation(j, null); // owned by this._scope
+        created.push(node);
+        nodes[j] = node;
+        mappings[j] = mapRow(
+          node,
+          indexed
+            ? () => this._map(item, read.bind(node))
+            : () => (this._map as (value: Item) => MappedItem)(item),
+        );
+      }
 
-      // 4) save a copy of the mapped items for the next update
-      this._items = newItems.slice(0);
+      // 3) moved rows learn their new index
+      for (let j = start; j < newLen; j++) write.call(nodes[j], j);
+    } catch (error) {
+      for (let k = 0; k < created.length; k++) dispose.call(created[k]);
+      throw error;
     }
+
+    if (removed) for (let k = 0; k < removed.length; k++) dispose.call(removed[k]);
+
+    this._mappings = mappings;
+    this._nodes = nodes;
+    this._items = newItems.slice(0);
+    this._len = newLen;
   }, this._scope);
 
   return this._mappings;
+}
+
+/**
+ * frameact: runs a row's mapper under the row's owner. A throw is reported through the row
+ * (onError handlers up its owner chain, else the console) and the row maps to `undefined` (the DOM
+ * layer renders nothing for it); the other rows keep working.
+ */
+function mapRow<T>(row: Computation, fn: () => T): T | undefined {
+  try {
+    return compute<T>(row, fn, null);
+  } catch (error) {
+    reportListError(row, error, 'row mapper');
+    return undefined;
+  }
+}
+
+function reportListError(scope: Scope, error: unknown, what: string) {
+  try {
+    handleError(scope, error);
+  } catch (unhandled) {
+    console.error(`[frameact] mapArray: ${what} failed`, unhandled);
+  }
 }
 
 interface MapData<Item = any, MappedItem = any> {
@@ -254,6 +269,8 @@ interface KeyedByData<Item, Key, Mapped> {
   _mappings: Mapped[];
   _itemNodes: Computation<Item>[];
   _indexNodes: Computation<number>[];
+  /** fallback keys for duplicates / throwing keyFn, cached per position (see indexKey) */
+  _indexKeys: object[];
 }
 
 /**
@@ -280,6 +297,7 @@ export function computedKeyedMapBy<Item, Key, Mapped>(
         _mappings: [],
         _itemNodes: [],
         _indexNodes: [],
+        _indexKeys: [],
       } satisfies KeyedByData<Item, Key, Mapped>),
       options,
     ),
@@ -290,19 +308,8 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
   const newItems = this._list() || [];
   const newLen = newItems.length;
 
-  // Resolve keys; a duplicate falls back to an index key (like teact's `key` handling).
-  const newKeys: Key[] = new Array(newLen);
-  const seen = new Set<Key>();
-  for (let j = 0; j < newLen; j++) {
-    let key = this._keyFn(newItems[j]);
-    if (seen.has(key)) {
-      if (DEV) console.warn('[frameact] mapArray: duplicate key', key, '— falling back to index');
-      key = `__index#${j}` as unknown as Key;
-    }
-    seen.add(key);
-    newKeys[j] = key;
-  }
-
+  // Transactional like updateKeyedMap: locals first, commit at the end, rows created by a pass
+  // that throws are disposed. Row mappers and keyFn are isolated.
   scoped(() => {
     if (newLen === 0) {
       if (this._len !== 0) {
@@ -317,40 +324,53 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
       return;
     }
 
+    // Resolve keys; a duplicate falls back to an index key (like teact's `key` handling).
+    const newKeys: Key[] = new Array(newLen);
+    const seen = new Set<Key>();
+    for (let j = 0; j < newLen; j++) {
+      let key = keyOf(this, newItems[j], j);
+      if (seen.has(key)) {
+        if (DEV) console.warn('[frameact] mapArray: duplicate key', key, '— falling back to index');
+        key = indexKey(this, j);
+      }
+      seen.add(key);
+      newKeys[j] = key;
+    }
+
+    const oldLen = this._len;
     const oldIndexByKey = new Map<Key, number>();
-    for (let i = 0; i < this._len; i++) oldIndexByKey.set(this._keys[i], i);
+    for (let i = 0; i < oldLen; i++) oldIndexByKey.set(this._keys[i], i);
 
     const mappings: Mapped[] = new Array(newLen);
     const itemNodes: Computation<Item>[] = new Array(newLen);
     const indexNodes: Computation<number>[] = new Array(newLen);
-    const kept = new Uint8Array(this._len);
+    const kept = new Uint8Array(oldLen);
+    const created: Computation[] = [];
 
-    for (let j = 0; j < newLen; j++) {
-      const i = oldIndexByKey.get(newKeys[j]);
-      if (i !== undefined && !kept[i]) {
-        kept[i] = 1;
-        mappings[j] = this._mappings[i];
-        itemNodes[j] = this._itemNodes[i];
-        indexNodes[j] = this._indexNodes[i];
-        if (this._items[i] !== newItems[j]) write.call(itemNodes[j], newItems[j]);
-        if (i !== j) write.call(indexNodes[j], j);
-      } else {
-        const itemNode = createComputation<Item>(newItems[j], null);
-        let indexNode!: Computation<number>;
-        itemNodes[j] = itemNode;
-        mappings[j] = compute<Mapped>(
-          itemNode,
-          () => {
-            indexNode = createComputation<number>(j, null); // owned by the row
-            return this._map(read.bind(itemNode), read.bind(indexNode));
-          },
-          null,
-        );
-        indexNodes[j] = indexNode;
+    try {
+      for (let j = 0; j < newLen; j++) {
+        const i = oldIndexByKey.get(newKeys[j]);
+        if (i !== undefined && !kept[i]) {
+          kept[i] = 1;
+          mappings[j] = this._mappings[i];
+          itemNodes[j] = this._itemNodes[i];
+          indexNodes[j] = this._indexNodes[i];
+        } else {
+          createRow(this, newItems[j], j, mappings, itemNodes, indexNodes, created);
+        }
       }
+
+      // Reused rows learn their new item and index (no-ops for the rows created above).
+      for (let j = 0; j < newLen; j++) {
+        if (itemNodes[j]._value !== newItems[j]) write.call(itemNodes[j], newItems[j]);
+        if (indexNodes[j]._value !== j) write.call(indexNodes[j], j);
+      }
+    } catch (error) {
+      for (let k = 0; k < created.length; k++) dispose.call(created[k]);
+      throw error;
     }
 
-    for (let i = 0; i < this._len; i++) if (!kept[i]) dispose.call(this._itemNodes[i]);
+    for (let i = 0; i < oldLen; i++) if (!kept[i]) dispose.call(this._itemNodes[i]);
 
     this._mappings = mappings;
     this._itemNodes = itemNodes;
@@ -361,6 +381,45 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
   }, this._scope);
 
   return this._mappings;
+}
+
+/** Creates row `j`: its item node owns the index node and everything the mapper creates. */
+function createRow<Item, Key, Mapped>(
+  data: KeyedByData<Item, Key, Mapped>,
+  item: Item,
+  j: number,
+  mappings: Mapped[],
+  itemNodes: Computation<Item>[],
+  indexNodes: Computation<number>[],
+  created: Computation[],
+) {
+  const itemNode = createComputation<Item>(item, null); // owned by data._scope
+  let indexNode!: Computation<number>;
+  created.push(itemNode);
+  itemNodes[j] = itemNode;
+  mappings[j] = mapRow(itemNode, () => {
+    indexNode = createComputation<number>(j, null); // owned by the row
+    return data._map(read.bind(itemNode), read.bind(indexNode));
+  }) as Mapped;
+  indexNodes[j] = indexNode;
+}
+
+/** `keyFn(item)`; a throw is reported and the item falls back to its index key. */
+function keyOf<Item, Key, Mapped>(data: KeyedByData<Item, Key, Mapped>, item: Item, j: number): Key {
+  try {
+    return data._keyFn(item);
+  } catch (error) {
+    reportListError(data._scope, error, 'keyFn');
+    return indexKey(data, j);
+  }
+}
+
+/**
+ * The fallback key for position `j`: a per-map cached object, so it can never collide with a real
+ * key (a string like `__index#2` could) and stays stable across passes.
+ */
+function indexKey<Item, Key, Mapped>(data: KeyedByData<Item, Key, Mapped>, j: number): Key {
+  return (data._indexKeys[j] ??= Object.freeze({ index: j })) as Key;
 }
 
 export interface MapArrayOptions<Item> {

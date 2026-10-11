@@ -119,12 +119,57 @@ it('C1: once-callbacks are isolated from each other', () => {
   err.mockRestore();
 });
 
-it('begin() with a non-finite or negative duration has no auto-end timer', () => {
-  vi.useFakeTimers();
-  const scope = createHeavyAnimationScope();
-  const ends = [scope.begin(Infinity), scope.begin(-1), scope.begin(Number.NaN)];
-  vi.advanceTimersByTime(100_000);
-  expect(scope.isAnimating.peek()).toBe(true);
-  ends.forEach((end) => end());
-  expect(scope.isAnimating.peek()).toBe(false);
+
+describe('M3: begin() durations', () => {
+  it('NaN auto-ends after the default 1 s', () => {
+    vi.useFakeTimers();
+    const scope = createHeavyAnimationScope();
+    scope.begin(Number.NaN, true);
+    vi.advanceTimersByTime(999);
+    expect(scope.isBlockingAnimating.peek()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(scope.isBlockingAnimating.peek()).toBe(false);
+    expect(scope.isAnimating.peek()).toBe(false);
+  });
+
+  it('a negative duration auto-ends after the default 1 s', () => {
+    vi.useFakeTimers();
+    const scope = createHeavyAnimationScope();
+    scope.begin(-5);
+    vi.advanceTimersByTime(999);
+    expect(scope.isAnimating.peek()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(scope.isAnimating.peek()).toBe(false);
+  });
+
+  it('a non-number duration auto-ends after the default 1 s', () => {
+    vi.useFakeTimers();
+    const scope = createHeavyAnimationScope();
+    scope.begin('500' as unknown as number);
+    vi.advanceTimersByTime(999);
+    expect(scope.isAnimating.peek()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(scope.isAnimating.peek()).toBe(false);
+  });
+
+  it('only Infinity is manual: it stays until end()', () => {
+    vi.useFakeTimers();
+    const scope = createHeavyAnimationScope();
+    const end = scope.begin(Infinity, true);
+    vi.advanceTimersByTime(10_000_000);
+    expect(scope.isBlockingAnimating.peek()).toBe(true);
+    end();
+    expect(scope.isBlockingAnimating.peek()).toBe(false);
+  });
+
+  it('a huge finite duration is clamped to the timer maximum instead of firing immediately', () => {
+    vi.useFakeTimers();
+    const scope = createHeavyAnimationScope();
+    const end = scope.begin(3e10);
+    vi.advanceTimersByTime(1000);
+    expect(scope.isAnimating.peek()).toBe(true);
+    vi.advanceTimersByTime(2 ** 31 - 1);
+    expect(scope.isAnimating.peek()).toBe(false);
+    end();
+  });
 });
