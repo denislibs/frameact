@@ -332,7 +332,8 @@ acceptance-тестом (§5); ожидаемый состав: `template`, `ins
   `className(el, obj)`, `classList`) идут через **дифф токенов** с `prev` на элементе:
   только `classList.add/remove` изменившихся. Императивные классы переживают
   реактивные обновления без реестра. `className=` на intrinsic-элементах у
-  компилятора 2.0 — обычный атрибут → dev-ошибка «используй `class`».
+  компилятора 2.0 — обычный атрибут → `console.error` «используй `class`», но значение
+  всё равно применяется через дифф токенов (фикстуры компилятора должны работать).
 - **Стили.** Объектная форма — per-property дифф; строковая — `cssText`.
   Документируется: строковый `style` несовместим с `setExtraStyles`.
 - `render(code, el)`: `createRoot` → создать поддерево; первый apply корневого
@@ -355,12 +356,19 @@ acceptance-тестом (§5); ожидаемый состав: `template`, `ins
 <input type="checkbox" use:checked={flag} onChange={…} />
 ```
 
-`use:value` (компилятор эмитит `_$use(value, el, () => sig)`) делает:
+Компилятор 2.0 **не эмитит `_$use`**: `use:value={text}` опускается в
+`setAttribute(el, "use:value", text)` (аксессор передаётся невызванным), и так же —
+`on:`, `oncapture:`, `attr:`, `bool:`, `class:`, `style:`, `classList` (проверено
+компиляцией на rc.14). Поэтому `setAttribute` рантайма — **диспетчер по префиксу
+имени**, а директивы — реестр по имени (`defineDirective`; `value`/`checked` встроены;
+`use` по-прежнему экспортируется). `use:value` делает:
 
 - `createMutationEffect(() => sig(), v => setValueKeepingCaret(el, v))` — applier
   пишет только если `el.value !== v`; восстанавливает каретку по snapshot'у.
-- один делегированный `input`-listener, выполняемый **после** пользовательских
-  обработчиков: snapshot `selectionStart/End` (до любых записей этого тика), затем
+- один **document-level** `input`/`change`-listener, зарегистрированный **после**
+  `delegateEvents(['input'])` — только так он выполняется после делегированных
+  пользовательских обработчиков (listener на элементе и микротаск сработали бы раньше):
+  snapshot `selectionStart/End` (до любых записей этого тика), затем
   если `el.value !== sig()` — **синхронный** откат через ту же
   `setValueKeepingCaret` (как teact; `.value` не виден MutationObserver, кадра
   мерцания нет). Принятый ввод (`sig() === el.value`) не трогается; отформатированный
@@ -368,8 +376,9 @@ acceptance-тестом (§5); ожидаемый состав: `template`, `ins
 - во время composition (`e.isComposing`, `compositionstart…compositionend`) запись в
   `el.value` не выполняется — иначе ломается IME.
 
-Реактивный `value=`/`checked=` на `INPUT/TEXTAREA/SELECT` — dev-warning
-«используй `use:value`». `selectionStart/End` добавляются в `layoutCauses` stricterdom'а:
+Реактивный `value=`/`checked=` на `INPUT/TEXTAREA/SELECT` рантайм увидеть не может
+(прямое присваивание) → предупреждение «используй `use:value`» выдаёт **lint по исходнику
+в Vite-плагине**. `selectionStart/End` добавляются в `layoutCauses` stricterdom'а:
 читать их можно только в measure-фазе (обработчик события — measure).
 
 #### Списки
@@ -378,18 +387,17 @@ acceptance-тестом (§5); ожидаемый состав: `template`, `ins
 - `<For each order="manual" orderKey={item => …}>` — порт идеи `renderFastListChildren`
   для случаев, когда визуальный порядок задаётся `transform`'ом по `index()`, а
   DOM-порядок должен оставаться стабильным (ChatList). Контракт:
-  - `For` в этом режиме **владеет своим DOM-диапазоном**: удаляет отсутствующие,
-    новые вставляет пачками через `DocumentFragment` (prepend/append), сохранённые
-    **не двигает**, кроме тех, у кого изменился `orderKey`;
+  - `For` в этом режиме **владеет порядком своего DOM-диапазона**: сохранённые узлы
+    **не двигает**, кроме тех, у кого изменился `orderKey`, новые добавляет в начало/конец;
   - наружу `insert`'у возвращает массив узлов в **DOM-порядке**, а не в порядке
     списка — тогда `reconcileArrays` видит только вставки и удаления и ничего не
     переставляет;
   - `orderKey(item)` вычисляется в compute `For` без трекинга и хранится per key между
     пересчётами; сам по себе не реактивен — перестановка происходит при следующем
     пересчёте списка;
-  - dev-assert: `For order="manual"` — единственный ребёнок своего элемента, без
-    `fallback` (позиционирование относительно собственного диапазона, не
-    `childNodes[i]`).
+  - отдельный DOM-реконсилер и `DocumentFragment` не нужны: раз наружу уходит массив в
+    DOM-порядке, `reconcileArrays` выполняет только вставки/удаления (0 перемещений);
+    dev-assert «единственный ребёнок, без fallback» снят как ненужный.
 
 ### 3.4 `stricterdom`
 
