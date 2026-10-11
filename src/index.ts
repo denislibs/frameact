@@ -1,8 +1,7 @@
 import {
-  detachedRoot, getScope, onDispose, onError as onErrorRaw, peek, scoped,
+  createComputation, detachedRoot, getScope, onDispose, onError as onErrorRaw, peek, read, scoped, write,
 } from './core/core';
-import { computed, signal } from './core/signals';
-import type { ReadSignal, Scope, WriteSignal } from './core/types';
+import type { Scope } from './core/types';
 
 export type Accessor<T> = () => T;
 export type Setter<T> = (value: T | ((prev: T) => T)) => T;
@@ -19,15 +18,24 @@ function toDirty<T>(equals: SignalOptions<T>['equals']): ((prev: T, next: T) => 
   return undefined;
 }
 
-/** Solid-style tuple over maverick's `signal`. `equals: false` → always notify. */
+/** Solid-style tuple over a maverick signal node. `equals: false` → always notify. */
 export function createSignal<T>(value: T, options?: SignalOptions<T>): [Accessor<T>, Setter<T>] {
-  const $s: WriteSignal<T> = signal(value, { id: options?.id, dirty: toDirty(options?.equals) });
-  return [() => $s(), (v) => $s.set(v as T)];
+  // One node + two bound functions + the tuple: no options object, no maverick wrapper function.
+  const node = createComputation(
+    value,
+    null,
+    options && { id: options.id, dirty: toDirty(options.equals) },
+  );
+  return [read.bind(node) as Accessor<T>, write.bind(node) as Setter<T>];
 }
 
 export function createMemo<T>(fn: () => T, options?: SignalOptions<T>): Accessor<T> {
-  const $c: ReadSignal<T> = computed(fn, { id: options?.id, dirty: toDirty(options?.equals) });
-  return () => $c();
+  const node = createComputation<T>(
+    undefined as T,
+    fn,
+    options && { id: options.id, dirty: toDirty(options.equals) },
+  );
+  return read.bind(node) as Accessor<T>;
 }
 
 /**
