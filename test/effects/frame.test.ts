@@ -1,4 +1,4 @@
-import { createMeasureEffect, createMutationEffect, createRenderEffect, frameForcedReflow } from '../../src/core/frame';
+import { createMeasureEffect, createMutationEffect, createRenderEffect, drainHooks, frameForcedReflow } from '../../src/core/frame';
 import { createEffect } from '../../src/core/effects';
 import { signal } from '../../src/core/signals';
 import { root } from '../../src/core/core';
@@ -131,22 +131,103 @@ it('apply-cleanup of a tickEnd effect runs inline on dispose', async () => {
   expect(log).toEqual(['c']);
 });
 
-it('a mutation ping-pong loop is cut by the drain guard, reported, and finishes next frame', async () => {
+it('a mutation ping-pong loop is cut by the per-effect drain guard, reported, and finishes next frame', async () => {
   // Two effects feeding each other (not a self-write: the DEV self-dirty guard from Task 8 must not
   // be what stops it). Bounded so the test leaves no pending frame behind.
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   const $a = signal(0);
   const $b = signal(0);
   root(() => {
-    createMutationEffect(() => $a(), (v) => { if (v < 5_100) $b.set(v + 1); });
+    createMutationEffect(() => $a(), (v) => { if (v < 150) $b.set(v + 1); });
     createMutationEffect(() => $b(), (v) => { $a.set(v); });
   });
   await frame(raf);
   expect(err.mock.calls.some((c) => String(c[0]).includes('drain limit'))).toBe(true);
-  expect($a()).toBeLessThan(5_100);
+  expect($a()).toBeLessThan(150);
   await frame(raf);   // overflow moved to this frame
-  expect($a()).toBe(5_100);
+  expect($a()).toBe(150);
   err.mockRestore();
+});
+
+it('the drain guard counts runs per effect, not queue entries: 10 001 independent effects are not a loop', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const $s = signal(0);
+  const N = 10_001;
+  let applied = 0;
+  root(() => {
+    for (let i = 0; i < N; i++) createMutationEffect(() => $s(), (v) => { if (v === 1) applied++; });
+  });
+  $s.set(1);
+  await frame(raf);
+  expect(applied).toBe(N);
+  expect(err).not.toHaveBeenCalled();
+  err.mockRestore();
+});
+
+it('a measure effect created during the mutate phase does not warn; it applies in the next frame measure phase', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const $flip = signal(false);
+  const phases: string[] = [];
+  root(() => {
+    createMutationEffect(() => $flip(), (on) => {
+      if (on) root(() => createMeasureEffect(() => 1, () => { phases.push(getPhase()); }));
+    });
+  });
+  $flip.set(true);
+  await frame(raf); // mutate apply creates the measure effect
+  expect(warn.mock.calls.some((c) => String(c[0]).includes('mutate phase'))).toBe(false);
+  expect(phases).toEqual([]);
+  await frame(raf);
+  expect(phases).toEqual(['measure']);
+  warn.mockRestore();
+});
+
+it('an error thrown inside the drain loop is isolated per entry; the rest of the queue still runs', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const $a = signal(0);
+  const applied: string[] = [];
+  root(() => {
+    createMutationEffect(() => $a(), (v) => { if (v) applied.push('first'); });
+    createMutationEffect(() => $a(), (v) => { if (v) applied.push('second'); });
+  });
+  const original = drainHooks.blockingScopeFor;
+  let calls = 0;
+  drainHooks.blockingScopeFor = (scope, cache) => {
+    if (calls++ === 0) throw new Error('hook boom');
+    return original(scope, cache);
+  };
+  try {
+    $a.set(1);
+    await frame(raf);
+  } finally {
+    drainHooks.blockingScopeFor = original;
+  }
+  expect(applied).toEqual(['second']);
+  expect(err.mock.calls.some((c) => String(c[0]).includes('drain: entry failed'))).toBe(true);
+  err.mockRestore();
+});
+
+it('forced-reflow effect: first apply is NOT synchronous; it runs in the measure phase after the mutate phase', async () => {
+  const applies: string[] = [];
+  root(() => createEffect(() => 1, () => { applies.push(getPhase()); }, frameForcedReflow));
+  expect(applies).toEqual([]);
+  await frame(raf);
+  expect(applies).toEqual(['measure']);
+});
+
+it('apply-cleanup of a mutation effect disposed inside a mutate drain runs inline in that drain', async () => {
+  const log: string[] = [];
+  const $go = signal(0);
+  const disposeInner = root((d) => {
+    createMutationEffect(() => 1, () => () => log.push('cleanup:' + getPhase()));
+    return d;
+  });
+  root(() => createMutationEffect(() => $go(), (v) => {
+    if (v) { disposeInner(); log.push('after-dispose'); }
+  }));
+  $go.set(1);
+  await frame(raf);
+  expect(log).toEqual(['cleanup:mutate', 'after-dispose']);
 });
 
 it('flushSync runs pending frame effects synchronously', () => {
