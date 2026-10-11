@@ -32,6 +32,11 @@ const NOOP = () => {};
  * clears both on exit) — true while update() runs the compute / a signal write landed meanwhile.
  * F_REENTERED: per-run — something read the node while its update() was running (a synchronous
  * effect woken by a write the compute made); at the end a first result is announced to subscribers.
+ * F_UNSURE: the node is CHECK/DIRTY but some of its subscribers may be CLEAN — a pull through it
+ * threw (the reader handled the error and is CLEAN), or a notify walk was cut short by a throwing
+ * scheduler before it visited them. The next walk reaching it descends into its subscribers even
+ * though it is already dirty (and clears the flag); update() clears it too (the node is CLEAN
+ * after, and a CLEAN node is always descended into when marked).
  * The F_MISSED clear on entry is only a safety net; the clear on exit (update()'s `finally`, after
  * reading it) is the one that keeps the latch from leaking into the next run. They are not
  * duplicates: do not remove either.
@@ -39,7 +44,8 @@ const NOOP = () => {};
 export const F_INIT = 1,
   F_COMPUTING = 2,
   F_MISSED = 4,
-  F_REENTERED = 8;
+  F_REENTERED = 8,
+  F_UNSURE = 16;
 
 // For more information about this graph tracking scheme see Reactively:
 // https://github.com/modderme123/reactively/blob/main/packages/core/src/core.ts#L21
@@ -661,6 +667,16 @@ export function updateCheck(node: Computation) {
         cur = checkStack[--checkTop];
         checkStack[checkTop] = null;
       }
+    } catch (error) {
+      // A pull threw: `cur` and the nodes on the stack stay CHECK with their scan unfinished, and
+      // the reader that started it ends CLEAN (the error is handled above). Let the next walk
+      // reaching them descend to their subscribers.
+      if (cur._state === STATE_CHECK) cur._flags |= F_UNSURE;
+      for (let i = base; i < checkTop; i += 3) {
+        const n = checkStack[i] as Computation;
+        if (n._state === STATE_CHECK) n._flags |= F_UNSURE;
+      }
+      throw error;
     } finally {
       // Normally already at `base`; after a throw, drop this call's frames.
       while (checkTop > base) checkStack[--checkTop] = null;
@@ -910,6 +926,10 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
           node._state = state;
           if (node._effect && prev === STATE_CLEAN) effectScheduler(node);
           subs = node._subs;
+        } else if (flags & F_UNSURE) {
+          // Already dirty, but an aborted pull or walk may have left subscribers unmarked.
+          node._flags = flags & ~F_UNSURE;
+          subs = node._subs;
         }
       }
       // Next link in pre-order, skipping links confirmed after their level was entered.
@@ -936,6 +956,12 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
       node = l!.sub;
       state = STATE_CHECK;
     }
+  } catch (error) {
+    // A throwing scheduler cut the walk short: the level being visited and every level waiting
+    // on the stack have subscribers it never reached. Let the next walk descend there again.
+    if (l !== null) l.dep._flags |= F_UNSURE;
+    for (let i = base; i < notifyTop; i += 2) (notifyStack[i] as Link).dep._flags |= F_UNSURE;
+    throw error;
   } finally {
     // Normally already at `base`; after a throwing scheduler, drop this call's frames.
     while (notifyTop > base) notifyStack[--notifyTop] = null;
