@@ -108,7 +108,7 @@ frameact/vite            — Vite-плагин (обёртка @solidjs/babel-pl
    контейнер-предок) теряется: `notify` выходит по `_state >= DIRTY`, а `finally`
    ставит CLEAN. Наивный фикс «CLEAN до compute» неверен: ленивый pull computed'а
    внутри compute пишет свежий результат и даёт лишний пересчёт (ломает glitch-free
-   «jagged diamond»). Поэтому: узел помечается `_computing`; `notify` на вычисляющийся
+   «jagged diamond»). Поэтому: узел помечается `F_COMPUTING` (бит в `_flags`); `notify` на вычисляющийся
    узел **латчит** запись сигнала (но игнорирует запись результата computed'а — это
    ленивый pull, прочитанный свежим); по окончании compute залатченный узел
    ре-дёргается обычным `notify(DIRTY)` (эффект перепланируется; dev-guard: 100

@@ -6,12 +6,8 @@ export interface Computation<T = any> extends Scope {
 
   /** @internal */
   _effect: boolean;
-  /** @internal */
-  _init: boolean;
-  /** @internal true while update() runs this node's compute */
-  _computing: boolean;
-  /** @internal a signal write landed while computing; re-dirty when the compute ends */
-  _missedWake: boolean;
+  /** @internal F_INIT | F_COMPUTING | F_MISSED (core.ts) */
+  _flags: number;
   /** @internal write epoch of this node's last value-changing write (0 = never) */
   _writtenAt: number;
 

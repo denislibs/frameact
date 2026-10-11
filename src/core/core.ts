@@ -18,6 +18,16 @@ let currentScope: Scope | null = null,
 
 const NOOP = () => {};
 
+/**
+ * P6 (frameact): per-node flags packed into `_flags` (were three boolean fields).
+ * F_INIT: the node has a value from a successful compute (survives errors and re-runs).
+ * F_COMPUTING / F_MISSED: per-run (update() sets F_COMPUTING and clears F_MISSED on entry and
+ * clears both on exit) — true while update() runs the compute / a signal write landed meanwhile.
+ */
+export const F_INIT = 1,
+  F_COMPUTING = 2,
+  F_MISSED = 4;
+
 // For more information about this graph tracking scheme see Reactively:
 // https://github.com/modderme123/reactively/blob/main/packages/core/src/core.ts#L21
 export const STATE_CLEAN = 0,
@@ -448,10 +458,8 @@ export function initComputationNode(
   initScope(node);
   if (owned && currentScope) currentScope.append(node);
   node._state = compute ? STATE_DIRTY : STATE_CLEAN;
-  node._init = false;
+  node._flags = 0;
   node._effect = false;
-  node._computing = false;
-  node._missedWake = false;
   node._writtenAt = 0;
   node._sources = null;
   node._observers = null;
@@ -543,8 +551,7 @@ export function update(node: Computation) {
 
   currentObservers = null as Computation[] | null;
   currentObserversIndex = 0;
-  node._computing = true;
-  node._missedWake = false;
+  node._flags = (node._flags & F_INIT) | F_COMPUTING;
   let computeStarted = false;
   const startEpoch = writeEpoch;
   const prevScope = currentScope,
@@ -565,7 +572,7 @@ export function update(node: Computation) {
     updateObservers(node);
     if (linksNew) checkNewSources(node, linkFrom, startEpoch);
 
-    if (!node._effect && node._init) {
+    if (!node._effect && node._flags & F_INIT) {
       // A computed's result write: a value, never an updater (not routed through write()); not a
       // signal write either (no epoch stamp, never latched by a reader mid-compute — it is a lazy
       // pull that reader reads fresh).
@@ -578,13 +585,13 @@ export function update(node: Computation) {
       }
     } else {
       node._value = result;
-      node._init = true;
+      node._flags |= F_INIT;
     }
   } catch (error) {
     currentScope = prevScope;
     currentObserver = prevObserver;
     // Effects report their own errors (effects.ts); the `initial` hint only fits computeds.
-    if (DEV && !node._effect && !node._init && typeof node._value === 'undefined') {
+    if (DEV && !node._effect && !(node._flags & F_INIT) && typeof node._value === 'undefined') {
       console.error(
         `computed \`${node.id}\` threw error during first run, this can be fatal.` +
           '\n\nSolutions:\n\n' +
@@ -602,12 +609,12 @@ export function update(node: Computation) {
   } finally {
     currentObservers = prevObservers;
     currentObserversIndex = prevObserversIndex;
-    node._computing = false;
+    const missed = node._flags & F_MISSED;
+    node._flags &= F_INIT;
     // A node disposed during its own compute stays DISPOSED.
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;
-      if (node._missedWake) {
-        node._missedWake = false;
+      if (missed) {
         notify(node, STATE_DIRTY, true); // propagates to observers / schedules an effect
       }
     }
@@ -630,7 +637,7 @@ function checkNewSources(node: Computation, from: number, startEpoch: number) {
       source._state === STATE_CHECK ||
       source._state === STATE_DIRTY
     ) {
-      node._missedWake = true;
+      node._flags |= F_MISSED;
       return;
     }
   }
@@ -662,11 +669,11 @@ function updateObservers(node: Computation) {
 }
 
 function notify(node: Computation, state: number, latch: boolean) {
-  if (node._computing) {
+  if (node._flags & F_COMPUTING) {
     // Patch 1 (frameact): a write landing on a node mid-compute. A computed's result write is a
     // lazy pull this pass reads fresh — ignore it (maverick's behavior). A signal write may have
     // changed a value this pass already read: latch it; update() re-dirties the node at the end.
-    if (latch) node._missedWake = true;
+    if (latch) node._flags |= F_MISSED;
     return;
   }
 

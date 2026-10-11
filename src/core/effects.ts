@@ -3,6 +3,7 @@ import {
   assertApplyOwner,
   callUnowned,
   computationPrototype,
+  F_INIT,
   handleError,
   initComputationNode,
   isFunction,
@@ -141,7 +142,7 @@ export function createEffect<T>(
   if (DEV) assertApplyOwner();
   const node: EffectNode<T> = new (Effect as any)(
     function (this: EffectNode<T>) {
-      return compute(this._init ? this._value : undefined);
+      return compute(this._flags & F_INIT ? this._value : undefined);
     },
     apply,
     schedule,
@@ -190,17 +191,18 @@ Effect.prototype = computationPrototype;
 
 /**
  * Recompute the node's compute half. Returns false if the node died or threw, and also when the
- * first compute failed with the error handled by onError (`_init` still false): then there is no
+ * first compute failed with the error handled by onError (F_INIT still unset): then there is no
  * value to apply. The node stays linked to the sources it read and retries on their next change.
  */
 function computeNode(node: EffectNode): boolean {
   const outer = currentEffect;
   currentEffect = node;
   try {
-    if (node._state === STATE_CLEAN && node._init) return true;
-    if (node._init) updateCheck(node);
+    const init = node._flags & F_INIT;
+    if (node._state === STATE_CLEAN && init) return true;
+    if (init) updateCheck(node);
     else update(node);
-    return node._state !== STATE_DISPOSED && node._init;
+    return node._state !== STATE_DISPOSED && (node._flags & F_INIT) !== 0;
   } catch (error) {
     // update() already offered the error to onError handlers and re-threw: just report.
     logEffectError(node, error);
