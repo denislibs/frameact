@@ -141,8 +141,9 @@ it('flushSync settles tickEnd → mutate → tickEnd → mutate cascades in one 
 it('flushSync stops after 100 rounds of a never-settling cascade and reports it', () => {
   const raf = installFakeRaf();
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-  // A single chain rotating over three tickEnd effects (each runs ~34 times in 100 rounds), so the
-  // per-effect tickEnd loop guard (100 runs per macrotask) does not cut it before flushSync does.
+  // A single chain rotating over three tickEnd effects through mutation effects: every round's
+  // tickEnd work is a new flushTickEnd drain (each effect runs once per drain), so the per-drain
+  // tickEnd loop guard never trips — only flushSync's own round cap can stop this cascade.
   const xs = [api.createSignal(1), api.createSignal(0), api.createSignal(0)];
   const ys = [api.createSignal(0), api.createSignal(0), api.createSignal(0)];
   const dispose = api.createRoot((stop) => {

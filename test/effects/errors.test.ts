@@ -208,7 +208,9 @@ it('an effect whose apply re-dirties it forever is reported', async () => {
 });
 
 // I4 (final review)
-it('I4: after the self-dirty guard trips the effect keeps working (re-run on a macrotask)', async () => {
+// The tickEnd per-drain loop guard is what trips here (tickEnd effects are drain-guarded; the
+// generic self-dirty guard only covers custom schedules) — the intent is unchanged.
+it('I4: after the loop guard trips the effect keeps working (re-run on a macrotask)', async () => {
   const err = mockConsoleError();
   const $n = signal(0);
   const $other = signal('a');
@@ -218,7 +220,7 @@ it('I4: after the self-dirty guard trips the effect keeps working (re-run on a m
       () => [$n(), $other()] as const,
       ([n, o]) => {
         applied.push(o);
-        if (n < 150) $n.set(n + 1); // 150 self-dirties: trips the guard (100) once, then settles
+        if (n < 150) $n.set(n + 1); // 150 self-dirties: trips the guard (100 per drain) once, then settles
       },
     ),
   );
