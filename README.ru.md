@@ -138,5 +138,5 @@ pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
 
 ## Лицензия
 
-Собственная лицензия frameact пока не выбрана. Вендоренный и адаптированный сторонний код
-(maverick-js/signals, teact, dom-expressions) — MIT, см. [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
+[MIT](LICENSE). Вендоренный и адаптированный сторонний код (maverick-js/signals, teact, dom-expressions) —
+тоже MIT, см. [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

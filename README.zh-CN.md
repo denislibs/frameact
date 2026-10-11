@@ -132,5 +132,5 @@ pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
 
 ## 许可证
 
-frameact 自身的许可证尚未确定。内置和改编的第三方代码（maverick-js/signals、teact、dom-expressions）均为 MIT，
+[MIT](LICENSE)。内置和改编的第三方代码（maverick-js/signals、teact、dom-expressions）同样为 MIT，
 见 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)。

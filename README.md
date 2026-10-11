@@ -139,5 +139,5 @@ Toolchain: TypeScript 7 (native), Vite 8 / Vitest 5 + jsdom, oxlint.
 
 ## License
 
-frameact's own license is not chosen yet. Vendored and adapted third-party code (maverick-js/signals, teact,
-dom-expressions) is MIT — see [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
+[MIT](LICENSE). Vendored and adapted third-party code (maverick-js/signals, teact, dom-expressions) is also
+MIT — see [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
