@@ -37,6 +37,11 @@ interface Spec {
   owned: number;
 }
 
+/** FUZZ_BIG=1: larger graphs than the default runs use (manual sweeps; old seeds change graphs). */
+const BIG = typeof process !== 'undefined' && process.env.FUZZ_BIG === '1';
+/** Termination check for synchronous runs: runs of all nodes in one step. */
+const SYNC_HANG_GUARD = 1_000_000;
+
 const MOD = 5; // small value domain: equal results are common (equality cut-offs are exercised)
 
 function evalSpec(spec: Spec, rd: (j: number) => number, write: ((w: number, v: number) => void) | null) {
@@ -76,8 +81,8 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
 
   const nBase = 2 + int(5);
   const nW = withWriters ? 1 + int(3) : 0;
-  const nMemo = 4 + int(16);
-  const nEff = 1 + int(6);
+  const nMemo = 4 + int(BIG ? 36 : 16);
+  const nEff = 1 + int(BIG ? 10 : 6);
   const firstW = nBase,
     firstMemo = nBase + nW,
     firstEff = firstMemo + nMemo,
@@ -92,7 +97,7 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   // node i may read any id < i that is not an effect (signals, W signals, earlier memos)
   const pick = (limit: number) => int(Math.min(limit, firstEff));
   const pickList = (limit: number) => {
-    const len = 1 + int(4);
+    const len = 1 + int(BIG ? 6 : 4);
     const out: number[] = [];
     for (let t = 0; t < len; t++) {
       if (out.length && rand() < 0.15) out.push(out[int(out.length)]); // repeated read
@@ -127,6 +132,16 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
     if (w) writerOf.set(w.target, i);
   }
 
+  // Upper bound on the number of signal→node paths (every read entry of both lists, the
+  // condition and the writer's inputs; a signal is one path). Clamped: only a run bound uses it.
+  const pathsTo = new Array<number>(total).fill(1);
+  for (let i = firstMemo; i < total; i++) {
+    const spec = specs[i]!;
+    let n = 0;
+    for (const j of [...spec.a, ...spec.b, ...(spec.cond >= 0 ? [spec.cond] : []), ...(spec.writer ? spec.writer.inputs : [])]) n += pathsTo[j];
+    pathsTo[i] = Math.min(n, 1e9);
+  }
+
   // --- tracking state --------------------------------------------------------------------------
   const changeCount = new Array<number>(total).fill(0);
   const runs = new Array<number>(total).fill(0);
@@ -135,9 +150,14 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   let stepWrites = 1;
   let stepSerial = 0;
   // With synchronous effects, a node may run again whenever a walk reaches it after it ran
-  // mid-walk; bounded by the graph per write (the step's writes and the changing W writes made
-  // in computes). An unbounded walk — a link chased forever — trips it.
-  const syncRunBound = () => (stepWrites + (writeSerial - stepSerial) + 1) * (nMemo + nEff);
+  // mid-walk: per write (the step's writes and the changing W writes made in computes) roughly
+  // once per path from a signal to it (stage-2 re-review: up to ~170 runs on a 38-node graph).
+  // `syncRunBound` grows with the graph's path counts and has ×4 headroom, so a correct run does
+  // not trip it when the harness sizes grow (FUZZ_BIG); a walk chasing a link forever does. The
+  // separate `SYNC_HANG_GUARD` (runs of all nodes in one step) only asserts termination.
+  const syncRunBound = (i: number) =>
+    4 * (stepWrites + (writeSerial - stepSerial) + 1) * (pathsTo[i] + nMemo + nEff);
+  let stepRuns = 0;
   const logs: number[][] = Array.from({ length: total }, () => []);
   const allowance = new Array<boolean>(total).fill(false);
   const lastValue = new Array<number>(total).fill(NaN);
@@ -191,7 +211,10 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   const pendingW = new Array<number>(total).fill(-1);
   const runNode = (i: number) => {
     const spec = specs[i]!;
-    if (sync && runsInStep[i] >= syncRunBound()) fail(`node ${i} ran ${runsInStep[i]} times in one step`);
+    if (sync) {
+      if (runsInStep[i] >= syncRunBound(i)) fail(`node ${i} ran ${runsInStep[i]} times in one step`);
+      if (++stepRuns > SYNC_HANG_GUARD) fail(`step does not terminate (${stepRuns} runs)`);
+    }
     const prevLog = logs[i];
     const startSerial = writeSerial;
     const log: number[] = [];
@@ -361,9 +384,10 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
     if (firstFailure) throw firstFailure;
   };
   settleChecked(-1);
-  const steps = 25;
+  const steps = BIG ? 40 : 25;
   for (let step = 0; step < steps; step++) {
     runsInStep.fill(0);
+    stepRuns = 0;
     const writes = 1 + int(4);
     stepWrites = writes;
     stepSerial = writeSerial;
@@ -393,8 +417,10 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
 }
 
 const only = typeof process !== 'undefined' ? process.env.FUZZ_SEED : undefined;
+/** FUZZ_COUNT=k: k× the seeds per test (manual sweeps). */
+const scale = typeof process !== 'undefined' ? Number(process.env.FUZZ_COUNT ?? 1) : 1;
 const seeds = (n: number, base: number) =>
-  only ? [Number(only)] : Array.from({ length: n }, (_, i) => base + i * 7919);
+  only ? [Number(only)] : Array.from({ length: n * scale }, (_, i) => base + i * 7919);
 
 describe('dependency graph: differential fuzz', () => {
   it('pure graphs (no writes in computes): oracle values, ≤ 1 effect run per flush, no over-execution', () => {
