@@ -1,6 +1,5 @@
 import { signal } from '../../src/core/signals';
 
-
 it('should store and return value on read', () => {
   const $a = signal(10);
   expect($a).toBeInstanceOf(Function);

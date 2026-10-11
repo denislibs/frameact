@@ -40,6 +40,30 @@ export function setEffectDisposeHook(fn: (node: Computation) => void) {
   effectDisposeHook = fn;
 }
 
+/** DEV: true while an effect's apply half runs (it runs with no owner). */
+let inEffectApply = false;
+
+/** effects.ts flags the apply half; returns the previous value so nested applies restore it. */
+export function setInEffectApply(value: boolean): boolean {
+  const prev = inEffectApply;
+  inEffectApply = value;
+  return prev;
+}
+
+/**
+ * DEV: apply runs with no owner, so onCleanup() or an owned computation created there would leak
+ * (or, if owned by the effect, be torn down by a same-value recompute). Deliberate ownership via
+ * scoped()/runWithOwner() sets a scope and stays allowed; plain signals and explicit roots need
+ * no owner and are allowed too.
+ */
+export function assertApplyOwner() {
+  if (DEV && inEffectApply && currentScope === null) {
+    throw new Error(
+      '[frameact] onCleanup()/createEffect()/createMemo() inside an effect apply has no owner. Return a cleanup function from apply instead, or use runWithOwner() deliberately.',
+    );
+  }
+}
+
 /**
  * Creates a computation root which is given a `dispose()` function to dispose of all inner
  * computations.
@@ -137,6 +161,7 @@ export function onError<T = Error>(handler: (error: T) => void): void {
  * @see {@link https://github.com/maverick-js/signals#ondispose}
  */
 export function onDispose(disposable: MaybeDisposable): Dispose {
+  if (DEV && disposable) assertApplyOwner();
   if (!disposable || !currentScope) return (disposable as Dispose) || NOOP;
 
   const node = currentScope;
@@ -336,6 +361,7 @@ const ComputeNode = function Computation(
   compute: any,
   options?: ComputedSignalOptions<any, any>,
 ) {
+  if (DEV && compute) assertApplyOwner();
   ScopeNode.call(this);
 
   this._state = compute ? STATE_DIRTY : STATE_CLEAN;
@@ -427,7 +453,8 @@ export function update(node: Computation) {
       node._init = true;
     }
   } catch (error) {
-    if (DEV && !node._init && typeof node._value === 'undefined') {
+    // Effects report their own errors (effects.ts); the `initial` hint only fits computeds.
+    if (DEV && !node._effect && !node._init && typeof node._value === 'undefined') {
       console.error(
         `computed \`${node.id}\` threw error during first run, this can be fatal.` +
           '\n\nSolutions:\n\n' +

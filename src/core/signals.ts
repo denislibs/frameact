@@ -13,7 +13,7 @@ import type {
 /**
  * Wraps the given value into a signal. The signal will return the current value when invoked
  * `fn()`, and provide a simple write API via `set()`. The value can now be observed
- * when used inside other computations created with `computed` and `effect`.
+ * when used inside other computations created with `computed` and `createEffect`.
  *
  * @see {@link https://github.com/maverick-js/signals#signal}
  */

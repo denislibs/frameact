@@ -79,14 +79,6 @@ export interface Dispose {
 
 export interface Disposable extends Callable {}
 
-export interface Effect {
-  (): MaybeStopEffect;
-}
-
-export interface StopEffect {
-  (): void;
-}
-
 export interface Callable<This = unknown, Return = void> {
   call($this: This): Return;
 }
@@ -94,7 +86,6 @@ export interface Callable<This = unknown, Return = void> {
 export type Maybe<T> = T | void | null | undefined | false;
 export type MaybeFunction = Maybe<(...args: any) => any>;
 export type MaybeDisposable = Maybe<Disposable>;
-export type MaybeStopEffect = Maybe<StopEffect>;
 export type MaybeSignal<T> = MaybeFunction | ReadSignal<T>;
 export type ContextRecord = Record<string | symbol, unknown>;
 

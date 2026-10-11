@@ -1,11 +1,13 @@
 import { DEV } from '../env';
 import {
+  assertApplyOwner,
   compute as runInScope,
   createComputation,
   handleError,
   isFunction,
   setEffectDisposeHook,
   setEffectScheduler,
+  setInEffectApply,
   STATE_CLEAN,
   STATE_DISPOSED,
   update,
@@ -53,6 +55,7 @@ export function createEffect<T>(
   schedule: Schedule = tickEnd,
   options?: EffectOptions,
 ): void {
+  if (DEV) assertApplyOwner();
   const node = createComputation<T>(undefined as T, null) as EffectNode<T>;
   node._compute = function (this: EffectNode<T>) {
     return compute(this._init ? this._value : undefined);
@@ -74,7 +77,11 @@ export function createEffect<T>(
   else schedule(node._run, node);
 }
 
-/** Recompute the node's compute half. Returns false if the node died or threw. */
+/**
+ * Recompute the node's compute half. Returns false if the node died or threw, and also when the
+ * first compute failed with the error handled by onError (`_init` still false): then there is no
+ * value to apply. The node stays linked to the sources it read and retries on their next change.
+ */
 function computeNode(node: EffectNode): boolean {
   const outer = currentEffect;
   currentEffect = node;
@@ -82,11 +89,11 @@ function computeNode(node: EffectNode): boolean {
     if (node._state === STATE_CLEAN && node._init) return true;
     if (node._init) updateCheck(node);
     else update(node);
-    return node._state !== STATE_DISPOSED;
+    return node._state !== STATE_DISPOSED && node._init;
   } catch (error) {
     // update() already offered the error to onError handlers and re-threw: just report.
     logEffectError(node, error);
-    node._state = STATE_CLEAN;
+    if (node._state !== STATE_DISPOSED) node._state = STATE_CLEAN;
     return false;
   } finally {
     currentEffect = outer;
@@ -96,31 +103,44 @@ function computeNode(node: EffectNode): boolean {
 function runEffect(node: EffectNode) {
   if (node._state === STATE_DISPOSED) return;
 
-  // Ancestor rule (spec §3.2): never run an ancestor effect's compute from here.
+  // Ancestor rule (spec §3.2): never run an ancestor effect's compute from here. Check the WHOLE
+  // owner chain for effects first; bail onto the nearest non-CLEAN one — its own run disposes us
+  // (DIRTY) or releases us (CHECK that resolves clean, or a run that throws).
+  let memos: Computation[] | null = null;
   for (let p = node[SCOPE] as Computation | null; p !== null; p = p[SCOPE] as Computation | null) {
     if (p._effect) {
       if (p._state !== STATE_CLEAN) {
-        // Its own run will dispose us (DIRTY) or release us (CHECK that resolves clean).
         ((p as EffectNode)._bailed ??= []).push(node);
         return;
       }
     } else if (p._compute && p._state !== STATE_CLEAN) {
-      // A dirty memo ancestor is pulled like any read (pure); it may dispose us.
-      try {
-        updateCheck(p);
-      } catch (error) {
-        logEffectError(node, error);
-      }
-      if (node._state === STATE_DISPOSED) return;
+      (memos ??= []).push(p);
     }
   }
 
-  if (!computeNode(node)) return;
-  if (node._state === STATE_CLEAN) node._selfDirty = 0;
+  try {
+    // All effect ancestors are clean: pull dirty memo ancestors top-down like any read (pure);
+    // one of them may dispose us.
+    if (memos) {
+      for (let i = memos.length - 1; i >= 0; i--) {
+        try {
+          updateCheck(memos[i]);
+        } catch (error) {
+          logEffectError(node, error);
+        }
+        if (node._state === STATE_DISPOSED) return;
+      }
+    }
 
-  if (node._applied === NOT_APPLIED || node._value !== node._applied) applyEffect(node);
-
-  releaseBailed(node);
+    if (!computeNode(node)) return;
+    if (node._applied === NOT_APPLIED || node._value !== node._applied) applyEffect(node);
+  } finally {
+    // Reset the DEV self-dirty counter only when the whole run (compute AND apply) ended without
+    // re-dirtying the node.
+    if (node._state === STATE_CLEAN) node._selfDirty = 0;
+    // Children that bailed onto us are re-scheduled however this run ended (success or error).
+    releaseBailed(node);
+  }
 }
 
 function applyEffect(node: EffectNode) {
@@ -129,11 +149,15 @@ function applyEffect(node: EffectNode) {
   node._applyCleanup = null;
   const outer = currentEffect;
   currentEffect = node;
+  const outerInApply = DEV ? setInEffectApply(true) : false;
   try {
     cleanup?.();
-    // Untracked (observer = null), owner = the effect node so onCleanup() inside apply attaches to it.
-    const result = runInScope(node, () => node._apply(node._value, prev), null);
+    // Untracked and with NO owner (Solid 2.0 model): the apply channel's cleanup is the returned
+    // function only. onCleanup()/owned computations here are a DEV error (core assertApplyOwner).
+    const result = runInScope(null, () => node._apply(node._value, prev), null);
     if (isFunction(result)) node._applyCleanup = result as () => void;
+    // Only a successful apply advances _applied; a throwing one is retried on the next run.
+    node._applied = node._value;
   } catch (error) {
     try {
       handleError(node, error);
@@ -141,8 +165,8 @@ function applyEffect(node: EffectNode) {
       logEffectError(node, unhandled);
     }
   } finally {
+    if (DEV) setInEffectApply(outerInApply);
     currentEffect = outer;
-    node._applied = node._value;
   }
 }
 
