@@ -44,6 +44,8 @@ DOM (модель SolidJS). Компонент выполняется один �
 | События | Соглашения Solid: `onClick`, `onInput`, делегирование через document; `on:name` для нативных | Компилятор эмитит `addEvent(el, name, handler, delegate)` под эту модель |
 | Refs | `ref={el => …}` / `ref={variable}` | Solid-стиль |
 | Ошибки | Ошибка в compute/apply логируется (или уходит в ближайший `onError`-scope) и **не роняет кадр** | Teact'овская устойчивость. Solid 2.0 в этой ситуации останавливает реактивность целиком — для мессенджера неприемлемо |
+| Гейтинг анимаций | Blocking гейтит кадровые эффекты по умолчанию; non-blocking — только стор и явный opt-in через `gateOnHeavyAnimation`; оба — глобально и per-subtree через scope | Паритет с teact/TeactN; «гейтить всё на non-blocking» заставило бы локальные UI-анимации ждать чужие |
+| Стор | `frameact/store` — порт TeactN (один сигнал с иммутабельным стейтом, action handlers, `withGlobal`) | Целевое приложение построено на этой модели; гейтинг распространения стейта требует интеграции с ядром |
 | Структура | Один пакет с subpath-экспортами | Монорепа не нужна до второго потребителя |
 
 ## 3. Архитектура
@@ -53,11 +55,12 @@ frameact                 — сигналы, эффекты с фазами, flo
 frameact/scheduler       — fasterdom: rAF, фазы, requestMeasure/Mutation/ForcedReflow
 frameact/dom             — рантайм для компилятора (moduleName), render, For/Show/…
 frameact/stricterdom     — dev-only контроль фаз
+frameact/store           — глобальный стор: TeactN на сигналах
 frameact/vite            — Vite-плагин (обёртка @solidjs/babel-plugin)
 ```
 
-Зависимости между слоями: `dom → core → scheduler`; `stricterdom ← scheduler`
-(планировщик вызывает `setPhase`). `core` не знает про DOM.
+Зависимости между слоями: `dom → core → scheduler`; `store → core`;
+`stricterdom ← scheduler` (планировщик вызывает `setPhase`). `core` не знает про DOM.
 
 ### 3.1 `scheduler` — fasterdom
 
@@ -137,10 +140,11 @@ createRenderEffect                    // alias createMutationEffect — имя, 
 | родитель пересоздал поддерево | дети задиспозены до своих `run` → пропускаются |
 
 Гейтинг heavy animation — внутри `run` для кадровых планировщиков
-(`requestMeasure`/`requestMutation`/`requestForcedReflow`): если
-`isBlockingAnimating()` — `once(run)` и выход. Сырые `requestMeasure`/`requestMutation`
-для анимаций не гейтятся, как в teact. `onTickEnd`- и `onFullyIdle`-эффекты не
-гейтятся (логика не должна ждать анимацию; idle и так её ждёт).
+(`requestMeasure`/`requestMutation`/`requestForcedReflow`): если blocking-анимация
+активна глобально или в одном из scope'ов эффекта (см. ниже) — `once(run)` и выход.
+Сырые `requestMeasure`/`requestMutation` для анимаций не гейтятся, как в teact.
+`onTickEnd`- и `onFullyIdle`-эффекты не гейтятся (логика не должна ждать
+анимацию; idle и так её ждёт).
 
 Отличие от teact: teact замораживает **всё** на blocking-анимации, включая
 `setState`. У нас запись в сигнал проходит мгновенно (значение видно
@@ -163,16 +167,49 @@ createRenderEffect                    // alias createMutationEffect — имя, 
 - `flushSync()` — выполнить проход кадра синхронно (тесты, `render`).
 - `batch` не нужен: эффекты и так ждут кадра.
 
-#### heavyAnimation
+#### heavyAnimation: scope'ы и комбинатор
 
-Порт `teact/src/teact/heavyAnimation.ts`: счётчики, `beginHeavyAnimation(duration =
-1000, isBlocking = false)` → `onEnd`, сигналы `getIsHeavyAnimating` /
-`getIsBlockingAnimating` (с `.once`), `onFullyIdle`, `throttleWithFullyIdle`.
-Плюс `onHeavyAnimation(onStart, onEnd)` как замена хука `useHeavyAnimation`.
+Порт `teact/src/teact/heavyAnimation.ts`, обобщённый до **scope'ов**:
 
-Blocking гейтит проход кадра (см. выше). Non-blocking ядро **не гейтит** — это
-ответственность слоя стора в приложении (как TeactN: отложить применение
-глобального стейта до `getIsHeavyAnimating.once`).
+```ts
+const scope = createHeavyAnimationScope(parent?)
+// { begin(duration = 1000, isBlocking = false): onEnd,
+//   isAnimating: Signal<boolean>, isBlockingAnimating: Signal<boolean> }   // оба с .once
+
+// глобальный API — это корневой scope
+beginHeavyAnimation(duration?, isBlocking?)  = rootScope.begin
+getIsHeavyAnimating / getIsBlockingAnimating = rootScope.isAnimating / .isBlockingAnimating
+onHeavyAnimation(onStart, onEnd, scope = rootScope)   // замена хука useHeavyAnimation
+onFullyIdle(cb, scope = rootScope); throttleWithFullyIdle(fn, scope?)
+```
+
+Счётчики, авто-таймаут, `onEnd`-идемпотентность — как в teact, но на каждый scope.
+
+**Per-subtree.** `<HeavyAnimationScope scope={scope}>` кладёт scope в context.
+При создании эффекта ядро снимает из context ближайший scope (scope'ы ссылаются на
+родителя, так что это одна ссылка — вся цепочка до корня). `run` кадрового эффекта
+проверяет `isBlockingAnimating` по цепочке; первый активный — `once(run)`. Scope
+снимается **при создании**, а не при каждом `run`: дешевле, и эффект не может
+«переехать» в другой scope. Стоимость — один указатель на эффект-ноду и цикл по
+обычно пустой цепочке.
+
+Кейс: колонка чата выезжает с transition → `scope.begin(300, true)` блокирует
+рендер списка сообщений внутри, чат-лист рядом продолжает обновляться. Глобальный
+blocking заморозил бы всё.
+
+**Non-blocking — комбинатор над планировщиком:**
+
+```ts
+gateOnHeavyAnimation(schedule, { blocking = false } = {}): Schedule
+// (run) => анимация активна (глобально или в scope эффекта)
+//            ? isAnimating.once(() => schedule(run))
+//            : schedule(run)
+```
+
+Кадровые фасады сами гейтятся только на blocking. Ждать и non-blocking — явный
+opt-in: `createEffect(c, a, gateOnHeavyAnimation(requestMutation))`. Стор использует
+этот комбинатор для распространения стейта (§3.5) — паритет с TeactN. Комбинатор
+scope-aware так же, как `run`: снимает цепочку в момент создания эффекта.
 
 ### 3.3 `dom` — рантайм
 
@@ -239,7 +276,55 @@ Blocking гейтит проход кадра (см. выше). Non-blocking я�
 любая точка вне её — безопасное окно для чтения layout. В teact это соглашение,
 у нас — проверяемый инвариант.
 
-### 3.5 `vite`
+### 3.5 `store` — TeactN на сигналах
+
+```ts
+const {
+  getGlobal, setGlobal, getActions, getPromiseActions,
+  addActionHandler, withGlobal, addCallback, removeCallback, execAfterActions,
+} = createGlobalStore<GlobalState, ActionPayloads>()
+```
+
+**Хранение.** Один сигнал с иммутабельным объектом стейта. `setGlobal(next, options?)`
+пишет сразу; `getGlobal()` в обработчиках экшенов возвращает актуальное значение.
+В dev — teact'овская проверка устаревшего global (`DEBUG_randomId`: попытка
+записать объект, полученный до более свежего `setGlobal`, бросает ошибку;
+`forceOutdated` отключает).
+
+**Экшены.** `addActionHandler(name, (global, actions, payload) => State | void |
+Promise<void>)`. Вызов `actions.name(payload, options?)` возвращает промис;
+`options`: `forceOnHeavyAnimation`, `forceSyncOnIOs`, `forceOutdated`. Очередь с
+сериализацией вложенных вызовов (`actionQueue.length === 1` — не трогать) и
+`execAfterActions` портируются из `teactn.tsx` как есть.
+
+**Контейнеры.** `withGlobal(mapStateToProps, activationFn?)(Component)` —
+компонент-обёртка. Mapped-пропсы живут в сигнале и обновляются гейченым эффектом:
+
+```ts
+const [mapped, setMapped] = createSignal(mapState(getGlobal(), props));
+createEffect(
+  () => activate(props) ? mapState(global(), props) : SKIP,   // трекает global и пропсы
+  next => next !== SKIP && !shallowEqual(next, mapped()) && setMapped(next),
+  gateOnHeavyAnimation(onTickEnd),                           // non-blocking + scope-aware
+);
+return <Component {...props} {...toGetters(mapped)} />;
+```
+
+Поведение совпадает с TeactN: UI видит последний распространённый стейт,
+обработчики — текущий; во время non-blocking анимации контейнеры не обновляются;
+`forceOnHeavyAnimation` пропускает гейт один раз (`forceSyncOnIOs` — распространяет
+синхронно); `activationFn` + `stickToFirst` — ранний выход в compute. Контейнер
+внутри `HeavyAnimationScope` ждёт свой scope.
+
+Почему сигнал + эффект, а не `createMemo`: у мемо нет планировщика, а гейт нужен
+именно на распространении.
+
+Батчинг лучше TeactN'овского: десять `setGlobal` подряд → compute помечен грязным
+один раз, `mapStateToProps` считается один раз. Стоимость в остальном та же — один
+`mapStateToProps` на контейнер на каждое изменение global, с dev-предупреждением
+«Slow containers update» (>7 мс). Селекторы по путям — не в v1.
+
+### 3.6 `vite`
 
 `frameact/vite` — плагин, который подключает `@solidjs/babel-plugin` с
 `moduleName: "frameact/dom"`, `generate: "dom"`, `delegateEvents: true`,
@@ -251,11 +336,13 @@ Blocking гейтит проход кадра (см. выше). Non-blocking я�
 ```
 frameact/
   package.json            name: frameact; exports: ".", "./dom", "./scheduler",
-                          "./stricterdom", "./vite", "./jsx-runtime" (типы)
+                          "./stricterdom", "./store", "./vite", "./jsx-runtime" (типы)
   src/
-    core/                 форк maverick + effects.ts (фазы), context.ts, map.ts (+key fn)
-    scheduler/            fasterdom.ts, schedulers.ts, heavyAnimation.ts
+    core/                 форк maverick + effects.ts (планировщики, гейтинг),
+                          context.ts, map.ts (+key fn)
+    scheduler/            fasterdom.ts, schedulers.ts, heavyAnimation.ts (scope'ы)
     stricterdom/          stricterdom.ts, layoutCauses.ts
+    store/                store.ts (сигнал + dev-проверки), actions.ts, withGlobal.tsx
     dom/                  template.ts, insert.ts, props.ts, events.ts, controlled.ts,
                           list.ts (For/manual order), flow.ts (Show/Switch/Dynamic/Portal),
                           render.ts, index.ts
@@ -284,8 +371,14 @@ frameact/
   `createIdleEffect` ждёт окончания heavy animation; кастомный `schedule`
   (`requestForcedReflow`) вызывается с `run`; ошибка в apply не прерывает остальные.
 - scheduler: порядок очередей fasterdom, throttling, таймаут-фолбэк, forced reflow.
-- heavyAnimation: blocking откладывает проход и выполняет его **один раз** по
-  окончании; non-blocking не влияет на ядро; счётчики и авто-таймаут.
+- heavyAnimation: blocking откладывает кадровые эффекты и выполняет их **один раз**
+  по окончании; non-blocking не влияет на кадровые эффекты, влияет на
+  `gateOnHeavyAnimation`; счётчики и авто-таймаут; scope: эффект внутри ждёт,
+  соседний снаружи — нет; вложенный scope ждёт и внешний; `onFullyIdle(cb, scope)`.
+- store: shallow-equal отсекает обновление контейнера; non-blocking анимация
+  откладывает распространение, `forceOnHeavyAnimation` пропускает; контейнер в
+  scope ждёт свой scope; `activationFn`/`stickToFirst`; сериализация вложенных
+  экшенов и `execAfterActions`; dev-ошибка на устаревший global.
 - dom: дифф классов сохраняет императивные; `style`-объект per-property;
   контролируемый инпут откатывает отвергнутый ввод и сохраняет каретку;
   `order="manual"` не двигает сохранённые ноды, двигает при смене `orderKey`,
@@ -316,13 +409,10 @@ Solid 2.0. Если frameact не лучше голого Solid по thrash/drop
 
 ## 6. Вне скоупа v1
 
-- Слой стора (`withGlobal` / action handlers) — в приложении. В пакете только
-  `createSelector`-подобные хелперы.
 - Роутер, SSR, hydration, `Loading`/`Errored`-границы, async-мемо, optimistic,
   транзакции.
-- Per-subtree гейтинг heavy animation (архитектурой не закрыт, оставлен на потом).
+- Селекторы стора по путям (fine-grained подписки на части global).
 - Девтулзы сверх stricterdom.
-- Гейтинг non-blocking анимаций в ядре.
 
 ## 7. Риски
 
