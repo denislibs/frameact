@@ -134,24 +134,43 @@ describe('link reuse', () => {
   });
 });
 
+/** Time of the first run of a memo over `n` signals that already have another subscriber. */
+function firstRun(n: number) {
+  const signals = Array.from({ length: n }, () => signal(1));
+  const others = signals.map((s) => computed(() => s()));
+  for (const o of others) o();
+  const $sum = computed(() => {
+    let t = 0;
+    for (const s of signals) t += s();
+    return t;
+  });
+  const t0 = performance.now();
+  const v = $sum();
+  const ms = performance.now() - t0;
+  expect(v).toBe(n);
+  expect(depLinks(nodeOf($sum)).length).toBe(n);
+  return ms;
+}
+
 describe('linking cost', () => {
   // Review stage 2, Important 1: a dedup scan over the run's links made a first run (or a full
   // change of deps) O(n²) when the deps had other subscribers — 16k deps: ~270 ms vs ~1 ms.
-  it('a first run over 20 000 signals that already have subscribers stays linear', () => {
-    const N = 20_000;
-    const signals = Array.from({ length: N }, () => signal(1));
-    const others = signals.map((s) => computed(() => s()));
-    for (const o of others) o();
-    const $sum = computed(() => {
-      let t = 0;
-      for (const s of signals) t += s();
-      return t;
-    });
-    const t0 = performance.now();
-    expect($sum()).toBe(N);
-    const ms = performance.now() - t0;
-    expect(ms).toBeLessThan(150); // linear: a few ms; the quadratic scan: hundreds
-    expect(depLinks(nodeOf($sum)).length).toBe(N);
+  // Stage-3 Part A: a scaling check instead of an absolute time (no flake on a slow machine):
+  // linking 4N such deps costs ~4× N when linear (up to ~5× measured: cache, GC), ~16× when
+  // quadratic; the bound 8× sits between them (the log midpoint). Min of a few repetitions.
+  // (2N vs N measured 1.5–2.6× linear vs 4.0× quadratic under a parallel test run: too tight.)
+  it('a first run over signals that already have subscribers scales linearly (4N ≤ 8× N)', () => {
+    const N = 10_000;
+    firstRun(N); // warm-up (JIT)
+    firstRun(4 * N);
+    // Interleaved, so a load spike on the machine hits both sizes alike; min of each.
+    let tN = Infinity,
+      t4N = Infinity;
+    for (let r = 0; r < 7; r++) {
+      tN = Math.min(tN, firstRun(N));
+      t4N = Math.min(t4N, firstRun(4 * N));
+    }
+    expect(t4N).toBeLessThanOrEqual(8 * tN);
   });
 });
 
