@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn"],
+  "categories": { "correctness": "error", "suspicious": "warn" },
+  "rules": {
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
+    "typescript/no-explicit-any": "off",
+    "typescript/no-this-alias": "off",
+    "no-cond-assign": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/core/**", "test/core/**"],
+      "rules": {
+        "no-underscore-dangle": "off",
+        "no-shadow": "off",
+        "no-unused-expressions": "off",
+        "no-constant-condition": "off",
+        "typescript/no-wrapper-object-types": "off",
+        "unicorn/no-new-array": "off"
+      }
+    },
+    {
+      "files": ["test/effects/**"],
+      "rules": { "no-underscore-dangle": "off" }
+    }
+  ],
+  "ignorePatterns": ["dist", "node_modules", "coverage"]
+}
