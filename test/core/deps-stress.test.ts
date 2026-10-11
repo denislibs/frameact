@@ -657,6 +657,19 @@ const selfLatching = () => {
   return { $s, $d: computed(spy), spy };
 };
 
+// MAX_RESCANS (4): a dep that writes what it reads for a while (v = 100 … 109) stays unsettled
+// through every re-scan; the reader is then recomputed conservatively and latched, and settles
+// over the next pulls. No hang, a bounded number of dep runs per pull, the right final value.
+const windowDep = () => {
+  const $n = signal(0);
+  const dSpy = vi.fn(() => {
+    const v = $n();
+    if (v >= 100 && v < 110) $n.set(v + 1); // latched: re-dirties itself
+    return v >= 110 ? 1 : 0; // unchanged until it settles: its reader stays CHECK in the walk
+  });
+  return { $n, $d: computed(dSpy), dSpy };
+};
+
 describe('a dep re-dirtied inside an updateCheck walk', () => {
   it('a direct reader is not resolved clean on the unsettled dep', () => {
     const { $s, $d, spy } = selfLatching();
@@ -713,19 +726,44 @@ describe('a dep re-dirtied inside an updateCheck walk', () => {
     expect(nSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('a dep that keeps writing what it reads is bounded per pull (no hang), the reader keeps up', () => {
-    const $n = signal(0);
-    const dSpy = vi.fn(() => {
-      $n.set($n() + 1); // writes after reading, every run: latched every run
-      return 0; // unchanged result: the reader stays CHECK through the walk
-    });
-    const $d = computed(dSpy);
-    const $x = computed(() => $d() + 1);
-    expect($x()).toBe(1);
-    const before = dSpy.mock.calls.length;
+  it('a dep still unsettled after MAX_RESCANS: 6 dep runs on the pull, then one per pull until it settles', () => {
+    const { $n, $d, dSpy } = windowDep();
+    const xSpy = vi.fn(() => $d() * 10);
+    const $x = computed(xSpy);
+    expect($x()).toBe(0);
+    dSpy.mockClear();
+    xSpy.mockClear();
     $n.set(100);
-    expect($x()).toBe(1);
-    expect(dSpy.mock.calls.length - before).toBeLessThanOrEqual(4);
+    expect($x()).toBe(0);
+    // 1 run in the scan + 4 re-scans, then the conservative recompute of $x pulls it once more
+    expect(dSpy).toHaveBeenCalledTimes(6);
+    expect(xSpy).toHaveBeenCalledTimes(1);
+    expect(nodeOf($x)._state).toBe(2); // latched by the dep's re-dirty: not settled yet
+    const perPull: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      const before = dSpy.mock.calls.length;
+      $x();
+      perPull.push(dSpy.mock.calls.length - before);
+    }
+    // each later pull: one dep run (v = 106 … 109 still latch, 110 settles), one reader run; then quiet
+    expect(perPull).toEqual([1, 1, 1, 1, 1, 0, 0, 0]);
+    expect(xSpy).toHaveBeenCalledTimes(6);
+    expect($x()).toBe(10);
+    expect($n()).toBe(110);
+  });
+
+  it('through a tickEnd effect: applies [0, 1], nothing in between', async () => {
+    const { $n, $d } = windowDep();
+    const applied: number[] = [];
+    const dispose = root((d) => {
+      createEffect(() => $d(), (v) => { applied.push(v); });
+      return d;
+    });
+    await Promise.resolve();
+    $n.set(100);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(applied).toEqual([0, 1]);
+    dispose();
   });
 });
 
