@@ -1,0 +1,44 @@
+diff --git a/package.json b/package.json
+index 700cc1a..4457e43 100644
+--- a/package.json
++++ b/package.json
+@@ -25,6 +25,7 @@
+     "@tldraw/state": "5.4.2",
+     "@vue/reactivity": "^3.5.43",
+     "alien-signals": "3.2.1",
++    "frameact": "link:../../..",
+     "mobx": "^7.0.3",
+     "mol_wire_lib": "^1.0.1781",
+     "oby": "15.1.2",
+diff --git a/src/config.ts b/src/config.ts
+index ff13549..1c9cee7 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -16,6 +16,7 @@ import { usignalFramework } from "./frameworks/uSignal";
+ import { vueReactivityFramework } from "./frameworks/vueReactivity";
+ import { svelteFramework } from "./frameworks/svelte";
+ import { tansuFramework } from "./frameworks/tansu";
++import { frameactFramework } from "./frameworks/frameact";
+ 
+ export const frameworkInfo: FrameworkInfo[] = [
+   { framework: legendFramework, testPullCounts: false },
+@@ -34,6 +35,7 @@ export const frameworkInfo: FrameworkInfo[] = [
+   { framework: usignalFramework, testPullCounts: true },
+   { framework: vueReactivityFramework, testPullCounts: true },
+   { framework: mobxFramework, testPullCounts: false },
++  { framework: frameactFramework, testPullCounts: true },
+ ];
+ 
+ export const perfTests: TestConfig[] = [
+diff --git a/src/registry.ts b/src/registry.ts
+index ea744f7..f936709 100644
+--- a/src/registry.ts
++++ b/src/registry.ts
+@@ -16,6 +16,7 @@ export const registry = {
+   tldraw: ["@tldraw/state", "@tldraw/state"],
+   usignal: ["uSignal", "usignal"],
+   vue: ["@vue/reactivity", "@vue/reactivity"],
++  frameact: ["frameact", "frameact"],
+ } as const;
+ export type FrameworkId = keyof typeof registry;
+ export const suites = ["kairo", "mol", "s", "dynamic", "cellx"] as const;
