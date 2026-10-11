@@ -237,21 +237,76 @@ describe('missed-wake latch through the notify chain', () => {
   it('an effect whose compute writes its own source reruns once and settles', async () => {
     const $n = signal(0);
     const applied: number[] = [];
-    root(() =>
-      createEffect(
-        () => {
-          const v = $n();
-          if (v === 1) $n.set(2);
-          return v;
-        },
-        (v) => { applied.push(v); },
-      ),
-    );
+    const compute = vi.fn(() => {
+      const v = $n();
+      if (v === 1) $n.set(2);
+      return v;
+    });
+    root(() => createEffect(compute, (v) => { applied.push(v); }));
     await flushMicrotasks();
     $n.set(1);
     await flushMicrotasks();
-    expect(applied.at(-1)).toBe(2);
+    // initial (0) + the run that writes (1, latched) + the latched re-run (2). The writing run's
+    // value is applied too: the latch re-dirties the node after compute, the run still applies.
+    expect(compute).toHaveBeenCalledTimes(3);
+    expect(compute.mock.results.map((r) => r.value)).toEqual([0, 1, 2]);
+    expect(applied).toEqual([0, 1, 2]);
     expect($n()).toBe(2);
+    $n.set(3);
+    await flushMicrotasks();
+    expect(compute).toHaveBeenCalledTimes(4);
+    expect(applied).toEqual([0, 1, 2, 3]);
+  });
+
+  // Stage-1 review "scenario B": a write made by a memo's user `dirty` (equals) while a reader pulls
+  // that memo inside its own compute. The write is a *signal* write and must be latched / stamped
+  // even though it happens during a computed result write (995e983 inherited "don't latch" there).
+  it('a memo `dirty` that writes a signal the reader binds for the first time in this pass re-dirties the reader', () => {
+    const $count = signal(0);
+    const $gate = signal(false);
+    const $a = signal(1);
+    const $m = computed(() => $a() * 2, {
+      dirty: (p, n) => {
+        $count.set((c) => c + 1);
+        return p !== n;
+      },
+    });
+    const spy = vi.fn(() => ($gate() ? $count() : -100) + $m());
+    const $x = computed(spy);
+    expect($x()).toBe(-98);
+    $gate.set(true);
+    $a.set(5); // $x first reads $count (new binding), then pulls $m, whose dirty writes $count
+    expect($x()).toBe(10); // this pass read $count before the write…
+    expect($count()).toBe(1);
+    expect($x()).toBe(11); // …the write is latched: 995e983 stays at 10 forever (missed wake)
+    expect($x()).toBe(11);
+    expect(spy).toHaveBeenCalledTimes(3); // initial + the change + one latched re-run
+    $a.set(6);
+    // Now $count is an old binding pulled in updateCheck: $m's dirty writes it before $x recomputes.
+    expect($x()).toBe(2 + 12);
+    expect(spy).toHaveBeenCalledTimes(4);
+  });
+
+  it('a memo `dirty` that writes a signal the reader is already bound to re-dirties the reader', () => {
+    const $count = signal(0);
+    const $trigger = signal(0);
+    const $a = signal(1);
+    const $m = computed(() => $a() * 2, {
+      dirty: (p, n) => {
+        $count.set((c) => c + 1);
+        return p !== n;
+      },
+    });
+    const spy = vi.fn(() => $trigger() + $count() + $m());
+    const $x = computed(spy);
+    expect($x()).toBe(2);
+    $a.set(5);
+    $trigger.set(100); // $x DIRTY: recomputes directly, pulling $m mid-compute (not in updateCheck)
+    expect($x()).toBe(100 + 0 + 10); // read $count (old binding), then $m's dirty wrote it
+    expect($count()).toBe(1);
+    expect($x()).toBe(100 + 1 + 10); // latched (995e983: stuck at 110)
+    expect($x()).toBe(111);
+    expect(spy).toHaveBeenCalledTimes(3);
   });
 });
 
