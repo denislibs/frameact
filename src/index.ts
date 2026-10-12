@@ -1,23 +1,12 @@
 import {
-  createComputation, createSignalNode, detachedRoot, getScope, onDispose, onError as onErrorRaw, peek, read,
+  createSignalNode, detachedRoot, getScope, onDispose, onError as onErrorRaw, peek,
   readSignal, scoped, write,
 } from './core/core';
+import { toDirty, type Accessor, type SignalOptions } from './core/memo';
 import type { Scope } from './core/types';
 
-export type Accessor<T> = () => T;
+export { createMemo, type Accessor, type SignalOptions } from './core/memo';
 export type Setter<T> = (value: T | ((prev: T) => T)) => T;
-
-export interface SignalOptions<T> {
-  equals?: ((prev: T, next: T) => boolean) | false;
-  id?: string;
-}
-
-/** Maps the Solid-style `equals` option onto maverick's `dirty` (true = changed). `false` → always dirty. */
-function toDirty<T>(equals: SignalOptions<T>['equals']): ((prev: T, next: T) => boolean) | undefined {
-  if (equals === false) return () => true;
-  if (equals) return (a, b) => !equals(a, b);
-  return undefined;
-}
 
 /**
  * Solid-style tuple over a maverick signal node. `equals: false` → always notify. The signal is
@@ -27,15 +16,6 @@ export function createSignal<T>(value: T, options?: SignalOptions<T>): [Accessor
   // One node + two bound functions + the tuple: no options object, no maverick wrapper function.
   const node = createSignalNode(value, options && { id: options.id, dirty: toDirty(options.equals) });
   return [readSignal.bind(node) as Accessor<T>, write.bind(node) as Setter<T>];
-}
-
-export function createMemo<T>(fn: () => T, options?: SignalOptions<T>): Accessor<T> {
-  const node = createComputation<T>(
-    undefined as T,
-    fn,
-    options && { id: options.id, dirty: toDirty(options.equals) },
-  );
-  return read.bind(node) as Accessor<T>;
 }
 
 /**

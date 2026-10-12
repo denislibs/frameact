@@ -2,7 +2,7 @@
 // `useCurrentOrPrev` and `useFrozenProps` as memos. They observe the source when they are READ:
 // a memo is pulled lazily, so a value nobody read between two changes is not a "previous" value.
 // Read them from an effect or the JSX (every frame) and they see each change.
-import { createMemo, type Accessor } from '../index';
+import { createMemo, type Accessor } from './memo';
 
 export interface PreviousOptions {
   /** `undefined` does not count as a change: the previous value survives a gap (teact `shouldSkipUndefined`). */
