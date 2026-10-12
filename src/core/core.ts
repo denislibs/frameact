@@ -844,18 +844,6 @@ export function update(node: Computation) {
     currentObserver = prevObserver;
     currentStartEpoch = prevStartEpoch;
     currentCycle = prevCycle;
-    // Effects report their own errors (effects.ts); the `initial` hint only fits computeds.
-    if (DEV && !node._effect && !(node._flags & F_INIT) && typeof node._value === 'undefined') {
-      console.error(
-        `computed \`${node.id}\` threw error during first run, this can be fatal.` +
-          '\n\nSolutions:\n\n' +
-          '1. Set the `initial` option to silence this error',
-        '\n2. Or, use an `effect` if the return value is not being used',
-        '\n\n',
-        error,
-      );
-    }
-
     // Keep the deps read before the throw. A failure before compute (in cleanup) keeps them all:
     // purging would unlink every dep and the node would never wake again.
     if (computeStarted) purgeDeps(node);

@@ -522,3 +522,11 @@ describe('re-review Minor 2-3: every call of a custom Schedule follows the f5455
     expect(seen).toEqual([2]);
   });
 });
+
+it('re-review Minor 4: a memo whose first run throws prints nothing itself (no stale "can be fatal" hint)', () => {
+  const $t = computed((): number => {
+    throw new Error('boom');
+  });
+  expect(() => $t()).toThrow('boom'); // the reader gets it (and reports it, if it is an effect)
+  expect(errorSpy).not.toHaveBeenCalled();
+});
