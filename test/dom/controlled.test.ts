@@ -550,3 +550,61 @@ describe('I3: radio groups', () => {
     expect([a.checked, b.checked, other.checked]).toEqual([true, false, true]);
   });
 });
+
+/** An IME keystroke: the browser changed the value inside an active composition. */
+function compose(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.setSelectionRange(value.length, value.length);
+  input.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+}
+
+describe('I4: a programmatic write during composition is deferred to compositionend, not dropped', () => {
+  it('accessor form, Android "Send -> setText(\'\')": the field is cleared at compositionend and later typing does not resurrect the text', async () => {
+    const input = textInput();
+    const { text, setText } = controlled(input, acceptAll, '');
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello'); // Gboard composes every word; the handler accepts composing input
+    expect(text()).toBe('hello');
+    setText(''); // Send
+    await frame();
+    expect(input.value).toBe('hello'); // the composition is not interrupted
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    expect(input.value).toBe('');
+    type(input, 'w');
+    expect(input.value).toBe('w');
+    expect(text()).toBe('w');
+  });
+
+  it('plain form: the same deferral applies to the compiler effect\'s delivery', async () => {
+    const input = textInput();
+    const [text, setText] = createSignal('');
+    createRoot(() => effect(() => text(), (v) => { setAttribute(input, 'use:value', v); }));
+    (input as any)[EVENT_KEY + 'input'] = (e: Event) => setText((e.currentTarget as HTMLInputElement).value);
+    delegateEvents(['input']);
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    await frame();
+    setText('');
+    await frame();
+    expect(input.value).toBe('hello');
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    expect(input.value).toBe('');
+    type(input, 'w');
+    await frame();
+    expect(input.value).toBe('w');
+    expect(text()).toBe('w');
+  });
+
+  it('composing input the handler accepted after the programmatic write is the newest value: compositionend keeps it (field and signal agree)', async () => {
+    const input = textInput();
+    const { text, setText } = controlled(input, acceptAll, '');
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    setText('');
+    await frame();
+    compose(input, 'hello w');
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    expect(input.value).toBe(text());
+    expect(input.value).toBe('hello w');
+  });
+});

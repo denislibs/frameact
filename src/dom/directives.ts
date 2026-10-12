@@ -73,6 +73,8 @@ interface Binding<E extends Element = Element> {
   effect: EffectNode | null;
   /** The deferred check, bound once per binding (no closure per event). */
   readonly runDeferred: () => void;
+  /** IME composition in progress (text controls only): no rollback, programmatic writes deferred. */
+  composing: boolean;
 }
 
 interface ValueBinding extends Binding<TextControl> {
@@ -86,7 +88,8 @@ interface ValueBinding extends Binding<TextControl> {
   /** An expiry task is queued: the snapshot lives until the end of the frame it was taken in. */
   expiring: boolean;
   readonly expire: () => void;
-  composing: boolean;
+  /** A programmatic write arrived during composition: compositionend applies the newest value. */
+  deferredWrite: boolean;
 }
 
 type CheckedBinding = Binding<HTMLInputElement>;
@@ -105,9 +108,9 @@ function current(b: Binding<any>): unknown {
   return b.accessor !== null ? untrack(b.accessor) : b.delivered;
 }
 
-/** Compare the live DOM with the authoritative value and restore it if they differ. */
+/** Compare the live DOM with the authoritative value and restore it if they differ. Never mid-composition. */
 function check(b: Binding<any>): void {
-  b.kind.write(b, current(b));
+  if (!b.composing) b.kind.write(b, current(b));
 }
 
 /** The element's live binding of this kind; a binding whose delivering effect was disposed is dropped. */
@@ -160,6 +163,7 @@ function newBinding<E extends Element>(kind: Kind<any>, el: E): Binding<E> {
     pending: false,
     effect: null,
     runDeferred: () => runDeferred(b),
+    composing: false,
   };
   return b;
 }
@@ -232,10 +236,16 @@ function mapCaret(i: number, prev: string, next: string, suffix: number): number
 }
 
 function writeValue(b: ValueBinding, v: unknown): void {
-  if (b.composing) return; // IME: never write mid-composition
   const el = b.el;
   const next = toText(v);
   const prev = el.value;
+  if (b.composing) {
+    // IME: writing now would break the composition. Only programmatic writes reach this point
+    // (rollback checks are off while composing): remember it, compositionend applies the newest
+    // value. A delivery equal to the DOM (the handler accepted composing input) changes nothing.
+    if (prev !== next) b.deferredWrite = true;
+    return;
+  }
   if (prev === next) return;
   el.value = next;
   if (b.hasSelection && document.activeElement === el && 'setSelectionRange' in el) {
@@ -263,7 +273,7 @@ const valueKind: Kind<ValueBinding> = {
     b.selEnd = 0;
     b.expiring = false;
     (b as { expire: () => void }).expire = () => expire(b);
-    b.composing = false;
+    b.deferredWrite = false;
     return b;
   },
   write: writeValue,
@@ -315,8 +325,15 @@ function onCompositionEnd(e: Event): void {
   if (!b) return;
   b.composing = false;
   snapshot(b);
-  verify(b);
   armExpiry(b);
+  if (b.deferredWrite) {
+    // A programmatic write (Send -> setText('')) arrived during the composition: it wins over the
+    // composed text. The newest authoritative value is applied and this end skips the rollback check.
+    b.deferredWrite = false;
+    writeValue(b, current(b));
+    return;
+  }
+  verify(b);
 }
 
 function onFocusOut(e: Event): void {
