@@ -79,7 +79,7 @@ export function createShowTransition(options: ShowTransitionOptions): ShowTransi
   const wantsOpen = (): boolean => !!(forceOpen?.() || isOpen());
 
   let current: ShowTransitionState = options.noMountTransition && untrack(wantsOpen) ? 'open' : 'closed';
-  const [state, setState] = createSignal(current);
+  const [state, setState] = createSignal<ShowTransitionState>(current);
   const [shouldRender, setShouldRender] = createSignal(current !== 'closed');
   let el: Element | undefined;
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
