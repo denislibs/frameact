@@ -9,7 +9,8 @@ Each adapted file carries an `Adapted from …` header. The license texts follow
 
 ## teact (Ajaxy/teact) — MIT License, Copyright (c) 2022 Alexander Zinchuk
 `src/scheduler/schedulers.ts`, `src/scheduler/fasterdom.ts`, `src/scheduler/heavyAnimation.ts`,
-`src/dom/classes.ts`, `src/dom/styles.ts`, `src/dom/directives.ts`, `src/dom/list.ts`
+`src/dom/classes.ts`, `src/dom/styles.ts`, `src/dom/directives.ts`, `src/dom/list.ts`,
+`src/stricterdom/stricterdom.ts`, `src/stricterdom/layoutCauses.ts`
 
 ## dom-expressions (ryansolid/dom-expressions) — MIT License, Copyright (c) 2018-2019 Ryan Carniato
 `src/dom/constants.ts`, `src/dom/template.ts`, `src/dom/insert.ts`, `src/dom/events.ts`,

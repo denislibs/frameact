@@ -5,3 +5,4 @@ coverage
 bench/reactivity/.upstream/
 bench/store/.out/
 .DS_Store
+test/chrome/dist/

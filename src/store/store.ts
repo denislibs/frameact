@@ -216,7 +216,10 @@ function trackKey(node: StoreNode, key: PropertyKey, value: unknown) {
   if (s === undefined) {
     s = sigs[key] = createLeafNode(value, node, key);
     node.nsigs++;
-    if (DEV) storeStats.leafSignals++;
+    if (DEV) {
+      storeStats.leafSignals++;
+      s.id = `store.${String(key)}`; // "why did this run" names the key (spec §3.4)
+    }
   }
   trackNode(s);
 }
@@ -226,7 +229,10 @@ function trackSelf(node: StoreNode) {
   let s = node.self;
   if (s === null) {
     s = node.self = createLeafNode(0, node, SELF);
-    if (DEV) storeStats.leafSignals++;
+    if (DEV) {
+      storeStats.leafSignals++;
+      s.id = 'store.$TRACK';
+    }
   }
   trackNode(s);
 }
@@ -236,7 +242,10 @@ function trackVals(node: StoreNode) {
   let s = node.vals;
   if (s === null) {
     s = node.vals = createLeafNode(0, node, VALS);
-    if (DEV) storeStats.leafSignals++;
+    if (DEV) {
+      storeStats.leafSignals++;
+      s.id = 'store.$VALUES';
+    }
   }
   trackNode(s);
 }

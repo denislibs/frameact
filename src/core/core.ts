@@ -84,12 +84,32 @@ let storeWalk = false;
 /** Live readers a store walk skipped ((node, state) pairs), re-delivered by plain walks right after it. */
 let liveRelays: any[] | null = null;
 
+/**
+ * DEV ("why did this run"): a re-delivery (live relay, latched write) is a walk with no link of its
+ * own; these carry the cause of the original walk so the effect it schedules still names the write.
+ * `liveRelayWhy` runs parallel to `liveRelays` ((dep, root) per (node, state)); `relayDep`/`relayRoot`
+ * are set only around the re-delivering `notify`; `missedWhy` is kept per node that latched a write.
+ */
+let liveRelayWhy: (Computation | null)[] | null = null;
+let relayDep: Computation | null = null;
+let relayRoot: Computation | null = null;
+const missedWhy: WeakMap<Computation, [Computation | null, Computation | null]> | null = DEV ? new WeakMap() : null;
+
 /** Re-deliver the skipped live readers (after the outermost store walk), as plain walks. */
 function flushLiveRelays() {
   while (liveRelays !== null) {
     const r = liveRelays;
+    const why = liveRelayWhy;
     liveRelays = null;
-    for (let i = 0; i < r.length; i += 2) notify(r[i], r[i + 1], true, null);
+    liveRelayWhy = null;
+    for (let i = 0; i < r.length; i += 2) {
+      if (DEV && why !== null) {
+        relayDep = why[i];
+        relayRoot = why[i + 1];
+      }
+      notify(r[i], r[i + 1], true, null);
+      if (DEV) relayDep = relayRoot = null;
+    }
   }
 }
 
@@ -133,6 +153,14 @@ let writeEpoch = 0;
 
 let effectScheduler: (node: Computation) => void = () => {};
 let effectDisposeHook: (node: Computation) => void = () => {};
+
+/**
+ * DEV ("why did this run", spec §3.4): set right before `effectScheduler` is called — the dep whose
+ * link reached the effect (a signal or a memo) and the root of the walk (the node that was written).
+ * Live bindings: effects.ts reads them inside its scheduler hook. Null outside a walk / in prod.
+ */
+export let notifyDep: Computation | null = null;
+export let notifyRoot: Computation | null = null;
 
 /** effects.ts installs the function that schedules a dirty effect (called once per CLEAN→dirty transition). */
 export function setEffectScheduler(fn: (node: Computation) => void) {
@@ -1001,10 +1029,17 @@ export function update(node: Computation) {
         // A latched write is re-delivered as a plain walk (never parked: conservative).
         const prevWalk = storeWalk;
         storeWalk = false;
+        if (DEV) {
+          const why = missedWhy!.get(node);
+          missedWhy!.delete(node); // (the pair names a store leaf: do not pin it)
+          relayDep = why === undefined ? null : why[0];
+          relayRoot = why === undefined ? null : why[1];
+        }
         try {
           notify(node, STATE_DIRTY, true, null); // propagates to observers / schedules an effect
         } finally {
           storeWalk = prevWalk;
+          if (DEV) relayDep = relayRoot = null;
         }
       }
     } else if (node._deps !== null) {
@@ -1048,6 +1083,7 @@ function link(dep: Computation, sub: Computation) {
     (dep._state !== STATE_CLEAN && !(dep._flags & F_COMPUTING))
   ) {
     sub._flags |= F_MISSED;
+    if (DEV) missedWhy!.set(sub, [dep, dep]);
   }
   const newLink: Link = {
     version: currentCycle,
@@ -1146,8 +1182,15 @@ let notifyTop = 0;
  * node and reads it first) appends a new link behind the walk, which reaches it again, forever.
  * An effect that ran mid-walk BEFORE a memo it read was marked has an older link: visited.
  */
+/** DEV: record the dep that reached the effect being scheduled and the walk's root (see notifyDep). */
+function stampNotify(l: Link | null, via: Link | null, rootDep: Computation | null) {
+  notifyDep = l !== null ? l.dep : via !== null ? via.dep : relayDep;
+  notifyRoot = rootDep ?? relayRoot;
+}
+
 function notify(node: Computation, state: number, latch: boolean, via: Link | null) {
   const base = notifyTop;
+  const rootDep = DEV && via !== null ? via.dep : null; // the written node (DEV attribution)
   let l: Link | null = null, // the link `node` was reached through (null: the root, via `via`)
     lc = 0; // the cycle `l`'s level was entered at
   try {
@@ -1160,7 +1203,10 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
         // end. A computed's result write is latched only if this pass already consumed that dep
         // (its link is confirmed in the running compute) — otherwise it is a lazy pull this pass
         // reads fresh (maverick's behavior; the jagged diamond).
-        if (latch || consumed(node, l !== null ? l : via)) node._flags = flags | F_MISSED;
+        if (latch || consumed(node, l !== null ? l : via)) {
+          node._flags = flags | F_MISSED;
+          if (DEV) missedWhy!.set(node, [l !== null ? l.dep : via !== null ? via.dep : relayDep, rootDep ?? relayRoot]);
+        }
       } else {
         const prev = node._state;
         if (!storeWalk) {
@@ -1172,21 +1218,33 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
             // only on the CLEAN → dirty edge (or on unpark). (Effects have no subscribers.)
             node._state = state;
             if (flags & (F_UNSURE | F_STORE | F_PARKED)) node._flags = flags & ~(F_UNSURE | F_STORE | F_PARKED);
-            if (node._effect && (prev === STATE_CLEAN || flags & F_PARKED)) effectScheduler(node);
+            if (node._effect && (prev === STATE_CLEAN || flags & F_PARKED)) {
+              if (DEV) stampNotify(l, via, rootDep);
+              effectScheduler(node);
+            }
             subs = node._subs;
           } else if (flags & (F_UNSURE | F_STORE)) {
             node._flags = flags & ~(F_UNSURE | F_STORE | F_PARKED);
-            if (flags & F_PARKED) effectScheduler(node);
+            if (flags & F_PARKED) {
+              if (DEV) stampNotify(l, via, rootDep);
+              effectScheduler(node);
+            }
             subs = node._subs;
           }
         } else if (prev === STATE_CLEAN) {
           // Store walk, CLEAN → dirty: tag. A live reader is not marked: it is re-delivered by a
           // plain walk once this store walk is done (never tagged or parked, nor anything below it).
-          if (flags & (F_LIVE | F_LIVE_PIN)) (liveRelays ??= []).push(node, state);
+          if (flags & (F_LIVE | F_LIVE_PIN)) {
+            (liveRelays ??= []).push(node, state);
+            if (DEV) (liveRelayWhy ??= []).push(l !== null ? l.dep : via !== null ? via.dep : null, rootDep);
+          }
           else {
             node._state = state;
             node._flags = (flags & ~F_UNSURE) | F_STORE;
-            if (node._effect) effectScheduler(node);
+            if (node._effect) {
+              if (DEV) stampNotify(l, via, rootDep);
+              effectScheduler(node);
+            }
             subs = node._subs;
           }
         } else if (prev < state) {
@@ -1233,5 +1291,6 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
   } finally {
     // Normally already at `base`; after a throwing scheduler, drop this call's frames.
     while (notifyTop > base) notifyStack[--notifyTop] = null;
+    if (DEV) notifyDep = notifyRoot = null; // (the stamps were read by the scheduler hook: do not pin a freed store leaf)
   }
 }

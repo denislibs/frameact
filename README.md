@@ -21,16 +21,16 @@ behind Telegram Web A:
   never interleave with DOM writes (no layout thrashing);
 - **heavy-animation gating** — while a blocking animation runs, frame work is parked and released in one
   frame when it ends, globally or for just one subtree;
-- **stricterdom** *(planned)* — a dev mode that catches phase violations at the DOM-API level and names the
-  offending effect.
+- **stricterdom** — a dev mode that catches phase violations at the DOM-API level and names the offending effect
+  (`Message > MessageMeta > span.style:color [mutate]`).
 
 > **Status: early development.** The reactive core ([PR #1](https://github.com/denislibs/frameact/pull/1)) and
 > the DOM runtime are implemented: `frameact/dom` for the Solid 2.0 JSX compiler
 > (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (including `order="manual"`),
 > `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, controlled inputs (`use:value` / `use:checked`),
 > `HeavyAnimationScope`, a context `Provider` and the `frameact/vite` plugin; the store (`frameact/store`,
-> a signal tree with cause-tagged parking during heavy animations) is in. Next: stricterdom. Not published
-> to npm yet. APIs may change.
+> a signal tree with cause-tagged parking during heavy animations) is in, and so is stricterdom (`frameact/stricterdom`:
+> DEV phase checks with effect attribution, a run profiler). Next: the benchmark. Not published to npm yet. APIs may change.
 
 ## Why
 
@@ -49,7 +49,7 @@ component re-render.
 | When it flushes | rAF, one pass | microtask | rAF, one pass |
 | measure / mutate phases | yes | no | yes |
 | Heavy-animation gating | global | no | global + per subtree |
-| Phase-violation checks | stricterdom | no | stricterdom + effect attribution *(planned)* |
+| Phase-violation checks | stricterdom | no | stricterdom + effect attribution |
 
 ## How it works
 
@@ -83,7 +83,9 @@ What the frame guarantees:
 - a signal written in a measure apply reaches mutation effects **in the same frame**;
 - writes made while computing in the mutate phase (e.g. a keyed list updating its rows) land **in the same drain**;
 - a measure effect dirtied from the mutate phase runs next frame (and warns in dev);
-- `frameForcedReflow` for the rare "mutate → measure → mutate" (FLIP) case, still inside one frame.
+- `frameForcedReflow` for the rare "mutate → measure → mutate" (FLIP) case, still inside one frame;
+- `flushSync()` commits the frame synchronously when the current task must see the DOM (an iOS swipe-back gesture, a View
+  Transition callback): allowed from event handlers, store actions and tickEnd effects; inside a frame pass it throws.
 
 Heavy animations:
 
@@ -165,6 +167,43 @@ setState('messages', chatId, reconcile(chunk)); // immutable data from the serve
 <For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
 ```
 
+## stricterdom (dev mode)
+
+A dev-only guard that turns the phase discipline into a checked invariant at the DOM-API level, ported from teact:
+layout-forcing getters and methods (`offsetHeight`, `getBoundingClientRect()`, `scrollTop`, `focus()`,
+`getComputedStyle()`, `selectionStart`, …) report a violation outside the measure phase, and a `MutationObserver` on
+`document.body` reports live-DOM writes outside the mutate phase. Every violation names the effect:
+
+```ts
+import { enableStrict, setHandler } from 'frameact/stricterdom';
+if (import.meta.env.DEV) enableStrict();
+// [frameact/stricterdom] Unexpected measurement `offsetHeight` in Message > MessageMeta > span.style:color [mutate]
+// [frameact/stricterdom] Unexpected mutation `class` of <button id="send"> outside an effect [measure]
+```
+
+Component names come from the compiler's `sourceNames` (on in dev), binding names are the compiler's labels. Detached
+subtrees are never reported (that is how the runtime builds DOM), nor are `data-*` attributes, `details[open]`, edits
+inside `contenteditable` hosts and anything under `data-stricterdom-ignore`. Escapes: `forceMeasure(cb)` reads layout from
+the mutate phase (scroll anchoring; a plain call anywhere else), `forceMutation(cb, nodes)` writes from the measure phase
+(a mount — `render()` and `Portal` use it), `suppressStrict(cb)` turns both checks off for third-party code,
+`setHandler(fn)` replaces `console.error`. A throw from the handler reaches the code that read layout, but mutation
+violations are reported at phase boundaries and after applies, where a throw is caught and logged: to fail a test on them,
+collect the errors in the handler and assert (or fail on `console.error`). Mutation records are judged at every phase change
+and around every effect apply, so `flushSync()` never produces a false positive and the report names the effect that made
+the write.
+
+A violation's `message` and `path` are plain text that may contain content-derived strings (the element's `id` and
+`class` are quoted and cut to 64 characters, store keys too): a dev overlay must render them with `textContent`, never
+`innerHTML`, and mount itself under `data-stricterdom-ignore` (the handler's own reads and writes are never reported, but
+the overlay's later updates would be). stricterdom is a development linter, not a security boundary.
+
+The same switch turns on the DEV profiler: a run slower than 7 ms warns with its path (`Slow effect run: 12.3 ms in
+Message > span.children [mutate]`), so does a frame phase (`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`),
+`getRunStats()` counts runs per path, and `enableRunLog({ filter })` prints why each effect ran:
+`run #3 ChatList > li.class [mutate] ← signal "store.title" via memo "chatTitle" in ChatList`. All of it is dead code in
+production builds (`process.env.NODE_ENV === 'production'`): `enableStrict`, `setHandler` and the run-log functions become
+no-ops, `forceMeasure`, `forceMutation` and `suppressStrict` just call `cb()`.
+
 ## Inspiration and credits
 
 - **[teact](https://github.com/Ajaxy/teact)** by Alexander Zinchuk — the frame discipline, fasterdom,
@@ -194,7 +233,7 @@ Third-party code is MIT-licensed (udomdiff: ISC) and attributed in each adapted 
 | 1 · core | signals, two-phase effects, frame queues, heavy-animation gating, `mapArray`, context | ✅ done — [PR #1](https://github.com/denislibs/frameact/pull/1) |
 | 2 · dom | runtime for the JSX compiler, `For`/`Show`/`Switch`, controlled inputs, manual-order lists, Vite plugin | ✅ done |
 | 3 · store | signal tree store: per-leaf subscriptions, in-place path writes, `reconcile`, cause-tagged parking during animations, typed actions | ✅ done |
-| 4 · stricterdom | dev-mode phase checks with effect attribution | ⏳ |
+| 4 · stricterdom | dev-mode phase checks with effect attribution, run profiler, `flushSync` production contract | ✅ done |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact on messenger scenarios (Chromium + WebKit, CPU ×4) | ⏳ |
 
 Design: [`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md)
@@ -207,6 +246,7 @@ Requires Node ≥ 22.12 and pnpm.
 ```bash
 pnpm install
 pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
+pnpm test:chrome  # stricterdom in headless Chrome (real layout, real observer timing); needs Google Chrome
 ```
 
 Toolchain: TypeScript 7 (native), Vite 8 / Vitest 5 + jsdom, oxlint.

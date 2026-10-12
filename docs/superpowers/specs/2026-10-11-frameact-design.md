@@ -90,9 +90,18 @@ frameact/vite            — Vite-плагин (обёртка @solidjs/babel-pl
   кадры через `requestMutation`, как в teact. Задачи, добавленные во время
   выполнения сырой очереди, уходят в следующий кадр (как в teact); очереди
   **run'ов** ядра (§3.2) дренируются до пустоты — это разные вещи.
-- `flushSync()`: синхронный дрен всех четырёх очередей с корректным `setPhase`
-  и сбросом `waiting` у throttle; реентер — ошибка в dev. Гейт `flushSync` **не**
-  обходит. Нужен для тестов; `render()` в нём не нуждается (§3.3).
+- `flushSync()`: синхронный проход кадра — все четыре очереди с настоящей
+  последовательностью `setPhase`. **Контракт для прода (план 4):** разрешён откуда
+  угодно *вне* прохода кадра — из обработчика события, экшена стора, tickEnd-эффекта —
+  когда DOM должен быть закоммичен до конца текущей задачи (iOS-жест «назад»,
+  колбэк View Transition: `ungated(() => setState(…)); flushSync()`). *Внутри*
+  прохода (compute/apply кадрового эффекта, задача `requestMeasure`/`requestMutation`/
+  `requestForcedReflow`, колбэк `forceMeasure`) — ошибка в dev и в проде: фазы
+  переплелись бы (счётчик `passDepth` в `fasterdom.ts`; микротаск между сегментами
+  rAF-прохода — tickEnd-дрен — *не* внутри прохода). Гейт `flushSync` **не** обходит.
+  stricterdom не даёт ложных срабатываний внутри `flushSync`: записи
+  `MutationObserver` разбираются при каждой смене фазы, а не в колбэке (§3.4).
+  `render()` в нём не нуждается (§3.3).
 
 ### 3.2 `core` — сигналы и эффекты
 
@@ -723,20 +732,72 @@ acceptance-тестом (§5); ожидаемый состав: `template`, `ins
 
 ### 3.4 `stricterdom`
 
-Порт `teact/src/lib/fasterdom/stricterdom.ts` и `layoutCauses.ts`: патч
-геттеров/методов, вызывающих layout → ошибка, если `phase !== 'measure'`;
-`MutationObserver` на `document.body` → ошибка, если мутация при `phase !== 'mutate'`.
-Detached-узлы игнорируются (`document.contains`), поэтому создание поддеревьев
-нарушением не считается. `data-*` и `contentEditable` исключены. `forceMeasure`,
-`forceMutation`, `suppressStrict`, `setHandler` — как в teact. Включается в dev
-(`enableStrict()`). `layoutCauses` дополняется `selectionStart/selectionEnd`.
+Порт `teact/src/lib/fasterdom/stricterdom.ts` и `layoutCauses.ts` (план 4): патч
+геттеров/методов, вызывающих layout → нарушение, если фаза не `measure`;
+`MutationObserver` на `document.body` → нарушение, если мутация при фазе не `mutate`.
+Detached-узлы игнорируются (`contains` документа через прототипные натив-методы —
+DOM clobbering, `natives.ts`), поэтому создание поддеревьев нарушением не считается. Исключения: `data-*`-атрибуты, `details[open]`, `childList`
+внутри `contentEditable`-хоста (`isContentEditable`; в jsdom — `closest('[contenteditable]')`),
+поддерево под `data-stricterdom-ignore` (константа `IGNORE_SUBTREE_ATTR`). `layoutCauses`
+дополнен `selectionStart`/`selectionEnd` (`HTMLInputElement`, `HTMLTextAreaElement`).
+Включается в dev (`enableStrict()`); в проде всё дерево модуля — мёртвый код (`DEV`),
+публичные функции — `cb => cb()`.
 
-**Атрибуция.** Ядро в dev держит `currentEffect` на время `run`. Обработчик по
-умолчанию дополняет ошибку путём: `Message > MessageMeta > span.textContent [mutate]`
-(имена компонентов — третий аргумент `createComponent`, имена биндингов —
-`sourceNames.bindings`, фаза — планировщик эффекта, scope — если есть). Туда же:
-«slow run» (> 7 мс) с тем же путём и предупреждение «measure-эффект загрязнён из
-mutate-фазы».
+**Фаза и записи observer'а.** Фаза берётся из планировщика (`getPhase`), а не хранится
+отдельно; `forceMeasure` подменяет её локально. Записи `MutationObserver` **не ждут
+колбэка**: они снимаются (`takeRecords`) при каждой смене фазы (`onPhaseChange`) и
+проверяются против *предыдущей* фазы, а также до и после каждого apply эффекта вне
+mutate-фазы (хук `setApplyHook` ядра) и вокруг `forceMeasure`/`forceMutation`/
+`suppressStrict`. Поэтому (а) внутри `flushSync` нет ложных срабатываний (колбэк
+observer'а пришёл бы уже после прохода, с фазой `measure`), (б) запись из apply
+measure-/tickEnd-эффекта атрибутируется этому эффекту синхронно, а запись, сделанная
+до apply (обработчик события, сырая задача), — не ему (в браузере tickEnd-дрен идёт
+раньше колбэка observer'а). `suppressStrict` —
+счётчик, а не unpatch/repatch; записи окна отбрасываются по его закрытию.
+
+**Публичный API `frameact/stricterdom`:** `enableStrict()`, `disableStrict()`,
+`isStrictEnabled()`, `forceMeasure(cb)` (в mutate-фазе — окно measure, запись внутри —
+нарушение; в любом другом контексте — обычный вызов, без ошибки),
+`forceMutation(cb, nodes, allowAnyPhase?)` (dev-ошибка в mutate-фазе без `allowAnyPhase`;
+санкционированы записи, чья цель — один из `nodes`; вложенная санкция того же узла не
+снимает внешнюю), `suppressStrict(cb)`,
+`setHandler(handler?)` (бросок из обработчика доходит до вызывающего только для
+нарушений-измерений; для мутаций он перехватывается и пишется в `console.error`, потому
+что мутации сообщаются на границах фаз и после apply, а не в точке записи — чтобы
+уронить тест на них, собирайте ошибки в обработчике), класс `StrictViolationError
+{ kind: 'measure' | 'mutation'; detail; phase; path; target }`, `IGNORE_SUBTREE_ATTR`,
+`LAYOUT_CAUSES`. Шов
+`strictHooks.forceMutation` в `src/dom/strict.ts` (его зовут `render()` и `Portal`)
+при `enableStrict()` указывает на санкционирование без проверки фазы.
+
+Обработчик нарушений не реентерабелен: на время его вызова чтения layout не проверяются, а
+записи, которые он сделал (оверлей в `<body>`), отбрасываются. `message`/`path` — простой
+текст с возможными строками из контента (`id`/`class` целевого элемента, ключи стора):
+они берутся в кавычки (JSON-стиль) и обрезаются до 64 символов; оверлей обязан выводить их
+через `textContent` и монтироваться под `data-stricterdom-ignore`.
+
+**Атрибуция.** Ядро в dev держит `currentEffect` на время `run`. Сообщение:
+`[frameact/stricterdom] Unexpected measurement \`offsetHeight\` in Message > MessageMeta >
+span.style:color [mutate]` — имена компонентов (третий аргумент `createComponent`, из
+`sourceNames`), имя биндинга (метка компилятора или фасада: `div.class`, `measure`),
+фаза, в которой случилось нарушение; у мутации — ещё цель (`<button id="send">`); вне
+эффекта — `outside an effect`. Путь строит ядро (`src/core/debug.ts`: `ownerPath`,
+`effectPath`, `describeNode`), им же пользуется предупреждение «measure-эффект загрязнён
+из mutate-фазы» (`frame.ts`) — теперь с путём и источником записи.
+
+**Dev-профайлер (тот же выключатель, `runlog.ts`).** «Slow run» (> 7 мс, `SLOW_RUN_MS`)
+на прогон эффекта и на дрен фазы (с самым медленным эффектом); счётчики прогонов по
+пути (`getRunStats()`/`resetRunStats()`); лог «почему выполнился» (`enableRunLog({ filter })`
+/ `disableRunLog()`): `run #3 ChatList > li.class [mutate] ← signal "store.title" via memo
+"chatTitle" in ChatList`. Источник записывает `notify()` ядра перед вызовом планировщика
+(`notifyDep`/`notifyRoot`; на эффекте — до начала прогона: на старте метки уходят в локальные
+переменные и передаются наблюдателю, поэтому запись, сделанная самим прогоном, метит
+следующий, а освобождённый лист стора не удерживается; ре-доставки — live-реле и
+защёлкнутая запись — несут причину исходной записи), листья стора получают dev-id `store.<ключ>` / `store.$TRACK` /
+`store.$VALUES`; «самый медленный эффект» дрена — только из этого дрена
+(`getDrainingPhase`). Это замена `debugKey`/dblclick-дампов teact. В production-сборке
+всё перечисленное — мёртвый код; это проверяет тест `production.test.ts` (настоящий
+`vite build`).
 
 Следствие архитектуры: поскольку **все** записи в живой DOM идут через mutate-фазу,
 любая точка вне её — безопасное окно для чтения layout. В teact это соглашение, у
@@ -951,9 +1012,10 @@ frameact/
                           "./stricterdom", "./store", "./vite", "./jsx-runtime" (типы)
   src/
     core/                 форк maverick (+ правки §3.2), effects.ts (run, очереди run'ов,
-                          планировщики, гейтинг), context.ts, map.ts (+key fn)
+                          планировщики, гейтинг), context.ts, map.ts (+key fn),
+                          debug.ts (dev-атрибуция: ownerPath/effectPath/describeNode)
     scheduler/            fasterdom.ts (+flushSync), schedulers.ts, heavyAnimation.ts (scope'ы)
-    stricterdom/          stricterdom.ts, layoutCauses.ts, attribution.ts
+    stricterdom/          stricterdom.ts, layoutCauses.ts, runlog.ts (профайлер), index.ts
     dom/                  template.ts, insert.ts, props.ts (class token diff, style),
                           events.ts, directives.ts (use:value/use:checked),
                           list.ts (For, manual order), flow.ts (Show/Switch/Dynamic/Portal),
@@ -962,7 +1024,7 @@ frameact/
                           reconcile.ts, gate.ts (парковка по причине), actions.ts
     vite/                 index.ts
     jsx/                  jsx.d.ts (из dom-expressions) + типы директив
-  test/                   vitest + jsdom
+  test/                   vitest + jsdom; test/chrome — дорожка в headless Chrome (pnpm test:chrome)
   bench/                  teact/, solid2/, frameact/ — одно приложение, три реализации
   examples/               чат-лист + список сообщений (оба паттерна из §3.5)
   docs/superpowers/specs/
@@ -1012,7 +1074,21 @@ frameact/
   не даёт ошибки stricterdom.
 - stricterdom: чтение layout в mutate / запись в measure → ошибка с путём
   `Component > binding [phase]`; detached игнорируется; `selectionStart` в mutate
-  → ошибка.
+  → ошибка; исключения (`data-*`, `details[open]`, `contentEditable`,
+  `data-stricterdom-ignore`); `forceMeasure`/`forceMutation`/`suppressStrict`/`setHandler`;
+  `render` и `Portal` (в том числе Portal в Portal) через шов без ошибок; `flushSync` без
+  ложных срабатываний; запись из tickEnd-эффекта атрибутируется синхронно, а запись до
+  apply — не ему; clobbering `document.contains`/`document.body` не ломает проверки;
+  полное приложение на компиляторе (For keyed и manual, Show/Switch/Dynamic/Portal,
+  `use:value`, парковка) — 0 нарушений; профайлер: счётчики, лог «почему выполнился»,
+  slow run/drain (мок `performance.now`); production-сборка без dev-кода (`vite build`).
+
+**Дорожка в headless Chrome (`pnpm test:chrome`, не входит в `pnpm check`).** Vite-сборка
+`test/chrome/main.tsx` через плагин frameact, `vite preview`, Chrome `--headless=new
+--dump-dom`; сценарии — то, чего jsdom не умеет: настоящий layout под measure-эффектом,
+`innerText`/`elementFromPoint`/`scrollingElement`/`visualViewport`, порядок микротасков
+настоящего rAF-прохода и observer'а (в том числе tickEnd-дрен раньше колбэка observer'а),
+`isContentEditable`, `forceMeasure` с настоящим значением, `flushSync` из обработчика.
 
 **Acceptance-тест рантайма.** Все `__dom_fixtures__` из `@solidjs/babel-plugin`
 компилируются с нашей конфигурацией; каждый импортируемый символ экспортирован из
