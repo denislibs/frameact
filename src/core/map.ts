@@ -39,13 +39,19 @@ export function computedMap<Item, MappedItem>(
 }
 
 function updateMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[] {
-  let i = 0,
-    newItems = this._list() || [],
-    mapper = () => this._map(read.bind(this._nodes[i]), i);
+  const newItems = this._list() || [];
 
+  // Patch (frameact): transactional + per-row isolation, like the keyed modes. The vendored
+  // version ran the mapper unisolated and committed `_items/_len` last, so one throwing row emptied
+  // the whole list and left the rows created in that pass undisposed. Now a throwing mapper is
+  // reported through its row and maps to `undefined` (mapRow); the pass builds new arrays in locals
+  // and commits them only when it completes.
   scoped(() => {
-    if (newItems.length === 0) {
-      if (this._len !== 0) {
+    const newLen = newItems.length,
+      oldLen = this._len;
+
+    if (newLen === 0) {
+      if (oldLen !== 0) {
         dispose.call(this._scope, false);
         this._items = [];
         this._mappings = [];
@@ -56,23 +62,51 @@ function updateMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[] {
       return;
     }
 
-    for (i = 0; i < newItems.length; i++) {
-      if (i < this._items.length && this._items[i] !== newItems[i]) {
-        write.call(this._nodes[i], newItems[i]);
-      } else if (i >= this._items.length) {
-        this._mappings[i] = compute<MappedItem>(
-          (this._nodes[i] = createComputation(newItems[i], null)),
-          mapper,
-          null,
-        );
+    const oldItems = this._items,
+      mappings: MappedItem[] = new Array(newLen),
+      nodes: Computation<Item>[] = new Array(newLen);
+    let created: Computation[] | null = null,
+      retired: Computation[] | null = null;
+
+    try {
+      for (let i = 0; i < newLen; i++) {
+        if (i < oldLen) {
+          const node = this._nodes[i];
+          if (oldItems[i] === newItems[i]) {
+            nodes[i] = node;
+            mappings[i] = this._mappings[i];
+            continue;
+          }
+          // A row whose mapper failed is retried with the new item (otherwise the slot would stay
+          // empty for every future item at this position); the failed row is retired at commit.
+          if (!failedRows.has(node)) {
+            nodes[i] = node;
+            mappings[i] = this._mappings[i];
+            write.call(node, newItems[i]);
+            continue;
+          }
+          (retired ??= []).push(node);
+        }
+        const node = createComputation<Item>(newItems[i], null), // owned by this._scope
+          index = i;
+        (created ??= []).push(node);
+        nodes[i] = node;
+        mappings[i] = mapRow(node, () => this._map(read.bind(node), index)) as MappedItem;
       }
+    } catch (error) {
+      // Unreachable by design (mappers are isolated, writes never throw); safety net so the rows
+      // created in this pass cannot leak and the previous state stays consistent.
+      if (created) disposeChildren(this._scope, created);
+      throw error;
     }
 
-    if (i < this._items.length) disposeChildren(this._scope, this._nodes.slice(i, this._items.length));
+    if (retired) disposeChildren(this._scope, retired);
+    if (newLen < oldLen) disposeChildren(this._scope, this._nodes.slice(newLen, oldLen));
 
-    this._len = this._nodes.length = newItems.length;
+    this._nodes = nodes;
+    this._mappings = mappings;
     this._items = newItems.slice(0);
-    this._mappings = this._mappings.slice(0, this._len);
+    this._len = newLen;
   }, this._scope);
 
   return this._mappings;
@@ -111,8 +145,7 @@ export function computedKeyedMap<Item, MappedItem>(
 }
 
 function updateKeyedMap<Item, MappedItem>(this: KeyedMapData<Item, MappedItem>): any[] {
-  const newItems = this._list() || [],
-    indexed = this._map.length > 1;
+  const newItems = this._list() || [];
 
   // Patch (frameact): transactional. The pass builds new arrays in locals and commits them only
   // when it completes; a throw disposes the rows created in this pass and keeps the previous state
@@ -188,12 +221,9 @@ function updateKeyedMap<Item, MappedItem>(this: KeyedMapData<Item, MappedItem>):
           node = createComputation(j, null); // owned by this._scope
         created.push(node);
         nodes[j] = node;
-        mappings[j] = mapRow(
-          node,
-          indexed
-            ? () => this._map(item, read.bind(node))
-            : () => (this._map as (value: Item) => MappedItem)(item),
-        );
+        // the index accessor is always passed (one bind per row): the row node already is the index
+        // signal, and a `map.length`-based opt-out breaks `(item, ...rest)` / default-parameter mappers
+        mappings[j] = mapRow(node, () => this._map(item, read.bind(node)));
       }
 
       // 3) moved rows learn their new index
@@ -219,6 +249,12 @@ function updateKeyedMap<Item, MappedItem>(this: KeyedMapData<Item, MappedItem>):
 }
 
 /**
+ * Rows whose mapper threw. When the item of such a row changes it is retried (the row is disposed
+ * and recreated through `mapRow`) instead of staying empty forever.
+ */
+const failedRows = new WeakSet<Computation>();
+
+/**
  * frameact: runs a row's mapper under the row's owner. A throw is reported through the row
  * (onError handlers up its owner chain, else the console) and the row maps to `undefined` (the DOM
  * layer renders nothing for it); the other rows keep working.
@@ -227,6 +263,7 @@ function mapRow<T>(row: Computation, fn: () => T): T | undefined {
   try {
     return compute<T>(row, fn, null);
   } catch (error) {
+    failedRows.add(row);
     reportListError(row, error, 'row mapper');
     return undefined;
   }
@@ -336,13 +373,22 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
   // item signals in place and return the previous array — downstream `insert` sees no change.
   // Nothing is allocated on this path.
   if (start === newLen && newLen === oldLen) {
+    let retried: Mapped[] | null = null;
     for (let j = 0; j < newLen; j++) {
       const item = newItems[j];
       if (item !== oldItems[j]) {
         oldItems[j] = item;
-        write.call(this._itemNodes[j], item);
+        if (failedRows.has(this._itemNodes[j])) {
+          // Rare path: the row's mapper failed earlier; retry it with the new item and hand
+          // `insert` a new array (the mapping at `j` changed).
+          retried ??= this._mappings.slice();
+          const old = this._itemNodes[j];
+          scoped(() => createRow(this, item, j, retried!, this._itemNodes, this._indexNodes, null), this._scope);
+          disposeChildren(this._scope, [old]);
+        } else write.call(this._itemNodes[j], item);
       }
     }
+    if (retried !== null) this._mappings = retried;
     return this._mappings;
   }
 
@@ -451,7 +497,15 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
 
       // 5) Reused rows learn their new item and index (no-ops for the rows created above).
       for (let j = 0; j < newLen; j++) {
-        if (itemNodes[j]._value !== newItems[j]) write.call(itemNodes[j], newItems[j]);
+        if (itemNodes[j]._value !== newItems[j]) {
+          if (failedRows.has(itemNodes[j])) {
+            // the row's mapper failed earlier: retry it with the new item (old row retired at commit)
+            (removed ??= []).push(itemNodes[j]);
+            createRow(this, newItems[j], j, mappings, itemNodes, indexNodes, created);
+            continue;
+          }
+          write.call(itemNodes[j], newItems[j]);
+        }
         if (indexNodes[j]._value !== j) write.call(indexNodes[j], j);
       }
     } catch (error) {
@@ -484,11 +538,11 @@ function createRow<Item, Key, Mapped>(
   mappings: Mapped[],
   itemNodes: Computation<Item>[],
   indexNodes: Computation<number>[],
-  created: Computation[],
+  created: Computation[] | null,
 ) {
   const itemNode = createComputation<Item>(item, null); // owned by data._scope
   let indexNode!: Computation<number>;
-  created.push(itemNode);
+  created?.push(itemNode);
   itemNodes[j] = itemNode;
   mappings[j] = mapRow(itemNode, () => {
     indexNode = createComputation<number>(j, null); // owned by the row

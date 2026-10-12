@@ -23,9 +23,12 @@ frameact — реактивный UI-фреймворк для приложен�
   кадром после её окончания — глобально или только для одного поддерева;
 - **stricterdom** *(в планах)* — dev-режим, который ловит нарушения фаз на уровне DOM API и называет виновный эффект.
 
-> **Статус: ранняя разработка.** Реактивное ядро реализовано, прошло ревью и смержено
-> ([PR #1](https://github.com/denislibs/frameact/pull/1)); следующим идёт DOM-рантайм и интеграция с
-> JSX-компилятором. В npm пока не опубликован, API может меняться.
+> **Статус: ранняя разработка.** Реактивное ядро ([PR #1](https://github.com/denislibs/frameact/pull/1)) и
+> DOM-рантайм реализованы: `frameact/dom` для JSX-компилятора Solid 2.0
+> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (включая `order="manual"`),
+> `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, контролируемые инпуты (`use:value` / `use:checked`),
+> `HeavyAnimationScope`, context `Provider` и Vite-плагин `frameact/vite`. Дальше — стор и stricterdom.
+> В npm пока не опубликован, API может меняться.
 
 ## Зачем
 
@@ -92,8 +95,49 @@ provideHeavyAnimationScope(scope);
 scope.begin(300, true);
 ```
 
-Компоненты будут писаться в чистом Solid-стиле — выполняются один раз, пропсы-геттеры — и компилироваться
-JSX-компилятором Solid 2.0, настроенным на рантайм frameact.
+Компоненты пишутся в чистом Solid-стиле — выполняются один раз, пропсы-геттеры — и компилируются
+JSX-компилятором Solid 2.0, настроенным на рантайм frameact (`moduleName: "frameact/dom"`):
+
+```ts
+// vite.config.ts
+import frameact from 'frameact/vite';
+export default { plugins: [frameact()] };
+// tsconfig.json: "jsx": "preserve", "jsxImportSource": "frameact"
+```
+
+```tsx
+import { createSignal } from 'frameact';
+import { render } from 'frameact/dom';
+
+function Composer() {
+  const [text, setText] = createSignal('');
+  return <input use:value={text} onInput={(e) => setText(e.currentTarget.value.trimStart())} />;
+}
+render(() => <Composer />, document.getElementById('app')!);
+```
+
+`class=` / `classList=` / спреды диффят токены классов, поэтому императивный `addExtraClass` переживает
+обновления; строковый `style=` пишет `cssText` и несовместим с `setExtraStyles`. Контролируемые инпуты —
+`use:value` / `use:checked`: реактивный `value=` пишется как свойство, и Vite-плагин предупреждает об этом в dev. Чтобы
+протолкнуть значение через активную IME-композицию (например, очистить поле по «Отправить»), сначала обновите сигнал,
+затем вызовите `forceControlledValue(el)` из обработчика пользовательского события (`isForcingControlledValue`
+позволяет распознать этот цикл в ваших `blur`/`focus`).
+
+**Безопасность.** Запись атрибутов отклоняет URL `javascript:` / `vbscript:`, `data:` не для медиа, строковые
+обработчики `on*` и `srcdoc=`; явный выход для доверенного HTML — `prop:srcdoc`. В production отказы тихие, в DEV — это
+`console.error`.
+
+**Граница доверия: `<Dynamic component="…">`.** Строковый `component` — это имя тега, а имя тега — ключ, а не
+значение, поэтому политика атрибутов тут не поможет: по имени достижимы `style`, `base`, `meta`, `link`, `iframe`,
+`object` и `embed`. Имя должно приходить от автора, но не из контента (сообщения, разметка ботов). Имя проверяется
+(`/^[a-zA-Z][a-zA-Z0-9-]*$/`, иное ничего не рендерит и пишет DEV-ошибку), а `script` создаётся инертным (клон из
+разобранного шаблона, его текст не выполняется); остальной allow-list остаётся за вами.
+
+**Вне политики.** Политика охраняет *значения* атрибутов. Явные приёмники и выбор ключей не проверяются:
+`innerHTML=`, `prop:*` (в том числе скомпилированные `prop:href` и `prop:srcdoc`), `setProperty`, *ключи* spread-объекта
+(`{...bag}` может назвать `innerHTML`, `prop:*`, `use:*`), строковый `component` у `<Dynamic>` и `<script src>` с
+недоверенным URL (фильтр схем тут бессилен, помогает CSP `script-src`). Держите их входы под своим контролем.
+`<iframe srcdoc=…>` отклоняется и не типизирован; осознанная запись — `prop:srcdoc`.
 
 ## Вдохновение и благодарности
 
@@ -110,14 +154,16 @@ JSX-компилятором Solid 2.0, настроенным на рантай
 - **[SolidJS](https://github.com/solidjs/solid)** и **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
   Райана Карниато — модель компонентов, JSX-компилятор и устройство DOM-рантайма.
 
-Сторонний код распространяется по MIT, авторство указано в каждом адаптированном файле.
+Сторонний код распространяется по MIT (udomdiff — ISC), авторство указано в каждом адаптированном файле.
+Фикстуры компилятора в `test/dom/fixtures` вендорены дословно из solidjs/solid и вместо заголовков в файлах
+сопровождаются файлом `SOURCE`.
 
 ## Дорожная карта
 
 | План | Что входит | Статус |
 |---|---|---|
 | 1 · core | сигналы, двухфазные эффекты, кадровые очереди, гейтинг анимаций, `mapArray`, context | ✅ готово — [PR #1](https://github.com/denislibs/frameact/pull/1) |
-| 2 · dom | рантайм для JSX-компилятора, `For`/`Show`/`Switch`, контролируемые инпуты, списки с ручным порядком, Vite-плагин | 🛠 планирование |
+| 2 · dom | рантайм для JSX-компилятора, `For`/`Show`/`Switch`, контролируемые инпуты, списки с ручным порядком, Vite-плагин | ✅ готово |
 | 3 · store | глобальный стор в стиле TeactN (`withGlobal`, action handlers) с распространением, учитывающим анимации | ⏳ |
 | 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта | ⏳ |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact на сценариях мессенджера (Chromium + WebKit, CPU ×4) | ⏳ |
@@ -138,5 +184,5 @@ pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
 
 ## Лицензия
 
-[MIT](LICENSE). Вендоренный и адаптированный сторонний код (maverick-js/signals, teact, dom-expressions) —
-тоже MIT, см. [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
+[MIT](LICENSE). Вендоренный и адаптированный сторонний код (maverick-js/signals, teact, dom-expressions, solidjs/solid — части
+web-клиента и фикстуры компилятора) — тоже MIT, udomdiff — ISC, см. [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

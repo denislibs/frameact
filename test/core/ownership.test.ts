@@ -79,17 +79,19 @@ describe('children list', () => {
     for (const n of [a, b, c, d, e]) expect(n[SCOPE]).toBeNull();
   });
 
-  it('removing children one by one from the middle is linear (4N ≤ 8× N)', () => {
-    const N = 10_000;
+  it('removing children one by one from the middle is linear (4N costs ~4x, a quadratic list ~16x)', () => {
+    const N = 20_000;
     removeOneByOne(N); // warm-up (JIT)
     removeOneByOne(4 * N);
+    // CPU time, not wall-clock: a loaded machine (50 jsdom files in parallel) steals wall time from either
+    // side. The minimum over interleaved repetitions drops the remaining noise; 10x sits between 4x and 16x.
     let tN = Infinity,
       t4N = Infinity;
-    for (let r = 0; r < 5; r++) {
+    for (let r = 0; r < 9; r++) {
       tN = Math.min(tN, removeOneByOne(N));
       t4N = Math.min(t4N, removeOneByOne(4 * N));
     }
-    expect(t4N).toBeLessThanOrEqual(8 * tN);
+    expect(t4N / tN).toBeLessThanOrEqual(10);
   });
 });
 
@@ -102,10 +104,11 @@ function removeOneByOne(n: number) {
   const p = createScope();
   const kids: Scope[] = [];
   for (let i = 0; i < n; i++) kids.push(scoped(() => createScope(), p)!);
-  const t0 = performance.now();
+  const t0 = process.cpuUsage();
   for (let i = 1; i < n; i += 2) dispose.call(kids[i]);
   for (let i = n - 2 + (n % 2); i >= 0; i -= 2) dispose.call(kids[i]);
-  const ms = performance.now() - t0;
+  const used = process.cpuUsage(t0);
+  const ms = (used.user + used.system) / 1000;
   expect(childrenOf(p)).toEqual([]);
   return ms;
 }

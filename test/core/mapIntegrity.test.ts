@@ -108,7 +108,9 @@ describe('M1: keyed-by-function map (computedKeyedMapBy)', () => {
       $list.set([{ id: 'a', text: String(n) }, { id: 'poison' }, { id: 'c', text: String(n) }]);
       readSafe(rows);
     }
-    expect(mapped).toHaveBeenCalledTimes(3);
+    // a, poison, c once; the poison row is retried on each new poison object (N1: a failed row is
+    // retried when its item changes), the healthy rows only update in place
+    expect(mapped).toHaveBeenCalledTimes(3 + 5);
     const result = rows();
     expect(result[0].text).toBe('5');
     expect(result[1]).toBeUndefined();

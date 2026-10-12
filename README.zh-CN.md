@@ -22,8 +22,11 @@ frameact 是一个面向"每一帧都很重要"的应用的响应式 UI 框架�
   可以作用于全局，也可以只作用于某个子树；
 - **stricterdom** *（计划中）* —— 开发模式下在 DOM API 层面捕获阶段违规，并指出是哪个 effect 造成的。
 
-> **状态：早期开发。** 响应式内核已实现、通过审查并已合并（[PR #1](https://github.com/denislibs/frameact/pull/1)）；
-> 下一步是 DOM 运行时和 JSX 编译器集成。尚未发布到 npm，API 可能变化。
+> **状态：早期开发。** 响应式内核（[PR #1](https://github.com/denislibs/frameact/pull/1)）与 DOM 运行时已实现：
+> 面向 Solid 2.0 JSX 编译器（`@solidjs/babel-plugin@2.0.0-rc.14`）的 `frameact/dom`、`render`、
+> `For`（含 `order="manual"`）、`Show`/`Switch`/`Match`/`Dynamic`/`Portal`、受控输入（`use:value` / `use:checked`）、
+> `HeavyAnimationScope`、context `Provider`，以及 `frameact/vite` 插件。接下来是 store 与 stricterdom。
+> 尚未发布到 npm，API 可能变化。
 
 ## 为什么
 
@@ -88,7 +91,42 @@ provideHeavyAnimationScope(scope);
 scope.begin(300, true);
 ```
 
-组件将采用纯 Solid 风格编写 —— 只执行一次，props 是 getter —— 并由指向 frameact 运行时的 Solid 2.0 JSX 编译器编译。
+组件以纯 Solid 风格编写 —— 只执行一次，props 是 getter —— 并由指向 frameact 运行时的 Solid 2.0 JSX 编译器编译（`moduleName: "frameact/dom"`）：
+
+```ts
+// vite.config.ts
+import frameact from 'frameact/vite';
+export default { plugins: [frameact()] };
+// tsconfig.json: "jsx": "preserve", "jsxImportSource": "frameact"
+```
+
+```tsx
+import { createSignal } from 'frameact';
+import { render } from 'frameact/dom';
+
+function Composer() {
+  const [text, setText] = createSignal('');
+  return <input use:value={text} onInput={(e) => setText(e.currentTarget.value.trimStart())} />;
+}
+render(() => <Composer />, document.getElementById('app')!);
+```
+
+`class=` / `classList=` / 展开属性按 token 做 diff，因此命令式的 `addExtraClass` 在更新后依然保留；字符串形式的 `style=`
+会写入 `cssText`，与 `setExtraStyles` 不兼容。受控输入使用 `use:value` / `use:checked` —— 响应式的 `value=` 会被当作属性直接写入，
+Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的 IME 输入法组合（例如点击发送后清空输入框），请先更新信号，再在用户事件处理器中调用 `forceControlledValue(el)`（在你的 `blur`/`focus` 处理器中可用 `isForcingControlledValue` 识别该强制周期）。
+
+**安全。** 属性写入会拒绝 `javascript:` / `vbscript:` URL、非媒体类 `data:` URL、字符串形式的 `on*` 处理器以及 `srcdoc=`；
+受信任 HTML 的显式出口是 `prop:srcdoc`。生产环境中拒绝是静默的，开发模式下会输出 `console.error`。
+
+**信任边界：`<Dynamic component="…">`。** 字符串形式的 `component` 是标签名，而标签名是键而不是值，因此属性策略无能为力：
+`style`、`base`、`meta`、`link`、`iframe`、`object`、`embed` 都可以按名称访问。它必须来自作者，绝不能来自内容（消息、机器人标记）。
+名称会被校验（`/^[a-zA-Z][a-zA-Z0-9-]*$/`，其他情况不渲染任何内容，并在开发模式输出错误），`script` 以惰性方式创建
+（从已解析的模板克隆，其文本不会执行）；其余白名单由你自己负责。
+
+**策略之外。** 该策略只保护属性*值*。以下是显式的写入出口或键的选择，不会被检查：`innerHTML=`、`prop:*`
+（包括编译产生的 `prop:href` 和 `prop:srcdoc`）、`setProperty`、展开对象的*键*（`{...bag}` 可以指定 `innerHTML`、`prop:*`、`use:*`）、
+`<Dynamic>` 的字符串 `component`，以及带有不受信任 URL 的 `<script src>`（协议过滤对此无能为力，需要 CSP `script-src`）。
+请确保它们的输入受你控制。`<iframe srcdoc=…>` 会被拒绝且没有类型定义；如需显式写入，请使用 `prop:srcdoc`。
 
 ## 灵感与致谢
 
@@ -104,14 +142,15 @@ scope.begin(300, true);
 - **[SolidJS](https://github.com/solidjs/solid)** 与 **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
   （作者 Ryan Carniato）—— 组件模型、JSX 编译器以及 DOM 运行时的设计。
 
-第三方代码均为 MIT 许可，并在每个改编文件中注明出处。
+第三方代码均为 MIT 许可（udomdiff 为 ISC），并在每个改编文件中注明出处。`test/dom/fixtures` 中的编译器测试夹具原样取自
+solidjs/solid，以 `SOURCE` 文件代替逐文件头部声明。
 
 ## 路线图
 
 | 计划 | 内容 | 状态 |
 |---|---|---|
 | 1 · core | 信号、两阶段 effect、帧队列、重动画闸门、`mapArray`、context | ✅ 完成 —— [PR #1](https://github.com/denislibs/frameact/pull/1) |
-| 2 · dom | JSX 编译器运行时、`For`/`Show`/`Switch`、受控输入、手动排序列表、Vite 插件 | 🛠 规划中 |
+| 2 · dom | JSX 编译器运行时、`For`/`Show`/`Switch`、受控输入、手动排序列表、Vite 插件 | ✅ 完成 |
 | 3 · store | TeactN 风格的全局 store（`withGlobal`、action handlers），传播过程感知动画 | ⏳ |
 | 4 · stricterdom | 开发模式阶段检查，定位到具体 effect | ⏳ |
 | 5 · benchmark | 在即时通讯场景下对比 teact、Solid 2.0 与 frameact（Chromium + WebKit，CPU ×4） | ⏳ |
@@ -132,5 +171,5 @@ pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
 
 ## 许可证
 
-[MIT](LICENSE)。内置和改编的第三方代码（maverick-js/signals、teact、dom-expressions）同样为 MIT，
-见 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)。
+[MIT](LICENSE)。内置和改编的第三方代码（maverick-js/signals、teact、dom-expressions、solidjs/solid 的 Web 客户端部分及编译器夹具）同样为 MIT，
+udomdiff 为 ISC，见 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)。
