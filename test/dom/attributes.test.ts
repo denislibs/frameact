@@ -2,6 +2,10 @@ import { setAttribute, setAttributeNS, setBoolAttribute, setProperty } from '../
 import { defineDirective, use } from '../../src/dom/directives';
 import { createMemo, createRoot, createSignal } from '../../src/index';
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 const tooltipValue = () => 'hi';
 
 it('plain attributes: null/false remove, true writes an empty value, values stringify', () => {

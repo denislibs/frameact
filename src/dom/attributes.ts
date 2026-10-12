@@ -16,12 +16,52 @@ const LOWERCASE_EVENT = /^on[a-z]+$/;
 const CONTROL_CHARS = /[\u0000-\u001F]/g;
 
 /** `javascript:` URLs — after stripping the control characters the URL parser ignores — are refused. */
-function isUnsafeUrl(value: unknown): boolean {
-  return typeof value === 'string' && value.replace(CONTROL_CHARS, '').trimStart().toLowerCase().startsWith('javascript:');
+function isUnsafeUrl(value: string): boolean {
+  return value.replace(CONTROL_CHARS, '').trimStart().toLowerCase().startsWith('javascript:');
 }
 
 function camelEvent(name: string): string {
   return `on${name.slice(2, 3).toUpperCase()}${name.slice(3)}`;
+}
+
+/** Why an attribute write is refused (`null`: it is allowed). `value` is a string for non-handler attributes. */
+type Refusal = 'handler-string' | 'handler-function' | 'handler-value' | 'url';
+
+function refusal(name: string, value: unknown): Refusal | null {
+  // HTML attribute names are case-insensitive (`ONCLICK`, `formAction`): decide on the lowercase name.
+  const lower = name.toLowerCase();
+  if (LOWERCASE_EVENT.test(lower)) {
+    if (value == null || value === false) return null; // removal
+    if (typeof value === 'string') return 'handler-string';
+    if (typeof value === 'function') return 'handler-function';
+    return 'handler-value'; // numbers, true, …: anything that would be stringified into the attribute
+  }
+  if (URL_ATTRIBUTES.has(lower) && typeof value === 'string' && isUnsafeUrl(value)) return 'url';
+  return null;
+}
+
+/**
+ * Is writing `value` into the attribute `name` refused (string event handlers, `javascript:` URLs)?
+ * Shared with spreads. The value is stringified here for the URL check: pass the string you checked
+ * to the write (`setAttribute` does), a second `String(value)` could answer differently.
+ */
+export function isUnsafeAttribute(name: string, value: unknown): boolean {
+  return refusal(name, stringifyObject(value)) !== null;
+}
+
+/** Objects (URL, String, anything with toString) are what the DOM would stringify: decide on that string. */
+function stringifyObject(value: unknown): unknown {
+  return typeof value === 'object' && value !== null ? String(value) : value;
+}
+
+function report(name: string, value: unknown, reason: Refusal): void {
+  if (!DEV) return;
+  if (reason === 'url') console.error(`[frameact] refused an unsafe URL in ${name}=`, value);
+  else if (reason === 'handler-function') {
+    console.warn(`[frameact] ${name}={fn}: a lowercase event attribute attaches nothing. Use ${camelEvent(name.toLowerCase())}={fn}.`);
+  } else {
+    console.error(`[frameact] ${name}="…": string event handlers are an inline-script sink. Use ${camelEvent(name.toLowerCase())}={fn}.`);
+  }
 }
 
 /** Compiler primitive. */
@@ -47,33 +87,35 @@ export function setAttribute(node: Element, name: string, value: unknown): void 
   else if (name === 'className') {
     if (DEV) console.error('[frameact] className= on an element: use class= (className bypasses the token diff).');
     return className(node, value);
-  } else if (name.charCodeAt(0) === 111 && name.charCodeAt(1) === 110 && LOWERCASE_EVENT.test(name)) {
-    if (typeof value === 'string') {
-      if (DEV) console.error(`[frameact] ${name}="…": string event handlers are an inline-script sink. Use ${camelEvent(name)}={fn}.`);
-      node.removeAttribute(name);
-      return;
-    }
-    if (typeof value === 'function') {
-      if (DEV) console.warn(`[frameact] ${name}={fn}: a lowercase event attribute attaches nothing. Use ${camelEvent(name)}={fn}.`);
-      node.removeAttribute(name);
-      return;
-    }
   }
-  if (value == null || value === false) node.removeAttribute(name);
-  else if (URL_ATTRIBUTES.has(name) && isUnsafeUrl(value)) {
-    if (DEV) console.error(`[frameact] refused an unsafe URL in ${name}=`, value);
+  // Every path that ends in an attribute write (bare names and `attr:`) is checked here.
+  if (value == null || value === false) {
     node.removeAttribute(name);
-  } else node.setAttribute(name, value === true ? '' : String(value));
+    return;
+  }
+  value = stringifyObject(value); // stringified once: what is checked is what is written
+  const text = value === true ? '' : String(value);
+  const reason = refusal(name, value);
+  if (reason) {
+    report(name, value, reason);
+    node.removeAttribute(name);
+  } else node.setAttribute(name, text);
 }
 
 /** Compiler primitive (`xlink:href`, `xml:lang`). */
 export function setAttributeNS(node: Element, namespace: string, name: string, value: unknown): void {
   const local = name.indexOf(':') > -1 ? name.slice(name.indexOf(':') + 1) : name;
-  if (value == null || value === false) node.removeAttributeNS(namespace, local);
-  else if (URL_ATTRIBUTES.has(name) && isUnsafeUrl(value)) {
-    if (DEV) console.error(`[frameact] refused an unsafe URL in ${name}=`, value);
+  if (value == null || value === false) {
     node.removeAttributeNS(namespace, local);
-  } else node.setAttributeNS(namespace, name, value === true ? '' : String(value));
+    return;
+  }
+  value = stringifyObject(value);
+  const text = value === true ? '' : String(value);
+  const reason = refusal(name, value);
+  if (reason) {
+    report(name, value, reason);
+    node.removeAttributeNS(namespace, local);
+  } else node.setAttributeNS(namespace, name, text);
 }
 
 /** `bool:name=` and spread booleans. */
