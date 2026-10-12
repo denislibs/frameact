@@ -1,10 +1,14 @@
-// DOM clobbering. `HTMLFormElement` has `[LegacyOverrideBuiltIns]`: a descendant form control with
-// `name="X"` or ANY descendant with `id="X"` (an `<img id>`) shadows the form's own property `X`, built-ins
-// included: `form.parentNode` is then the control, `form.remove` / `form.insertBefore` are not functions,
+// DOM clobbering. `HTMLFormElement` has `[LegacyOverrideBuiltIns]`: a descendant listed form control
+// (`input`, `button`, `select`, `textarea`, `fieldset`, `object`, `output`, including those attached from
+// afar with `form="…"`) or `<img>` whose `id` or `name` is `X` shadows the form's own property `X`,
+// built-ins included (a `<div id>` or `<span name>` does not): `form.parentNode` is then the control, `form.remove` / `form.insertBefore` are not functions,
 // `form.nodeName` is an element. Content-derived names and ids inside a form (an emoji id, a file name,
 // a poll option) would let a message freeze a list or crash a render. So the runtime reads structure
 // and calls the DOM methods it depends on through the prototype natives below, cached on first use
-// (`.call(node, …)`: the same monomorphic call V8 makes for `node.method(…)`).
+// (`.call(node, …)`). Cost, measured in Chrome: a method called through `.call` costs the same as
+// `node.method(…)`; a getter called through `.call` is about 1.7x slower than an inline-cached property
+// read (+4.5 ns per read, about +5 us for a reconcile pass over 1000 rows), which is why `ownedBy`
+// caches the `parentNode` getter. jsdom implements getters in JS, so the jsdom benchmarks do not show it.
 //
 // Covered: structure getters, insertion/removal, identity getters, `textContent`, the attribute
 // methods. Not covered: `classList`, `style`, `addEventListener`, `value`, `data` and other
@@ -12,7 +16,9 @@
 // silently, and stays local to the element: the binding's effect throws on every run (its `_applied`
 // never advances, so the error repeats), and because the compiler groups an element's dynamic
 // attributes into one effect and `spread` applies its props in one pass, the OTHER props of that
-// same effect or spread are not applied either. Other elements, the list and the frame are unaffected.
+// same effect or spread are not applied either. Other elements, the list and the frame are unaffected
+// (unless an `onError` handler or ErrorBoundary sits above: it receives the error, and its fallback may
+// replace the boundary's content).
 // Also not covered: `document` has `[LegacyOverrideBuiltIns]` too — a `<form name="addEventListener">`
 // or `<img name="addEventListener">` in the document shadows `document.addEventListener`, which
 // `delegateEvents` and the controlled-input listeners call (a `name`, not an `id`, is needed: low

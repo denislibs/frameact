@@ -4,9 +4,9 @@
 // properties; `clobber` defines the same descriptor a browser presents (see test/helpers/clobber.ts).
 // Console spies are restored by the harness (vi.restoreAllMocks in afterEach).
 import { createRoot, createSignal } from '../../src/index';
-import { setAttribute, setAttributeNS, setBoolAttribute } from '../../src/dom/attributes';
+import { setAttribute, setAttributeNS, setBoolAttribute, setProperty } from '../../src/dom/attributes';
 import { createComponent } from '../../src/dom/component';
-import { addEvent, delegateEvents, EVENT_KEY } from '../../src/dom/events';
+import { addEvent, clearDelegatedEvents, delegateEvents, EVENT_KEY } from '../../src/dom/events';
 import { Portal } from '../../src/dom/flow';
 import { insert } from '../../src/dom/insert';
 import { For } from '../../src/dom/list';
@@ -261,5 +261,76 @@ describe('delegated handlers on a form (L3)', () => {
     expect(() => addEvent(form, 'click', () => {}, true)).not.toThrow();
     expect(() => addEvent(form, 'click', [() => {}, 1], true)).not.toThrow();
     expect(err).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('delegated handlers: XHTML forms and the reported key', () => {
+  it('a form in an XHTML document (lower-case nodeName) with shadowed handler data is skipped too', () => {
+    const XHTML = 'http://www.w3.org/1999/xhtml';
+    const xdoc = document.implementation.createDocument(XHTML, 'html', null);
+    const form = xdoc.createElementNS(XHTML, 'form');
+    const img = xdoc.createElementNS(XHTML, 'img');
+    form.appendChild(img);
+    xdoc.documentElement.appendChild(form);
+    expect(form.nodeName).toBe('form');
+    const handler = vi.fn();
+    addEvent(form as Element, 'click', [handler, 'payload'], true);
+    clobber(form as HTMLFormElement, EVENT_KEY + 'clickData', img);
+    delegateEvents(['click'], xdoc);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      img.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(handler).not.toHaveBeenCalled();
+      expect(err.mock.calls.some((c) => String(c[0]).includes('delegated handler skipped'))).toBe(true);
+    } finally {
+      clearDelegatedEvents(xdoc);
+    }
+  });
+
+  it('the store error names the key that threw: the data key when only `_$$clickData` is shadowed', () => {
+    const form = clobberedForm(EVENT_KEY + 'clickData');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    addEvent(form, 'click', [() => {}, 1], true);
+    expect(err).toHaveBeenCalledTimes(1);
+    const message = String(err.mock.calls[0].join(' '));
+    expect(message).toContain(EVENT_KEY + 'clickData');
+    expect(message).toContain('the handler is stored'); // the handler itself was written; dispatch skips the clobbered data
+
+    const form2 = clobberedForm(EVENT_KEY + 'click');
+    addEvent(form2, 'click', () => {}, true);
+    expect(String(err.mock.calls[1].join(' '))).toContain('the handler is not stored');
+  });
+});
+
+describe('native paths on a clobbered element', () => {
+  // jsdom has no form named properties and defines them by hand, which works on any element: the
+  // elements below get the descriptors a form with `<img id=…>` children would present.
+  it('getPropAlias keys off the native nodeName: `novalidate` on a form whose tagName/nodeName are shadowed is written as noValidate', () => {
+    const form = clobberedForm('tagName', 'nodeName');
+    const setter = vi.spyOn(HTMLFormElement.prototype, 'noValidate', 'set');
+    createRoot(() => spread(form, { novalidate: true }, true));
+    expect(setter).toHaveBeenCalledWith(true);
+  });
+
+  it('setProperty keeps the <select> value re-apply when nodeName is shadowed (native nodeName)', async () => {
+    const select = document.createElement('select');
+    clobber(select as unknown as HTMLFormElement, 'nodeName');
+    setProperty(select, 'value', 'b');
+    for (const v of ['a', 'b']) {
+      const option = document.createElement('option');
+      option.value = v;
+      select.appendChild(option);
+    }
+    await Promise.resolve();
+    expect(select.value).toBe('b');
+  });
+
+  it('a customized built-in form (`is`) with shadowed ownerDocument/localName/namespaceURI/nodeName takes custom props', () => {
+    const form = clobberedForm('ownerDocument', 'localName', 'namespaceURI', 'nodeName', 'tagName');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => createRoot(() => spread(form, { is: 'x-form', 'my-prop': 5, title: 't' }, true))).not.toThrow();
+    expect((form as unknown as Record<string, unknown>).myProp).toBe(5);
+    expect(form.getAttribute('title')).toBe('t');
+    expect(err).not.toHaveBeenCalled();
   });
 });

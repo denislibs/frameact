@@ -1,6 +1,7 @@
 /**
- * Simulate what a browser does to a `<form>` with a descendant named `name` (`<input name>` or any
- * `<img id>`): jsdom does not implement form named properties, so the test defines what
+ * Simulate what a browser does to a `<form>` with a descendant named `name` (a listed form control's
+ * `id`/`name`, including one attached with `form="…"`, or an `<img>`'s `id`/`name`; a `<div id>` does not
+ * shadow): jsdom does not implement form named properties, so the test defines what
  * `[LegacyOverrideBuiltIns]` presents — an own, non-writable, non-enumerable data property (an
  * assignment to it throws in strict mode).
  */

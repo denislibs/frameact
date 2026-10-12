@@ -54,17 +54,24 @@ export function tupleListener(node: Element, tuple: readonly unknown[]): EventLi
 }
 
 /**
- * Write the two delegation expandos. On a `<form>` whose descendant is named `_$$click` the property is
- * a non-writable named property: the assignment throws in strict mode (DOM clobbering), which must not
- * cut the spread or the component short — reported in DEV, the handler is simply not attached.
+ * Write the two delegation expandos. On a `<form>` with a listed control or `<img>` whose id/name is
+ * `_$$click` (or `_$$clickData`) the property is a non-writable named property: the assignment throws
+ * in strict mode (DOM clobbering), which must not cut the spread or the component short. Reported in
+ * DEV with the key that threw: when it is the handler key nothing was stored; when it is the data key
+ * the handler was stored but dispatch skips the clobbered element (see `eventHandler`).
  */
 function setDelegated(node: Element, name: string, handler: unknown, data: unknown): void {
   const target = node as unknown as Record<string, unknown>;
+  let key = EVENT_KEY + name;
   try {
-    target[EVENT_KEY + name] = handler;
-    target[EVENT_KEY + name + 'Data'] = data;
+    target[key] = handler;
+    key += 'Data';
+    target[key] = data;
   } catch (error) {
-    if (DEV) console.error(`[frameact] on${name}: could not store the delegated handler on`, node, '(a form control or <img id> named "' + EVENT_KEY + name + '" shadows it)', error);
+    if (DEV) {
+      const stored = key === EVENT_KEY + name ? 'the handler is not stored' : 'the handler is stored, but dispatch skips this element';
+      console.error(`[frameact] on${name}: could not store the delegated handler on`, node, `("${key}" is shadowed by a form control or <img> of that id/name; ${stored})`, error);
+    }
   }
 }
 
@@ -126,6 +133,11 @@ function isShadowed(node: object, key: string): boolean {
   return d !== undefined && d.writable === false;
 }
 
+/** `nodeName` of an HTML form: upper-case in an HTML document, as written (`form`) in an XHTML one. Safe on any node. */
+function isForm(nodeName: string): boolean {
+  return nodeName === 'FORM' || nodeName === 'form';
+}
+
 function reportClobberedHandler(node: unknown, key: string): void {
   if (DEV) console.error(`[frameact] delegated handler skipped: "${key}" or "${key}Data" on`, node, 'is shadowed by a form control or <img id> of that name (DOM clobbering)');
 }
@@ -148,7 +160,7 @@ function eventHandler(e: Event): void {
   const handleNode = (): boolean => {
     const handler = node[key];
     if (handler && node.disabled !== true) {
-      if (nodeName.call(node) === 'FORM' && (isShadowed(node, key) || isShadowed(node, `${key}Data`))) {
+      if (isForm(nodeName.call(node)) && (isShadowed(node, key) || isShadowed(node, `${key}Data`))) {
         reportClobberedHandler(node, key);
       } else {
         const data = node[`${key}Data`];
