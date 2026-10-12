@@ -1,3 +1,4 @@
+import { expectTypeOf } from 'vitest';
 import { createRoot, createSignal, onCleanup } from '../../src/index';
 import { insert } from '../../src/dom/insert';
 import { createComponent } from '../../src/dom/component';
@@ -201,15 +202,31 @@ it('removed rows are disposed in every mode (cleanup runs, their effects stop)',
   }
 });
 
-// Type contract of the three overloads (compile-time only; never called).
-export function typeContract() {
-  For({ each: [1], children: (item: number, i: () => number) => item + i() });
-  For({ each: [1], keyed: false, children: (item: () => number, i: number) => item() + i });
-  For({ each: [1], keyed: (n: number) => n, children: (item: () => number, i: () => number) => item() + i() });
+it('type contract of the three overloads', () => {
+  const f = expectTypeOf(For<number>);
+  f.toBeCallableWith({ each: [1], children: (item: number, i: () => number) => item + i() });
+  f.toBeCallableWith({ each: [1], keyed: false, children: (item: () => number, i: number) => item() + i });
+  f.toBeCallableWith({ each: [1], keyed: (n: number) => n, children: (item: () => number, i: () => number) => item() + i() });
   // @ts-expect-error default mode: item is a value and index is an accessor
-  For({ each: [1], children: (item: () => number, i: number) => item() + i });
+  f.toBeCallableWith({ each: [1], children: (item: () => number, i: number) => item() + i });
   // @ts-expect-error keyed: false: item is an accessor and index is a number
-  For({ each: [1], keyed: false, children: (item: number, i: () => number) => item + i() });
+  f.toBeCallableWith({ each: [1], keyed: false, children: (item: number, i: () => number) => item + i() });
   // @ts-expect-error keyed by function: item is an accessor
-  For({ each: [1], keyed: (n: number) => n, children: (item: number) => item });
-}
+  f.toBeCallableWith({ each: [1], keyed: (n: number) => n, children: (item: number) => item });
+});
+
+it.each([
+  ['by index', false, ['ok', 'boom'], ['ok', 'fine']],
+  ['by key', (s: string) => s.slice(0, 1), ['ok', 'boom'], ['ok', 'bfine']],
+  ['by reference', undefined, ['ok', 'boom'], ['ok', 'fine']],
+] as const)('%s: a row whose mapper threw renders once its item changes', async (_mode, keyed, first, second) => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const ul = container();
+  const [list, setList] = createSignal<readonly string[]>(first);
+  mount(ul, () => For({ get each() { return list(); }, keyed, children: throwingRow } as any));
+  expect(ul.innerHTML).toBe('<li>ok</li>');
+  setList(second);
+  await frame();
+  expect(ul.textContent).toBe(second.join(''));
+  err.mockRestore();
+});
