@@ -164,3 +164,45 @@ it('warns in dev about destructured props: in the signature (function, arrow, fu
   ]);
   expect((await compile(code, '/app/x.tsx', false)).warnings).toEqual([]);
 });
+
+describe('dev lint on pathological sources', () => {
+  // The lints are regexes over the raw source: each must stay linear when the closing token is missing.
+  const cases: Record<string, string> = {
+    'unterminated type annotations': 'const A: x\n'.repeat(32_000),
+    'unterminated destructuring': 'const {\n'.repeat(32_000),
+    'tags without a closing >': '<input '.repeat(30_000),
+    'intrinsic tags without a closing >': '<div '.repeat(30_000),
+    'literal-looking values without a closing quote': '<input value={"'.repeat(30_000),
+    'declarations without an =': 'declare const Cn: T;\n'.repeat(8_000),
+  };
+  for (const [name, code] of Object.entries(cases)) {
+    it(`${name} (${Math.round(code.length / 1024)} KB) is linted in linear time`, async () => {
+      const start = performance.now();
+      await compile(code, '/app/x.tsx').catch(() => undefined); // invalid TSX: the compiler's error does not matter here
+      expect(performance.now() - start).toBeLessThan(2000);
+    });
+  }
+
+  it('thousands of findings are positioned in one pass', async () => {
+    const code = 'function Cn({ a }) { return a; }\n'.repeat(40_000);
+    const start = performance.now();
+    const { warnings, positions } = await compile(code, '/app/x.tsx').catch(() => ({ warnings: [] as string[], positions: [] as Pos[] }));
+    expect(performance.now() - start).toBeLessThan(2000);
+    expect(warnings.length === 0 || positions[39_999]).toBeTruthy();
+  });
+});
+
+describe('dev lint: destructuring props inside event handlers', () => {
+  it('const { x } = props inside an on* handler is a fresh read at event time: no warning; in the component body it still warns', async () => {
+    const handler = [
+      'export const Row = (props: P) => (',
+      '  <button onClick={() => { const { chatId } = props; open(chatId); }}>open</button>',
+      ');',
+    ].join('\n');
+    expect((await compile(handler, '/app/x.tsx')).warnings).toEqual([]);
+    const body = 'export const Row = (props: P) => { const { chatId } = props; return <i onClick={() => open(chatId)}>x</i>; };';
+    const dev = await compile(body, '/app/x.tsx');
+    expect(dev.warnings).toHaveLength(1);
+    expect(dev.warnings[0]).toContain('event handler');
+  });
+});
