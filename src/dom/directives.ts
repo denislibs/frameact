@@ -54,71 +54,59 @@ export function use<A>(fn: (el: Element, arg: A) => void, el: Element, arg: A): 
 
 type TextControl = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
-interface CaretSnapshot {
-  start: number;
-  end: number;
-  atEnd: boolean;
-}
-
-interface ValueState {
-  /** The live accessor (accessor forms) or a getter of the last delivered value (plain-value form). */
-  read: () => unknown;
-  /** `read` is a live accessor: the rollback check runs synchronously in the event. Plain form: deferred to the mutate phase. */
+/** What `use:value` and `use:checked` share: where the authoritative value comes from and when it is checked. */
+interface Binding<E extends Element = Element> {
+  readonly el: E;
+  readonly kind: Kind<any>;
+  /** Accessor forms: the live accessor the rollback check reads. Plain form: null (see `delivered`). */
+  accessor: (() => unknown) | null;
+  /** Plain-value form: the last value the compiler's effect delivered. */
+  delivered: unknown;
+  /** The check runs synchronously in the event (accessor forms); plain form: deferred to the mutate phase. */
   live: boolean;
-  /** A deferred check is already queued for this frame (several input events share it). */
+  /** A deferred check is already queued for this frame (several events share it). */
   pending: boolean;
   /** Plain-value form: the compiler's effect whose apply delivers values (null if called outside any effect). */
   effect: EffectNode | null;
-  /** Taken at event time (measure phase); the mutate-phase applier only restores from it. */
-  selection: CaretSnapshot | null;
+  /** The deferred check, bound once per binding (no closure per event). */
+  readonly runDeferred: () => void;
+}
+
+interface ValueBinding extends Binding<TextControl> {
+  /** Caret snapshot taken at event time (measure phase); the mutate-phase applier only restores from it. */
+  hasSelection: boolean;
+  selStart: number;
+  selEnd: number;
+  atEnd: boolean;
   composing: boolean;
 }
 
-interface CheckedState {
-  read: () => unknown;
-  live: boolean;
-  pending: boolean;
-  effect: EffectNode | null;
+type CheckedBinding = Binding<HTMLInputElement>;
+
+interface Kind<B extends Binding<any>> {
+  readonly name: 'value' | 'checked';
+  readonly bindings: WeakMap<Element, B>;
+  create(el: Element): B;
+  /** Writes `v` if the live DOM differs (caret-preserving for text). */
+  write(b: B, v: unknown): void;
 }
 
-const valueControlled = new WeakMap<TextControl, ValueState>();
-const checkedControlled = new WeakMap<HTMLInputElement, CheckedState>();
 const installed = new WeakSet<Document>();
 
-function toText(v: unknown): string {
-  return v == null ? '' : String(v);
+function current(b: Binding<any>): unknown {
+  return b.accessor !== null ? untrack(b.accessor) : b.delivered;
 }
 
-function snapshot(el: TextControl, state: ValueState): void {
-  const input = el as HTMLInputElement;
-  const start = 'selectionStart' in input ? input.selectionStart : null;
-  if (start == null) {
-    state.selection = null; // selects, inputs without a text selection
-    return;
-  }
-  const end = input.selectionEnd ?? start;
-  state.selection = { start, end, atEnd: start === end && end === input.value.length };
+/** Compare the live DOM with the authoritative value and restore it if they differ. */
+function check(b: Binding<any>): void {
+  b.kind.write(b, current(b));
 }
 
-function writeValue(el: TextControl, state: ValueState, v: unknown): void {
-  if (state.composing) return; // IME: never write mid-composition
-  const next = toText(v);
-  if (el.value === next) return;
-  el.value = next;
-  const sel = state.selection;
-  if (sel && document.activeElement === el && 'setSelectionRange' in el) {
-    try {
-      if (sel.atEnd) el.setSelectionRange(next.length, next.length);
-      else el.setSelectionRange(sel.start, sel.end);
-    } catch {
-      // input types without a selection API
-    }
-  }
-}
-
-function check(el: TextControl, state: ValueState): void {
-  const v = untrack(state.read);
-  if (el.value !== toText(v)) writeValue(el, state, v);
+function runDeferred(b: Binding<any>): void {
+  b.pending = false;
+  // A dirty, queued or gating-parked compiler effect still has a delivery to make, and that
+  // delivery is authoritative (for an accepted input it equals the DOM, so nothing is written).
+  if (b.effect === null || isEffectClean(b.effect)) check(b);
 }
 
 /**
@@ -128,63 +116,121 @@ function check(el: TextControl, state: ValueState): void {
  * handler wrote the signal first, which queued the effect's mutate work ahead of this task. Several
  * events in one frame share one task.
  */
-function verify(el: TextControl, state: ValueState): void {
-  if (state.live) check(el, state);
-  else if (!state.pending) {
-    state.pending = true;
-    requestMutation(() => {
-      state.pending = false;
-      // A dirty, queued or gating-parked compiler effect still has a delivery to make, and that
-      // delivery is authoritative (for an accepted input it equals el.value, so nothing is written).
-      if (state.effect === null || isEffectClean(state.effect)) check(el, state);
-    });
+function verify(b: Binding<any>): void {
+  if (b.live) check(b);
+  else if (!b.pending) {
+    b.pending = true;
+    requestMutation(b.runDeferred);
   }
 }
 
-function checkChecked(el: HTMLInputElement, state: CheckedState): void {
-  const v = !!untrack(state.read);
-  if (el.checked !== v) el.checked = v;
+function newBinding<E extends Element>(kind: Kind<any>, el: E): Binding<E> {
+  const b: Binding<E> = {
+    el,
+    kind,
+    accessor: null,
+    delivered: undefined,
+    live: true,
+    pending: false,
+    effect: null,
+    runDeferred: () => runDeferred(b),
+  };
+  return b;
 }
 
+// ---- use:value ----
+
+function toText(v: unknown): string {
+  return v == null ? '' : String(v);
+}
+
+function snapshot(b: ValueBinding): void {
+  const input = b.el as HTMLInputElement;
+  const start = 'selectionStart' in input ? input.selectionStart : null;
+  if (start == null) {
+    b.hasSelection = false; // selects, inputs without a text selection
+    return;
+  }
+  const end = input.selectionEnd ?? start;
+  b.hasSelection = true;
+  b.selStart = start;
+  b.selEnd = end;
+  b.atEnd = start === end && end === input.value.length;
+}
+
+function writeValue(b: ValueBinding, v: unknown): void {
+  if (b.composing) return; // IME: never write mid-composition
+  const el = b.el;
+  const next = toText(v);
+  if (el.value === next) return;
+  el.value = next;
+  if (b.hasSelection && document.activeElement === el && 'setSelectionRange' in el) {
+    try {
+      if (b.atEnd) el.setSelectionRange(next.length, next.length);
+      else el.setSelectionRange(b.selStart, b.selEnd);
+    } catch {
+      // input types without a selection API
+    }
+  }
+}
+
+const valueKind: Kind<ValueBinding> = {
+  name: 'value',
+  bindings: new WeakMap(),
+  create(el) {
+    const b = newBinding(valueKind, el as TextControl) as ValueBinding;
+    b.hasSelection = false;
+    b.selStart = 0;
+    b.selEnd = 0;
+    b.atEnd = false;
+    b.composing = false;
+    return b;
+  },
+  write: writeValue,
+};
+
+// ---- use:checked ----
+
+const checkedKind: Kind<CheckedBinding> = {
+  name: 'checked',
+  bindings: new WeakMap(),
+  create: (el) => newBinding(checkedKind, el as HTMLInputElement),
+  write(b, v) {
+    const next = !!v;
+    if (b.el.checked !== next) b.el.checked = next;
+  },
+};
+
+// ---- document listeners ----
+
 function onInput(e: Event): void {
-  const el = e.target as TextControl;
-  const state = valueControlled.get(el);
-  if (!state || (e as InputEvent).isComposing || state.composing) return;
-  snapshot(el, state);
-  verify(el, state);
+  const b = valueKind.bindings.get(e.target as Element);
+  if (!b || (e as InputEvent).isComposing || b.composing) return;
+  snapshot(b);
+  verify(b);
 }
 
 function onCompositionStart(e: Event): void {
-  const state = valueControlled.get(e.target as TextControl);
-  if (state) state.composing = true;
+  const b = valueKind.bindings.get(e.target as Element);
+  if (b) b.composing = true;
 }
 
 function onCompositionEnd(e: Event): void {
-  const el = e.target as TextControl;
-  const state = valueControlled.get(el);
-  if (!state) return;
-  state.composing = false;
-  snapshot(el, state);
-  verify(el, state);
+  const b = valueKind.bindings.get(e.target as Element);
+  if (!b) return;
+  b.composing = false;
+  snapshot(b);
+  verify(b);
 }
 
 function onFocusOut(e: Event): void {
-  const state = valueControlled.get(e.target as TextControl);
-  if (state) state.selection = null;
+  const b = valueKind.bindings.get(e.target as Element);
+  if (b) b.hasSelection = false;
 }
 
 function onChange(e: Event): void {
-  const el = e.target as HTMLInputElement;
-  const state = checkedControlled.get(el);
-  if (!state) return;
-  if (state.live) checkChecked(el, state);
-  else if (!state.pending) {
-    state.pending = true;
-    requestMutation(() => {
-      state.pending = false;
-      if (state.effect === null || isEffectClean(state.effect)) checkChecked(el, state);
-    });
-  }
+  const b = checkedKind.bindings.get(e.target as Element);
+  if (b) verify(b);
 }
 
 /**
@@ -213,6 +259,8 @@ onClearDelegated((doc) => {
   doc.removeEventListener('focusout', onFocusOut);
 });
 
+// ---- the directive entry (three forms, shared by value and checked) ----
+
 const APPLY_HINTS = {
   value: ['use:value={text}', 'use:value={props.text()}'],
   checked: ['use:checked={flag}', 'use:checked={props.flag()}'],
@@ -226,23 +274,21 @@ function reportAccessorInApply(name: keyof typeof APPLY_HINTS): void {
   );
 }
 
-function valueDirective(el: Element, value: unknown): void {
-  const control = el as TextControl;
-  if (DEV && !('value' in control)) console.error('[frameact] use:value expects an input, textarea or select', el);
+function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown): void {
   installListeners(el.ownerDocument);
-  let state = valueControlled.get(control);
-  if (!state) valueControlled.set(control, (state = { read: () => undefined, live: true, pending: false, effect: null, selection: null, composing: false }));
+  let b = kind.bindings.get(el);
+  if (!b) kind.bindings.set(el, (b = kind.create(el)));
   if (typeof value === 'function') {
     const accessor = value as () => unknown;
-    const owned = state;
-    owned.read = accessor; // the document-level rollback check always reads the live accessor
+    const owned = b;
+    owned.accessor = accessor; // the document-level rollback check always reads the live accessor
     owned.live = true;
     if (getOwner() === null) {
       // Inside an effect apply (no owner): the compiler wrapped `use:value={props.text}` where
       // `props.text` is itself an accessor. An effect created here would be unowned (DEV throws), so
       // write once and tell the author how to get a live binding.
-      if (DEV) reportAccessorInApply('value');
-      writeValue(control, owned, untrack(accessor));
+      if (DEV) reportAccessorInApply(kind.name);
+      kind.write(owned, untrack(accessor));
       return;
     }
     // Static form: the directive owns the binding effect (created under the component's owner). The
@@ -252,51 +298,29 @@ function valueDirective(el: Element, value: unknown): void {
     createMutationEffect(
       () => ({ v: accessor() }),
       ({ v }) => {
-        writeValue(control, owned, v);
+        kind.write(owned, v);
       },
-      { name: 'use:value' },
+      { name: `use:${kind.name}` },
     );
   } else {
-    // Effect-driven form: the compiler's effect calls us with plain values. `read` returns the last
-    // delivered one and the rollback check is deferred to the mutate phase (see `verify`).
-    state.live = false;
-    state.effect = getRunningEffect(); // the compiler's effect: we are inside its apply
-    state.read = () => value;
-    writeValue(control, state, value);
+    // Effect-driven form: the compiler's effect calls us with plain values; the rollback check is
+    // deferred to the mutate phase (see `verify`). No allocation per delivery.
+    b.accessor = null;
+    b.live = false;
+    b.effect = getRunningEffect(); // the compiler's effect: we are inside its apply
+    b.delivered = value;
+    kind.write(b, value);
   }
 }
 
+function valueDirective(el: Element, value: unknown): void {
+  if (DEV && !('value' in el)) console.error('[frameact] use:value expects an input, textarea or select', el);
+  bind(valueKind, el, value);
+}
+
 function checkedDirective(el: Element, value: unknown): void {
-  const box = el as HTMLInputElement;
-  if (DEV && !('checked' in box)) console.error('[frameact] use:checked expects a checkbox or radio input', el);
-  installListeners(el.ownerDocument);
-  let state = checkedControlled.get(box);
-  if (!state) checkedControlled.set(box, (state = { read: () => undefined, live: true, pending: false, effect: null }));
-  if (typeof value === 'function') {
-    const accessor = value as () => unknown;
-    state.read = accessor;
-    state.live = true;
-    if (getOwner() === null) {
-      // Inside an effect apply (no owner): see valueDirective. One-shot write, no owned effect.
-      if (DEV) reportAccessorInApply('checked');
-      const next = !!untrack(accessor);
-      if (box.checked !== next) box.checked = next;
-      return;
-    }
-    // A fresh box per change (see valueDirective): the apply compares with the DOM, not with the last applied value.
-    createMutationEffect(
-      () => ({ v: !!accessor() }),
-      ({ v }) => {
-        if (box.checked !== v) box.checked = v;
-      },
-      { name: 'use:checked' },
-    );
-  } else {
-    state.live = false; // plain-value form: the change check is deferred to the mutate phase
-    state.effect = getRunningEffect();
-    state.read = () => value;
-    if (box.checked !== !!value) box.checked = !!value;
-  }
+  if (DEV && !('checked' in el)) console.error('[frameact] use:checked expects a checkbox or radio input', el);
+  bind(checkedKind, el, value);
 }
 
 defineBuiltinDirective('value', valueDirective);
