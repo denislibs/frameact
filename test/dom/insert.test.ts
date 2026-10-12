@@ -259,3 +259,39 @@ describe('slot ownership tags', () => {
     expect(p2.innerHTML).toBe('<b></b>');
   });
 });
+
+describe('render: pre-existing children', () => {
+  it('the disposer removes only what render inserted, and stops updating', async () => {
+    const el = container();
+    el.innerHTML = '<i>x</i>';
+    const [s, set] = createSignal<unknown>('a');
+    const dispose = render(() => s, el);
+    expect(el.innerHTML).toBe('<i>x</i>a');
+    set([document.createElement('b'), 'c']);
+    await frame();
+    expect(el.innerHTML).toBe('<i>x</i><b></b>c');
+    dispose();
+    expect(el.innerHTML).toBe('<i>x</i>');
+    set('d');
+    await frame();
+    expect(el.innerHTML).toBe('<i>x</i>');
+  });
+
+  it('nodes appended by others after the mount survive the disposer', () => {
+    const el = container();
+    el.innerHTML = '<i>x</i>';
+    const dispose = render(() => 'a', el);
+    el.append(document.createElement('u'));
+    dispose();
+    expect(el.innerHTML).toBe('<i>x</i><u></u>');
+  });
+
+  it('renders a node into an empty container; the disposer empties it', () => {
+    const el = container();
+    const span = document.createElement('span');
+    const dispose = render(() => span, el);
+    expect(el.firstChild).toBe(span);
+    dispose();
+    expect(el.innerHTML).toBe('');
+  });
+});
