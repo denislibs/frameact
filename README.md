@@ -152,6 +152,10 @@ inputs under your control. `<iframe srcdoc=…>` is refused and not typed; write
   reordering, heavy transitions, input latency on mobile.
 - **[maverick-js/signals](https://github.com/maverick-js/signals)** by Rahim Alwer — the reactive graph
   (vendored and patched), itself built on the Reactively algorithm.
+- **[alien-signals](https://github.com/stackblitz/alien-signals)** by Johnson Chu (StackBlitz) — the core's
+  dependency graph is reworked after its design: one `Link` object per edge in two doubly-linked lists, link reuse
+  on re-runs, iterative propagation and shallow marking. This made frameact's core 1.5–2× faster on
+  js-reactivity-benchmark.
 - **[SolidJS](https://github.com/solidjs/solid)** and **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
   by Ryan Carniato — the component model, the JSX compiler and the DOM runtime design.
 
