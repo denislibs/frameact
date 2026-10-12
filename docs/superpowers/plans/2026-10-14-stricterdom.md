@@ -4,7 +4,7 @@
 
 **Goal:** Build `frameact/stricterdom` — the DEV guard that turns the phase discipline into a checked invariant at the DOM-API level (a port of teact's `stricterdom.ts` + `layoutCauses.ts` with the telegram-tt exceptions), every violation attributed to its effect as `Message > MessageMeta > span.style:color [mutate]` — plus the DEV profiler (run counters, "why did this run", slow-run / slow-drain warnings), the production contract of `flushSync()`, and a headless-Chrome test lane for what jsdom cannot do.
 
-**Architecture:** The core gains a tiny DEV attribution layer (`src/core/debug.ts`: owner-chain names; `notify()` stamps which signal scheduled an effect; three observer hooks — after-apply, per-run, per-drain). `src/stricterdom/stricterdom.ts` patches the layout-forcing getters/methods of the prototypes (`onMeasure` → violation when the scheduler's phase is not `measure`) and observes `document.body` with a `MutationObserver` — but **never waits for the observer callback**: the records are taken (`takeRecords`) at every phase change and after every effect apply outside the mutate phase, so a violation is judged in the phase it happened in (no false positives inside `flushSync`) and is reported while `currentEffect` still names the culprit. `forceMeasure`/`forceMutation`/`suppressStrict`/`setHandler` keep teact's contract; the existing `strictHooks.forceMutation` seam of `render()`/`Portal` is pointed at the real implementation by `enableStrict()`. `runlog.ts` consumes the hooks. `fasterdom.ts` counts the depth of the running phase segment, and `flushSync()` throws inside one (and is allowed anywhere else, in production too). Everything is behind `DEV`: in a production build the module is thin wrappers.
+**Architecture:** The core gains a tiny DEV attribution layer (`src/core/debug.ts`: owner-chain names; `notify()` stamps which signal scheduled an effect; three observer hooks — around-apply, per-run, per-drain). `src/stricterdom/stricterdom.ts` patches the layout-forcing getters/methods of the prototypes (`onMeasure` → violation when the scheduler's phase is not `measure`) and observes `document.body` with a `MutationObserver` — but **never waits for the observer callback**: the records are taken (`takeRecords`) at every phase change and right before and after every effect apply outside the mutate phase, so a violation is judged in the phase it happened in (no false positives inside `flushSync`) and is reported while `currentEffect` names the culprit — and only the culprit. `forceMutation`/`suppressStrict`/`setHandler` keep teact's contract; `forceMeasure` opens its window in the mutate phase and is a plain call anywhere else; the existing `strictHooks.forceMutation` seam of `render()`/`Portal` is pointed at the real implementation by `enableStrict()`. `runlog.ts` consumes the hooks. `fasterdom.ts` counts the depth of the running phase segment, and `flushSync()` throws inside one (and is allowed anywhere else, in production too). Everything is behind `DEV`: in a production build the module is thin wrappers.
 
 **Tech Stack:** TypeScript 7 (strict), pnpm, Vite 8 + vitest 5 + jsdom 30, oxlint; Google Chrome for the optional `pnpm test:chrome` lane. No new dependencies.
 
@@ -12,36 +12,37 @@
 
 ## Global Constraints
 
-- Package name `frameact`, `"type": "module"`, Node ≥ 22.12, pnpm. Worktree `/Users/denisurevic/Documents/frameact/.worktrees/stricterdom`, branch `feat/stricterdom` (base commit **fa66103** = `feat/store`; plan 3's final fix round is merged later — nothing here depends on it); never touch `docs/assets/*`.
+- Package name `frameact`, `"type": "module"`, Node ≥ 22.12, pnpm. Worktree `/Users/denisurevic/Documents/frameact/.worktrees/stricterdom`, branch `feat/stricterdom` (base commit **063af48** = `feat/store` with plan 3's final fix round: store prototype-pollution hardening, document natives (M1), the store-gate release through a measure task (R1, `releaseInFrame` in `src/core/frame.ts`), store descriptors/`keys`/`values`/`entries` (P1), batched array writes (P2), store leaves released with their last reader via `createLeafNode` + the core's `unlinkDeps` hook (P3), the gate chain cache (P4)); never touch `docs/assets/*`.
 - Toolchain already installed (do not change versions): `typescript@^7.0.2`, `vite@^8.3.4`, `vitest@^5.0.3`, `jsdom@^30.1.2`, `oxlint@^1.87.0`, `@solidjs/babel-plugin@2.0.0-rc.14` (exact). **No new dependencies in this plan.**
 - `pnpm check` (= `pnpm lint && pnpm typecheck && pnpm test`) must be clean — 0 errors, **0 warnings** — after every task. `pnpm lint` exits 0 even with warnings and prints them as `warning …` lines: **read its output** (it must print nothing but the command lines). A lint *error* (e.g. `eslint(no-unassigned-vars)`) fails `pnpm check` before vitest runs — a `grep` for `Tests` then prints nothing; look at the tail of the output.
-- oxlint: `no-underscore-dangle` is **on** outside `src/core/**`, `test/core/**`, `test/effects/**` — `src/stricterdom/**` and `test/stricterdom/**` never touch `node._name`/`_dirtyDep`/… as identifiers (the core exports `getRunningEffect`, `getEffectDebugInfo`, `setRunObserver`, `setAfterApplyHook`, `setDrainObserver`, `effectPath`, `describeNode`; `id` and the `SCOPE` symbol have no underscore). Also on: `unicorn/consistent-function-scoping` (hoist helpers that capture nothing to module scope — `.mjs` under `test/` included), `unicorn/no-array-reverse` and `unicorn/no-array-sort` (`toReversed`/`toSorted` are unavailable with lib ES2022: write the loop), `no-shadow`, `no-unused-vars` (prefix unused params with `_`), `eslint(no-unassigned-vars)` (a `let box!: T` assigned only through a JSX `ref={box}` is an error — use `ref={(el) => { box = el; }}`). `test/chrome/vite.config.ts` is inside tsconfig's `include`: it must not import with a `.ts` extension (TS5097), unlike the root `vitest.config.ts`.
+- oxlint: `no-underscore-dangle` is **on** outside `src/core/**`, `test/core/**`, `test/effects/**` — `src/stricterdom/**` and `test/stricterdom/**` never touch `node._name`/`_dirtyDep`/… as identifiers (the core exports `getRunningEffect`, `getEffectDebugInfo`, `setRunObserver`, `setApplyHook`, `setDrainObserver`, `getDrainingPhase`, `effectPath`, `describeNode`; `id` and the `SCOPE` symbol have no underscore). Also on: `unicorn/consistent-function-scoping` (hoist helpers that capture nothing to module scope — `.mjs` under `test/` included), `unicorn/no-array-reverse` and `unicorn/no-array-sort` (`toReversed`/`toSorted` are unavailable with lib ES2022: write the loop), `no-shadow`, `no-unused-vars` (prefix unused params with `_`), `eslint(no-unassigned-vars)` (a `let box!: T` assigned only through a JSX `ref={box}` is an error — use `ref={(el) => { box = el; }}`). `test/chrome/vite.config.ts` is inside tsconfig's `include`: its `.ts`-extension import of the plugin (which keeps Vite's config loader from warning, as in the root `vitest.config.ts`) carries a `// @ts-expect-error TS5097` line.
 - Dev-only code is guarded by `DEV` from `src/env.ts`; never bare `__DEV__`. Every public function of `frameact/stricterdom` starts with `if (!DEV) return cb()` / `return` so that a production build keeps only thin wrappers; the DEV fields added to effect nodes are initialised only under `if (DEV)` (one hidden class per mode).
 - Core API exactly as exported by `src/index.ts` and the core files: `createEffect(compute, apply, schedule?, options?)` with the first apply **scheduled** for tickEnd effects and **synchronous** for mutation/render effects; apply halves run with no owner; `createComponent(Comp, props, name)` always creates an owner scope and labels it `name` in DEV; effects carry `id = options.name ?? 'effect'` in DEV; the compiler's `sourceNames` labels are `div.class`, `span.children`, `span.style:color`, `use:value`.
 - Phase discipline (what stricterdom checks): no live-DOM writes outside the mutate phase except through `forceMutation`/the seam; no layout reads in the mutate phase except through `forceMeasure`. The runtime itself must pass under `enableStrict()` (Task 3's app suite is the gate).
-- Error resilience: a throwing `setHandler` handler propagates to the caller of a layout read (a test may want that) but is caught and logged in the observer/drain paths; the after-apply and run/drain observers run inside the drain's per-entry `try/catch`; nothing in stricterdom throws into a notify walk.
+- Error resilience: a throwing `setHandler` handler propagates to the caller of a layout read (a test may want that) but is caught and logged in the observer/drain paths; the record drains called from the phase listener and the apply hook catch everything (a throw there would skip a fasterdom segment's tasks or leave `currentEffect` swapped); the run/drain observers run inside the drain's per-entry `try/catch`; nothing in stricterdom throws into a notify walk. DOM reads in stricterdom go through `getNatives()` / `Element.prototype` (`document.contains`, `document.body` and a form's properties can be shadowed by content-named elements — M1).
 - Tests: vitest + jsdom; files that need frames use `useDomHarness()` (`test/helpers/dom.ts`); never `expect` inside a scheduler task or an effect apply (log into arrays, assert after `flushSync()`/`await frame()`); DEV-error assertions use `vi.spyOn(console, …)` released by the harness's `vi.restoreAllMocks()` or by `mockRestore()`; **no time-based guards** (the slow-run tests mock `performance.now`); every test that calls `enableStrict()` calls `disableStrict()` in `afterEach` (the patches are module-global), disposes its roots and runs `flushSync()` there; under strict, a test's own `container()` append is a measure-phase write — wrap it in `suppressStrict(container)`; a compiled `.tsx` test file registers its delegated events once at load and the harness clears delegation after every test, so `beforeEach` calls `delegateEvents([...])` again.
 - Commits: stage **explicit paths only** (never `git add -A` / `git add .`); message ends with the implementer's own trailer `Co-Authored-By: <your model name> <noreply@anthropic.com>` (substitute your model's name, e.g. `Claude Sonnet 4.5`).
 - Third-party code keeps an `// Adapted from <repo> (<license>, © <holder>)` header and is listed in `THIRD_PARTY_LICENSES.md` (Task 2 adds the two stricterdom files under the teact entry).
 
 ## Scope decisions
 
-Facts established while writing this plan. **Every code block below was applied from this document and run in a scratch worktree** (`/Users/denisurevic/Documents/frameact/.worktrees/stricterdom-scratch`, detached at fa66103, tasks applied in order; `pnpm check` green after every task: 857 → **863 → 875 → 879 → 883 → 886 → 888** tests, oxlint 0 warnings, tsc 0 errors; `pnpm test:chrome` 8/8 with Google Chrome at `/Applications/Google Chrome.app`).
+Facts established while writing this plan. **Every code block below was applied from this document and run in a scratch worktree** (first on fa66103 in `.worktrees/stricterdom-scratch`; re-verified after the pre-flight fixes in `.worktrees/pf4`, detached at **063af48**, tasks applied in order by a script that reads the blocks of this file; `pnpm check` green after every task: 956 → **962 → 976 → 980 → 985 → 989 → 992** tests, oxlint 0 warnings, tsc 0 errors; `pnpm test:chrome` 9/9 with Google Chrome at `/Applications/Google Chrome.app`).
 
-1. **Records are judged at phase changes and after applies, not in the observer callback.** teact checks `MutationRecord`s when the observer fires (a microtask) against the phase at that moment. frameact runs whole passes synchronously in `flushSync()` (tests, the iOS/VT contract of Task 5): the callback would arrive after the pass with phase `measure` and flag every legitimate mutate-phase write. So stricterdom subscribes to `onPhaseChange` (already exported by `fasterdom.ts` for this purpose) and drains `observer.takeRecords()` at every change, checking them against the phase that **ended**; the callback itself handles only records produced outside any pass (event handlers), with the current phase. Bonus: the core calls an **after-apply hook** (`setAfterApplyHook`, DEV) while `currentEffect` is still the effect, and stricterdom drains there when the phase is not `mutate` — a tickEnd/measure effect writing the DOM is attributed to its path synchronously (the observer callback would never know the effect).
+1. **Records are judged at phase changes and after applies, not in the observer callback.** teact checks `MutationRecord`s when the observer fires (a microtask) against the phase at that moment. frameact runs whole passes synchronously in `flushSync()` (tests, the iOS/VT contract of Task 5): the callback would arrive after the pass with phase `measure` and flag every legitimate mutate-phase write. So stricterdom subscribes to `onPhaseChange` (already exported by `fasterdom.ts` for this purpose) and drains `observer.takeRecords()` at every change, checking them against the phase that **ended**; the callback itself handles only records produced outside any pass (event handlers), with the current phase. Bonus: the core calls an **apply hook** (`setApplyHook`, DEV) right before every apply (`currentEffect` is still the enclosing effect or null) and at its end (`currentEffect` is the effect), and stricterdom drains at both points when the phase is not `mutate` — a tickEnd/measure effect writing the DOM is attributed to its path synchronously (the observer callback would never know the effect), and a write that was already pending when the apply started (an event handler that wrote a signal and then the DOM: in a browser the tickEnd drain runs *before* the observer callback; a raw measure task before a measure effect) is not pinned on it. Writes from a *compute* half are attributed to the context around the run (follow-up 1).
 2. **The phase is the scheduler's.** teact keeps `phase` inside stricterdom and fasterdom calls `setPhase`. frameact's phase lives in `fasterdom.ts` (production code needs it: `applyCleanupDisposer`, the measure-dirtied warning); stricterdom reads `getPhase()` and `forceMeasure` overrides it **locally** (`forcedPhase`) for the layout check, draining records before (legitimate, discarded) and after its callback (a write inside the window is a violation).
 3. **`suppressStrict` is a counter**, not teact's unpatch/repatch: re-entrant, cheap; records produced inside the window are discarded (`takeRecords`) when the outermost call ends, and records pending *before* it are drained first (an earlier violation is still reported).
-4. **`forceMutation(cb, nodes, allowAnyPhase?)` has telegram-tt's third argument**; the seam `strictHooks.forceMutation(cb, target)` used by `render()`/`Portal` sanctions without a phase precondition (a `render()` into a detached-then-attached NodeView adapter may legitimately run from either phase). The DEV preconditions (`forceMeasure` outside the mutate phase, `forceMutation` inside it without `allowAnyPhase`) throw as in teact; production: plain calls.
+4. **`forceMutation(cb, nodes, allowAnyPhase?)` has telegram-tt's third argument**; the seam `strictHooks.forceMutation(cb, target)` used by `render()`/`Portal` sanctions without a phase precondition (a `render()` into a detached-then-attached NodeView adapter may legitimately run from either phase). The sanction covers records whose target is one of `nodes`; a nested sanction of the same node (a Portal inside a Portal, both into `<body>`) does not end the outer one (only the nodes a call added are removed when it ends). `forceMutation` inside the mutate phase without `allowAnyPhase` throws as in teact. **`forceMeasure` never throws** (controller decision): in the mutate phase it switches the phase to `measure` locally for its callback; in any other context it is a plain `cb()` — layout reads are allowed there anyway, and kit helpers call it from both contexts. Production: plain calls.
 5. **Error shape.** Violations are `StrictViolationError extends Error` with `kind: 'measure' | 'mutation'`, `detail` (the getter/method/attribute name or `childList` — the field is not called `cause` because `Error.cause` exists and TS7 demands `override`), `phase`, `path` (or null outside effects), `target` (mutations). Messages: `` [frameact/stricterdom] Unexpected measurement `offsetHeight` in Message > MessageMeta > span.style:color [mutate] `` and `` [frameact/stricterdom] Unexpected mutation `class` of <button id="send"> outside an effect [measure] ``. The default handler is `(e) => console.error(e)` evaluated at call time (so a `vi.spyOn(console, 'error')` installed later still sees it).
-6. **Exceptions:** detached targets (`document.contains`), nodes whitelisted by `forceMutation`, anything under `[data-stricterdom-ignore]` (`IGNORE_SUBTREE_ATTR`), `data-*` attributes, `details[open]`, and `childList` on an editable host. telegram-tt tests `target.contentEditable` — a string that is `"inherit"` for every element, i.e. always truthy, so tt never reports a `childList` violation at all; frameact uses `isContentEditable` (boolean) with a `closest('[contenteditable]:not([contenteditable="false"])')` fallback for jsdom, which has neither property. `characterData` is not observed (teact parity: `insert` writes text through `.data`).
+6. **Exceptions:** detached targets (`document.contains`), nodes whitelisted by `forceMutation`, anything under `[data-stricterdom-ignore]` (`IGNORE_SUBTREE_ATTR`), `data-*` attributes, `details[open]`, and `childList` on an editable host. telegram-tt tests `target.contentEditable` — a string that is `"inherit"` for every element, i.e. always truthy, so tt never reports a `childList` violation at all; frameact uses `isContentEditable` (when it is a boolean) with a `closest('[contenteditable]:not([contenteditable="false"])')` fallback for jsdom, which has neither property. `characterData` is not observed (teact parity: `insert` writes text through `.data`).
 7. **What jsdom cannot patch** (`Object.getOwnPropertyDescriptor(...).get` is missing or the method is `undefined`): `innerText`, `scrollingElement`, `elementFromPoint`, `scrollIntoViewIfNeeded`, `VisualViewport`, `MouseEvent.layerX/Y`, `Range.getBoundingClientRect`. teact assumes they exist (its method wrapper would throw on `undefined.apply`); the port skips what is absent. The Chrome lane (Task 6) covers them.
 8. **Attribution lives in the core** (`src/core/debug.ts`), not only in stricterdom: `frame.ts`'s "measure effect dirtied during the mutate phase" warning uses the same `effectPath` and now names the signal that caused it. `ownerPath` walks `[SCOPE]` collecting `id`s, skipping the generic defaults (`effect`, `computed`, `signal`, `component`) and collapsing consecutive duplicates (`insert` nests a second effect under the same label for function values); facade names (`measure`, `mutation`, `idle`) stay — `Panel > mutation` is informative.
-9. **"Why did this run."** `notify()` stamps two module variables right before it calls the effect scheduler — `notifyDep` (the dep whose link reached the effect: a signal or a memo) and `notifyRoot` (the written node at the root of the walk) — and the scheduler hook copies them onto the effect (`_dirtyDep`/`_dirtyRoot`, DEV-only fields). Store leaves get DEV ids `store.<key>` (`store.$TRACK` for the shape signal), so the log reads `← signal "store.title" via memo "chatTitle" in ChatList`. Cost: one `if (DEV)` per effect schedule; nothing on the read path.
-10. **Run counting.** `_runs` counts the creation run (1 after `createEffect`) and every scheduled run that reached `runEffect`'s compute (parked and bailed runs do not count). The run observer (`setRunObserver`) sees only scheduled runs with their duration (`performance.now()` twice per run, only while an observer is installed); the drain observer (`setDrainObserver`) sees each frame drain's phase, duration and run count. `enableStrict()` installs both (counters + slow warnings); `enableRunLog()` installs them too and additionally logs. `SLOW_RUN_MS = 7` for both the per-run and the per-drain warning.
-11. **`flushSync` contract (R3 of the audit).** `fasterdom.ts` keeps `passDepth`, incremented around each phase segment (the rAF segment and the three microtask segments, and the segments `flushSync` itself runs). `flushSync()` throws when `passDepth > 0` — inside a frame effect's compute/apply, a raw frame task, a `forceMeasure` callback, or a nested `flushSync` (the old reentrancy error, same wording prefix `is not reentrant`) — and is otherwise allowed, in production too: an event handler, a store action, a tickEnd effect (a microtask between two rAF segments is *not* inside a segment; a `flushSync` there drains the rAF's still-pending mutations along with its own, FIFO, and the rAF's mutate segment then finds an empty queue). `src/core/flush.ts` (the public `flushSync`) is unchanged in behaviour: `flushTickEnd` is re-entrant, `flushFrame` carries the guard.
-12. **Chrome lane.** `test/chrome/{index.html,main.tsx,vite.config.ts,run.mjs}`, `pnpm test:chrome` (not part of `pnpm check`: it needs Chrome). `run.mjs` builds through the Vite JS API with a dev build (`mode: 'development'`, `define: process.env.NODE_ENV = "development"` so `DEV` is true and `sourceNames` are on), serves with `vite preview` on port 4178, runs Chrome `--headless=new --dump-dom --virtual-time-budget=10000 --user-data-dir=<tmp>` and parses the JSON the page put in `data-result` (HTML-unescaped). Under `--dump-dom` Chrome may never paint, so `requestAnimationFrame` may never fire; fasterdom then runs the pass from its 35 ms fallback, and the page's `nextFrame()` helper waits for whichever comes first. Measured: the box of scenario 1 is 48 px + 1 px padding from the measure effect + 1 px from the probe = 50 px.
+9. **"Why did this run."** `notify()` stamps two module variables right before it calls the effect scheduler — `notifyDep` (the dep whose link reached the effect: a signal or a memo) and `notifyRoot` (the written node at the root of the walk) — and the scheduler hook copies them onto the effect (`_dirtyDep`/`_dirtyRoot`, DEV-only fields). Store leaves get DEV ids `store.<key>` (`store.$TRACK` for the shape signal, `store.$VALUES` for the values signal; assigned right after `createLeafNode`), so the log reads `← signal "store.title" via memo "chatTitle" in ChatList`. The stamps on the effect are cleared when its run ends (an effect must not keep a store leaf alive after P3 released it). Cost: one `if (DEV)` per effect schedule; nothing on the read path.
+10. **Run counting.** `_runs` counts the creation run (1 after `createEffect`) and every scheduled run that reached `runEffect`'s compute (parked and bailed runs do not count). The run observer (`setRunObserver`) sees only scheduled runs with their duration (`performance.now()` twice per run, only while an observer is installed); the drain observer (`setDrainObserver`) sees each frame drain's phase, duration and run count. `enableStrict()` installs both (counters + slow warnings); `enableRunLog()` installs them too and additionally logs. `SLOW_RUN_MS = 7` for both the per-run and the per-drain warning. The "slowest" a drain warning names is taken only from runs inside that drain (`getDrainingPhase()`; a tickEnd run just before it is not part of it); the path of an effect is computed once (`WeakMap`: an owner chain never changes).
+11. **`flushSync` contract (R3 of the audit).** `fasterdom.ts` keeps `passDepth`, incremented around each phase segment (the rAF segment and the three microtask segments, and the segments `flushSync` itself runs). `flushSync()` throws when `passDepth > 0` — inside a frame effect's compute/apply, a raw frame task, a `forceMeasure` callback, or a nested `flushSync` (the old reentrancy error, same wording prefix `is not reentrant`) — and is otherwise allowed, in production too: an event handler, a store action, a tickEnd effect (a microtask between two rAF segments is *not* inside a segment; a `flushSync` there drains the rAF's still-pending mutations along with its own, FIFO, and the rAF's mutate segment then finds an empty queue). `src/core/flush.ts` (the public `flushSync`) checks `isInFramePass()` first, so inside a pass it throws before it would run pending tickEnd effects mid-pass; outside a pass it is unchanged (`flushTickEnd` is re-entrant, `flushFrame` carries the guard).
+12. **Chrome lane.** `test/chrome/{index.html,main.tsx,vite.config.ts,run.mjs}`, `pnpm test:chrome` (not part of `pnpm check`: it needs Chrome; 9 scenarios — the 9th is the browser's microtask order: a handler's DOM write pending when the tickEnd effect applies). `run.mjs` builds through the Vite JS API with a dev build (`mode: 'development'`, `define: process.env.NODE_ENV = "development"` so `DEV` is true and `sourceNames` are on), serves with `vite preview` on port 4178, runs Chrome `--headless=new --dump-dom --virtual-time-budget=10000 --user-data-dir=<tmp, removed afterwards>` and parses the JSON the page put in `data-result` (HTML-unescaped). Under `--dump-dom` Chrome may never paint, so `requestAnimationFrame` may never fire; fasterdom then runs the pass from its 35 ms fallback, and the page's `nextFrame()` helper waits for whichever comes first. Measured: the box of scenario 1 is 48 px + 1 px padding from the measure effect + 1 px from the probe = 50 px.
 13. **Licensing.** Port from teact (MIT) with the `Adapted from teact` header; telegram-tt is GPL-3.0 — its three additions (`data-stricterdom-ignore`, `details[open]`, `allowAnyPhase`) are behaviour, re-implemented here from the description; nothing is copied from tt.
-14. **Not in this plan:** a DEV check "DOM write during a *compute*" (the phase model cannot tell compute from apply inside the mutate drain), observing `characterData`, a `setErrorReporter` for the whole core, benchmarks (plan 5), the client kit (plan 6: it imports the signatures in the Interfaces blocks below).
+14. **Production deadness is tested**, not assumed: `test/stricterdom/production.test.ts` builds an app that calls the whole surface with `vite build` in `production` and `development` mode and checks that the detectors, the observer, the profiler and the core's attribution fields are absent from the first and present in the second.
+15. **Not in this plan:** a DEV check "DOM write during a *compute*" (the phase model cannot tell compute from apply inside the mutate drain), observing `characterData`, a `setErrorReporter` for the whole core, benchmarks (plan 5), the client kit (plan 6: it imports the signatures in the Interfaces blocks below).
 
 ## File Structure (end state of this plan)
 
@@ -51,17 +52,17 @@ package.json / tsconfig.json / vitest.config.ts   + "./stricterdom" export, path
 THIRD_PARTY_LICENSES.md                          teact entry + src/stricterdom/{stricterdom,layoutCauses}.ts (Task 2)
 src/core/debug.ts        ownerPath, effectPath, describeNode (Task 1)
 src/core/core.ts         notifyDep/notifyRoot, stampNotify before effectScheduler (Task 1)
-src/core/effects.ts      _dirtyDep/_dirtyRoot/_runs (DEV), getEffectDebugInfo, setRunObserver, setAfterApplyHook, run timing (Task 1)
-src/core/frame.ts        measure-dirtied warning with path + source, setDrainObserver, drain timing (Task 1)
-src/core/flush.ts        doc: the production contract (Task 5)
-src/store/store.ts       DEV ids on leaf/shape signals (Task 1)
+src/core/effects.ts      _dirtyDep/_dirtyRoot/_runs (DEV), getEffectDebugInfo, setRunObserver, setApplyHook, run timing (Task 1)
+src/core/frame.ts        measure-dirtied warning with path + source, setDrainObserver, getDrainingPhase, drain timing (Task 1)
+src/core/flush.ts        doc: the production contract; in-pass check before the tickEnd flush (Task 5)
+src/store/store.ts       DEV ids on leaf/shape/values signals (Task 1)
 src/scheduler/fasterdom.ts   passDepth around segments, isInFramePass, flushSync guard (Task 5)
 src/stricterdom/layoutCauses.ts   the table (+ selectionStart/End) (Task 2)
 src/stricterdom/stricterdom.ts    StrictViolationError, enable/disable, forceMeasure/forceMutation/suppressStrict/setHandler, detectors, observer (Task 2); profiling switch (Task 4)
 src/stricterdom/runlog.ts         run stats, run log, slow run/drain warnings (Task 4)
 src/stricterdom/index.ts          the frameact/stricterdom surface (Tasks 2, 4)
 test/core/debug.test.ts (1); test/effects/frame.test.ts (+2: Tasks 1, 5); test/scheduler/fasterdom.test.ts (+2: Task 5)
-test/stricterdom/stricterdom.test.ts (2), attribution.test.tsx (3), runlog.test.ts (4), index.test.ts (6)
+test/stricterdom/stricterdom.test.ts (2), attribution.test.tsx (3), runlog.test.ts (4), index.test.ts + production.test.ts (6)
 test/chrome/index.html, main.tsx, vite.config.ts, run.mjs (6)
 README.md, README.ru.md, README.zh-CN.md   flushSync bullet (5); feature bullet, status, comparison row, a stricterdom section, roadmap row 4, Development (6)
 docs/superpowers/specs/2026-10-11-frameact-design.md   §3.1 flushSync (5); §3.4 rewritten, §4 files, §5 tests + Chrome lane (6)
@@ -69,15 +70,15 @@ docs/superpowers/specs/2026-10-11-frameact-design.md   §3.1 flushSync (5); §3.
 
 ---
 
-### Task 1: Core DEV attribution primitives — `ownerPath`/`effectPath`/`describeNode`, notify stamps, run/drain/after-apply hooks, store leaf ids
+### Task 1: Core DEV attribution primitives — `ownerPath`/`effectPath`/`describeNode`, notify stamps, run/drain/apply hooks, store leaf ids
 
 **Files:**
 - Create: `src/core/debug.ts`, `test/core/debug.test.ts`
-- Modify: `src/core/core.ts` (exports after `effectDisposeHook`; `notify()`), `src/core/effects.ts` (`EffectNode`, `Effect` constructor, `createEffect`, `runEffect`, `applyEffect`, the scheduler hook), `src/core/frame.ts` (`enqueue` warning, `drain`), `src/store/store.ts` (`trackKey`, `trackSelf`), `test/effects/frame.test.ts` (append one test)
+- Modify: `src/core/core.ts` (exports after `effectDisposeHook`; `notify()`), `src/core/effects.ts` (`EffectNode`, `Effect` constructor, `createEffect`, `runEffect`, `applyEffect`, the scheduler hook), `src/core/frame.ts` (`enqueue` warning, `drain`), `src/store/store.ts` (`trackKey`, `trackSelf`, `trackVals`), `test/effects/frame.test.ts` (append one test)
 
 **Interfaces:**
 - Consumes: `SCOPE` (`src/core/symbols.ts`); `Computation`, `Scope` (`src/core/types.ts`); `currentEffect`, `getRunningEffect()` (`src/core/effects.ts`); `DEV`.
-- Produces (all DEV; `src/core/debug.ts`): `ownerPath(scope: Scope | null): string[]`, `effectPath(node: Scope): string`, `describeNode(node: Computation | null): string`. (`src/core/effects.ts`): `interface EffectDebugInfo { dep: Computation | null; root: Computation | null; runs: number }`, `getEffectDebugInfo(node: EffectNode): EffectDebugInfo | null` (null in prod), `type RunObserver = (node: EffectNode, ms: number) => void`, `setRunObserver(fn: RunObserver | null): void`, `setAfterApplyHook(fn: ((node: EffectNode) => void) | null): void` — the hook runs at the end of every apply while `getRunningEffect()` is still that effect. (`src/core/frame.ts`): `type DrainObserver = (phase: FramePhase, ms: number, runs: number) => void`, `setDrainObserver(fn: DrainObserver | null): void`. (`src/core/core.ts`): `export let notifyDep: Computation | null`, `notifyRoot: Computation | null` (live bindings, read by effects.ts only). Store leaf signals carry `id: 'store.<key>'` / `'store.$TRACK'` in DEV. The measure-dirtied warning text becomes `` [frameact] measure effect <path> [mutate] was dirtied during the mutate phase by <describeNode(root)> — it will run next frame. Write that signal from a measure effect or event handler instead. ``
+- Produces (all DEV; `src/core/debug.ts`): `ownerPath(scope: Scope | null): string[]`, `effectPath(node: Scope): string`, `describeNode(node: Computation | null): string`. (`src/core/effects.ts`): `interface EffectDebugInfo { dep: Computation | null; root: Computation | null; runs: number }`, `getEffectDebugInfo(node: EffectNode): EffectDebugInfo | null` (null in prod; `dep`/`root` describe the *pending* run and are cleared when it ends, so a released store leaf is not kept alive), `type RunObserver = (node: EffectNode, ms: number) => void`, `setRunObserver(fn: RunObserver | null): void`, `setApplyHook(fn: ((node: EffectNode) => void) | null): void` — the hook runs twice around every apply: right before it (`getRunningEffect()` is still the enclosing effect or null) and at its end (`getRunningEffect()` is that effect); it must not throw. (`src/core/frame.ts`): `type DrainObserver = (phase: FramePhase, ms: number, runs: number) => void`, `setDrainObserver(fn: DrainObserver | null): void`, `getDrainingPhase(): FramePhase | null` (the phase whose drain is running; always null in prod). (`src/core/core.ts`): `export let notifyDep: Computation | null`, `notifyRoot: Computation | null` (live bindings, read by effects.ts only). Store leaves (made by `createLeafNode`, base 063af48) carry `id: 'store.<key>'` / `'store.$TRACK'` (shape) / `'store.$VALUES'` (values) in DEV. The measure-dirtied warning text becomes `` [frameact] measure effect <path> [mutate] was dirtied during the mutate phase by <describeNode(root)> — it will run next frame. Write that signal from a measure effect or event handler instead. ``
 
 - [ ] **Step 1: Create `src/core/debug.ts`**
 
@@ -217,7 +218,7 @@ with
             subs = node._subs;
 ```
 
-- [ ] **Step 3: `src/core/effects.ts` — DEV fields, hooks, timing (six edits)**
+- [ ] **Step 3: `src/core/effects.ts` — DEV fields, hooks, timing (seven edits)**
 
 Edit 1 — the import list from `./core`: add `notifyDep,` and `notifyRoot,` between `isFunction,` and `setEffectDisposeHook,` (alphabetical, as the list is):
 ```ts
@@ -237,15 +238,15 @@ with
 ```ts
   /** @internal frame drain loop guard: runs within `_drainEpoch` */
   _drainRuns: number;
-  /** @internal DEV only ("why did this run"): the dep whose change scheduled the pending run (a signal or memo) */
+  /** @internal DEV only ("why did this run"): the dep whose change scheduled the pending run (a signal or memo); cleared when the run ends */
   _dirtyDep: Computation | null;
-  /** @internal DEV only: the node written at the root of that notify walk */
+  /** @internal DEV only: the node written at the root of that notify walk; cleared when the run ends */
   _dirtyRoot: Computation | null;
   /** @internal DEV only: runs of this effect — the creation run and every scheduled run that reached its compute */
   _runs: number;
 }
 
-/** DEV: what dirtied an effect's pending (or last) run, and how often it ran. */
+/** DEV: what dirtied an effect's pending run (null once it ran: a released store leaf is not kept alive), and how often it ran. */
 export interface EffectDebugInfo {
   /** The signal/memo whose link reached the effect. */
   dep: Computation | null;
@@ -268,11 +269,16 @@ export function setRunObserver(fn: RunObserver | null) {
   if (DEV) runObserver = fn;
 }
 
-/** DEV: called at the end of every apply, while `currentEffect` is still the effect (stricterdom drains mutation records there). */
-let afterApplyHook: ((node: EffectNode) => void) | null = null;
+/**
+ * DEV: called twice around every apply — right before it, while `currentEffect` is still the
+ * enclosing effect (or null), and at its end, while `currentEffect` is the effect. stricterdom drains
+ * mutation records at both points, so a write is attributed to the effect whose apply made it, never
+ * to the next apply that happens to drain it. Must not throw (it runs where `currentEffect` is swapped).
+ */
+let applyHook: ((node: EffectNode) => void) | null = null;
 /** @internal stricterdom (DEV only; a no-op in prod). */
-export function setAfterApplyHook(fn: ((node: EffectNode) => void) | null) {
-  if (DEV) afterApplyHook = fn;
+export function setApplyHook(fn: ((node: EffectNode) => void) | null) {
+  if (DEV) applyHook = fn;
 }
 ```
 
@@ -339,12 +345,28 @@ with
     if (DEV) {
       node._runs++;
       if (runObserver !== null) runObserver(node, performance.now() - t0);
+      node._dirtyDep = null; // (a store leaf released meanwhile must not stay reachable from here)
+      node._dirtyRoot = null;
     }
   }
 }
 ```
 
-Edit 6a — the end of `applyEffect`: replace
+Edit 6a — the head of `applyEffect`: replace
+```ts
+  const outer = currentEffect;
+  currentEffect = node;
+  const outerInApply = DEV ? setInEffectApply(true) : false;
+```
+with
+```ts
+  const outer = currentEffect;
+  if (DEV && applyHook !== null) applyHook(node); // records made before this apply belong to the context around it
+  currentEffect = node;
+  const outerInApply = DEV ? setInEffectApply(true) : false;
+```
+
+Edit 6b — the end of `applyEffect`: replace
 ```ts
   } finally {
     if (DEV) setInEffectApply(outerInApply);
@@ -357,14 +379,14 @@ with
   } finally {
     if (DEV) {
       setInEffectApply(outerInApply);
-      if (afterApplyHook !== null) afterApplyHook(node); // still attributed to this effect
+      if (applyHook !== null) applyHook(node); // still attributed to this effect
     }
     currentEffect = outer;
   }
 }
 ```
 
-Edit 6b — the scheduler hook: replace
+Edit 7 — the scheduler hook: replace
 ```ts
 setEffectScheduler((raw) => {
   const node = raw as EffectNode;
@@ -379,7 +401,7 @@ setEffectScheduler((raw) => {
   }
 ```
 
-- [ ] **Step 4: `src/core/frame.ts` — the warning with a path, the drain observer (four edits)**
+- [ ] **Step 4: `src/core/frame.ts` — the warning with a path, the drain observer, the draining phase (four edits)**
 
 Edit 1 — imports: after `import { computed, signal } from './signals';` add
 ```ts
@@ -394,7 +416,7 @@ with
 ```ts
       `[frameact] measure effect ${effectPath(node)} [mutate] was dirtied during the mutate phase by ${describeNode(node._dirtyRoot)} — it will run next frame. Write that signal from a measure effect or event handler instead.`,
 ```
-and right after `enqueue`'s closing brace (before `/** @internal */ export function isArmed`) add
+and right after `enqueue`'s closing brace (before the two lines `/** @internal */` / `export function isArmed(phase: FramePhase) {`) add
 ```ts
 /** DEV: called after every frame drain with its phase, duration and the number of effect runs (stricterdom's slow-phase warning). */
 export type DrainObserver = (phase: FramePhase, ms: number, runs: number) => void;
@@ -402,6 +424,12 @@ let drainObserver: DrainObserver | null = null;
 /** @internal stricterdom (DEV only; a no-op in prod). */
 export function setDrainObserver(fn: DrainObserver | null) {
   if (DEV) drainObserver = fn;
+}
+/** DEV: the phase whose drain is running, or null (tickEnd and idle runs happen outside any drain). */
+let drainingPhase: FramePhase | null = null;
+/** @internal stricterdom's run log: which drain an effect run belongs to (always null in prod). */
+export function getDrainingPhase(): FramePhase | null {
+  return drainingPhase;
 }
 ```
 
@@ -414,6 +442,8 @@ with
 ```ts
   const prevSample = openGateSample(); // the store gate decides once per drain (heavyAnimation.ts)
   const t0 = DEV && drainObserver !== null ? performance.now() : 0;
+  const outerDraining = DEV ? drainingPhase : null;
+  if (DEV) drainingPhase = phase;
   let runs = 0;
   try {
 ```
@@ -445,19 +475,55 @@ with
     closeGateSample(prevSample);
     queues[phase] = [];
     armed[phase] = false;
-    if (DEV && drainObserver !== null) drainObserver(phase, performance.now() - t0, runs);
+    if (DEV) {
+      drainingPhase = outerDraining;
+      if (drainObserver !== null) drainObserver(phase, performance.now() - t0, runs);
+    }
   }
 ```
 
-- [ ] **Step 5: `src/store/store.ts` — DEV ids for leaves (two edits)**
+- [ ] **Step 5: `src/store/store.ts` — DEV ids for leaves (three edits)**
 
-In `trackKey`, replace `    s = sigs[key] = createSignalNode(value);` with
+Base 063af48 creates leaves with `createLeafNode(value, owner, key)` (they are dropped when their last reader goes, P3); a DEV signal node always has an `id` field, so assigning it after creation keeps the hidden class. In `trackKey`, replace
 ```ts
-    s = sigs[key] = createSignalNode(value, DEV ? { id: `store.${String(key)}` } : undefined);
+    s = sigs[key] = createLeafNode(value, node, key);
+    node.nsigs++;
+    if (DEV) storeStats.leafSignals++;
 ```
-In `trackSelf`, replace `    s = node.self = createSignalNode(0);` with
+with
 ```ts
-    s = node.self = createSignalNode(0, DEV ? { id: 'store.$TRACK' } : undefined);
+    s = sigs[key] = createLeafNode(value, node, key);
+    node.nsigs++;
+    if (DEV) {
+      storeStats.leafSignals++;
+      s.id = `store.${String(key)}`; // "why did this run" names the key (spec §3.4)
+    }
+```
+In `trackSelf`, replace
+```ts
+    s = node.self = createLeafNode(0, node, SELF);
+    if (DEV) storeStats.leafSignals++;
+```
+with
+```ts
+    s = node.self = createLeafNode(0, node, SELF);
+    if (DEV) {
+      storeStats.leafSignals++;
+      s.id = 'store.$TRACK';
+    }
+```
+In `trackVals`, replace
+```ts
+    s = node.vals = createLeafNode(0, node, VALS);
+    if (DEV) storeStats.leafSignals++;
+```
+with
+```ts
+    s = node.vals = createLeafNode(0, node, VALS);
+    if (DEV) {
+      storeStats.leafSignals++;
+      s.id = 'store.$VALUES';
+    }
 ```
 
 - [ ] **Step 6: Write the failing tests**
@@ -567,7 +633,8 @@ it('records which signal dirtied an effect (the walk root) and the memo it came 
   expect(describeNode(info.root)).toBe('signal "count"');
   expect(describeNode(info.dep)).toBe('memo "doubled" in Counter');
   flushSync();
-  expect(getEffectDebugInfo(node)!.runs).toBe(2);
+  // cleared once the run is done (a store leaf released meanwhile is not kept alive by the effect)
+  expect(getEffectDebugInfo(node)).toEqual({ dep: null, root: null, runs: 2 });
 });
 
 it('a store leaf names its key', () => {
@@ -620,16 +687,16 @@ it('the measure-dirtied warning names the effect path, the phase and the signal 
 - [ ] **Step 7: Run the new tests, then the full check**
 
 Run: `pnpm vitest run test/core/debug.test.ts test/effects/frame.test.ts`
-Expected: `Tests  29 passed (29)` (5 new in debug, 24 in frame). If Steps 1–5 were skipped the debug file fails to import (`debug.ts` missing) — that is the red state.
+Expected: `Tests  28 passed (28)` (5 new in debug, 23 in frame). If Steps 1–5 were skipped the debug file fails to import (`debug.ts` missing) — that is the red state.
 
 Run: `pnpm check`
-Expected: lint prints nothing but the command lines; tsc 0 errors; `Tests  863 passed (863)` (857 before this task).
+Expected: lint prints nothing but the command lines; tsc 0 errors; `Tests  962 passed (962)` (956 before this task).
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add src/core/debug.ts src/core/core.ts src/core/effects.ts src/core/frame.ts src/store/store.ts test/core/debug.test.ts test/effects/frame.test.ts
-git commit -m "feat(core): DEV attribution primitives — ownerPath/effectPath/describeNode, notify stamps (why did this run), run/drain/after-apply hooks, store leaf ids
+git commit -m "feat(core): DEV attribution primitives — ownerPath/effectPath/describeNode, notify stamps (why did this run), run/drain/apply hooks, store leaf ids
 
 Co-Authored-By: <your model name> <noreply@anthropic.com>"
 ```
@@ -643,12 +710,12 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 - Modify: `package.json` (`exports`), `tsconfig.json` (`paths`), `vitest.config.ts` (`alias`), `THIRD_PARTY_LICENSES.md` (teact entry)
 
 **Interfaces:**
-- Consumes: `getPhase`, `onPhaseChange`, `Phase` (`src/scheduler/fasterdom.ts`); `getRunningEffect`, `setAfterApplyHook` (Task 1); `effectPath` (Task 1); `strictHooks` (`src/dom/strict.ts`: `{ forceMutation<T>(cb: () => T, target: Node): T }`); `DEV`.
+- Consumes: `getPhase`, `onPhaseChange`, `Phase` (`src/scheduler/fasterdom.ts`); `getRunningEffect`, `setApplyHook` (Task 1); `effectPath` (Task 1); `strictHooks` (`src/dom/strict.ts`: `{ forceMutation<T>(cb: () => T, target: Node): T }`); `getNatives` (`src/dom/natives.ts`: `body`, `contains`, `nodeType`, `nodeName`, `localName`, `parentNode` — document clobbering, M1 of base 063af48); `DEV`.
 - Produces — the public surface of `frameact/stricterdom` (plan 6 imports these):
   - `enableStrict(): void` — DEV only (production: returns); throws without a `document.body`; idempotent.
   - `disableStrict(): void`; `isStrictEnabled(): boolean`.
-  - `forceMeasure<T>(cb: () => T): T` — DEV: throws `[frameact/stricterdom] forceMeasure(): the current phase is 'measure' already` outside the mutate phase; the layout check is off inside `cb`; a DOM write inside `cb` is a violation. Production: `cb()`.
-  - `forceMutation<T>(cb: () => T, nodes: Node | Node[], allowAnyPhase?: boolean): T` — DEV: throws `[frameact/stricterdom] forceMutation(): the current phase is 'mutate' already` in the mutate phase unless `allowAnyPhase`; records whose `target` is one of `nodes` are not violations. Production: `cb()`.
+  - `forceMeasure<T>(cb: () => T): T` — DEV, in the mutate phase: `cb` runs as a measure window (the layout check is off inside it; a DOM write inside it is a violation). Anywhere else (and with strict off) a plain `cb()` — it never throws: kit helpers call it from both contexts. Production: `cb()`.
+  - `forceMutation<T>(cb: () => T, nodes: Node | Node[], allowAnyPhase?: boolean): T` — DEV: throws `[frameact/stricterdom] forceMutation(): the current phase is 'mutate' already` in the mutate phase unless `allowAnyPhase`; records whose `target` is one of `nodes` are not violations (attached descendants of `nodes` are not covered); nested sanctions of the same node keep the outer one in force. Production: `cb()`.
   - `suppressStrict<T>(cb: () => T): T` — both checks off inside, re-entrant.
   - `setHandler(handler?: StrictErrorHandler): void` — `type StrictErrorHandler = (error: StrictViolationError) => void`; no argument restores `console.error`.
   - `class StrictViolationError extends Error { readonly kind: 'measure' | 'mutation'; readonly detail: string; readonly phase: Phase; readonly path: string | null; readonly target: Node | null }` (`name === 'StrictViolationError'`); `type StrictViolationKind = 'measure' | 'mutation'`.
@@ -723,13 +790,14 @@ export const LAYOUT_CAUSES: Readonly<Record<string, LayoutCauses>> = {
 ```ts
 // Adapted from teact (MIT, © 2022 Alexander Zinchuk) — https://github.com/Ajaxy/teact src/lib/fasterdom/stricterdom.ts
 // frameact: the phase comes from the scheduler (`getPhase`), mutation records are drained at every
-// phase change and after every effect apply (so a violation is reported in the phase it happened
+// phase change and around every effect apply (so a violation is reported in the phase it happened
 // in and attributed to the effect that was running), `suppressStrict` is a counter instead of an
 // unpatch/repatch, and the error carries the attribution path (spec §3.4).
 import { DEV } from '../env';
 import { getPhase, onPhaseChange, type Phase } from '../scheduler/fasterdom';
-import { getRunningEffect, setAfterApplyHook } from '../core/effects';
+import { getRunningEffect, setApplyHook } from '../core/effects';
 import { effectPath } from '../core/debug';
+import { getNatives } from '../dom/natives';
 import { strictHooks } from '../dom/strict';
 import { LAYOUT_CAUSES } from './layoutCauses';
 
@@ -760,14 +828,16 @@ export class StrictViolationError extends Error {
 
 export type StrictErrorHandler = (error: StrictViolationError) => void;
 
-/** `<div class="x">` for the error message. */
+/** `<div class="x">` for the error message (through the prototype natives: a form's controls may shadow its properties). */
 function describeTarget(node: Node | null): string {
   if (node === null) return '<unknown>';
-  if (node.nodeType !== 1) return `#${node.nodeName.toLowerCase()}`;
-  const el = node as Element;
-  let out = `<${el.localName}`;
-  if (el.id) out += ` id="${el.id}"`;
-  const cls = el.getAttribute('class');
+  const { nodeType, nodeName, localName } = getNatives();
+  if (nodeType.call(node) !== 1) return `#${nodeName.call(node).toLowerCase()}`;
+  const getAttribute = Element.prototype.getAttribute;
+  let out = `<${localName.call(node as Element)}`;
+  const id = getAttribute.call(node as Element, 'id');
+  if (id) out += ` id="${id}"`;
+  const cls = getAttribute.call(node as Element, 'class');
   if (cls) out += ` class="${cls}"`;
   return `${out}>`;
 }
@@ -790,9 +860,8 @@ let unsubscribePhase: (() => void) | undefined;
 /** The phase the pending mutation records were produced in (mirrors the scheduler; updated by the phase listener). */
 let recordsPhase: Phase = 'measure';
 const forcedMutationAllowedFor = new Set<Node>();
-
-const nativeGetters = new Map<string, () => unknown>();
-const nativeMethods = new Map<string, (...args: unknown[]) => unknown>();
+/** Undo functions of the installed layout patches (run by `disableStrict`). */
+const restores: (() => void)[] = [];
 
 function effectivePhase(): Phase {
   return forcedPhase ?? getPhase();
@@ -808,13 +877,19 @@ function runningPath(): string | null {
 function allowMutation<T>(nodes: Node | Node[], cb: () => T): T {
   if (!isStrict) return cb();
   drainRecords(); // earlier records are judged on their own, not under this whitelist
-  const list = Array.isArray(nodes) ? nodes : [nodes];
-  for (const node of list) forcedMutationAllowedFor.add(node);
+  // Only the nodes added here are removed at the end: a nested sanction of the same node (a Portal
+  // inside a Portal, both mounting into <body>) must not end the outer one.
+  const added: Node[] = [];
+  for (const node of Array.isArray(nodes) ? nodes : [nodes]) {
+    if (forcedMutationAllowedFor.has(node)) continue;
+    forcedMutationAllowedFor.add(node);
+    added.push(node);
+  }
   try {
     return cb();
   } finally {
     drainRecords(); // the callback's records are checked now, with the whitelist in force
-    for (const node of list) forcedMutationAllowedFor.delete(node);
+    for (const node of added) forcedMutationAllowedFor.delete(node);
   }
 }
 
@@ -825,7 +900,7 @@ function allowMutation<T>(nodes: Node | Node[], cb: () => T): T {
  */
 export function enableStrict(): void {
   if (!DEV || isStrict) return;
-  if (typeof document === 'undefined' || !document.body) {
+  if (typeof document === 'undefined' || !getNatives().body.call(document)) {
     throw new Error('[frameact/stricterdom] enableStrict() needs a document with a <body>');
   }
   isStrict = true;
@@ -837,9 +912,9 @@ export function enableStrict(): void {
     drainRecordsAs(recordsPhase);
     recordsPhase = next;
   });
-  // An apply outside the mutate phase is where a violation can happen: check right away, while the
-  // effect is still attributed (the asynchronous observer callback would not know it).
-  setAfterApplyHook(() => {
+  // Around an apply outside the mutate phase: before it, pending records belong to the context
+  // around the apply; after it, to the effect (the asynchronous observer callback would know neither).
+  setApplyHook(() => {
     if (effectivePhase() !== 'mutate') drainRecords();
   });
   strictHooks.forceMutation = (cb, target) => allowMutation(target, cb);
@@ -849,15 +924,13 @@ export function disableStrict(): void {
   if (!DEV || !isStrict) return;
   drainRecords();
   strictHooks.forceMutation = (cb) => cb();
-  setAfterApplyHook(null);
+  setApplyHook(null);
   unsubscribePhase?.();
   unsubscribePhase = undefined;
   clearMutationObserver();
   clearLayoutDetectors();
   forcedMutationAllowedFor.clear();
-  forcedPhase = null;
-  suppressed = 0;
-  isStrict = false;
+  isStrict = false; // (forcedPhase / suppressed are balanced by the try/finally of the windows still open)
 }
 
 export function isStrictEnabled(): boolean {
@@ -865,16 +938,13 @@ export function isStrictEnabled(): boolean {
 }
 
 /**
- * Read layout from the mutate phase (the scroll-anchor pattern: snapshot before writing). DEV: a
- * precondition error outside the mutate phase (there is nothing to force there); a DOM write inside
- * `cb` is a violation. Production: `cb()`.
+ * Read layout from the mutate phase (the scroll-anchor pattern: snapshot before writing): inside the
+ * mutate phase, `cb` runs as a measure window (layout reads allowed, a DOM write is a violation).
+ * Anywhere else it is a plain `cb()` — layout reads are allowed there anyway, and helpers that use it
+ * are called from both contexts. Production: `cb()`.
  */
 export function forceMeasure<T>(cb: () => T): T {
-  if (!DEV) return cb();
-  if (effectivePhase() !== 'mutate') {
-    throw new Error("[frameact/stricterdom] forceMeasure(): the current phase is 'measure' already");
-  }
-  if (!isStrict) return cb();
+  if (!DEV || !isStrict || effectivePhase() !== 'mutate') return cb();
   drainRecords(); // records of the mutate phase so far: legitimate, cleared
   forcedPhase = 'measure';
   try {
@@ -886,9 +956,11 @@ export function forceMeasure<T>(cb: () => T): T {
 }
 
 /**
- * Write `nodes` (and their subtrees) from the measure phase: a mount into an attached container,
- * an imperative widget. DEV: a precondition error when called in the mutate phase unless
- * `allowAnyPhase` (a helper used from both contexts). Production: `cb()`.
+ * Write to `nodes` from the measure phase: a mount into an attached container, an imperative widget.
+ * Sanctioned are the records whose target is one of `nodes` (their child lists, their attributes);
+ * writes to other attached nodes, their attached descendants included, are still violations. DEV: a
+ * precondition error when called in the mutate phase unless `allowAnyPhase` (a helper used from both
+ * contexts). Production: `cb()`.
  */
 export function forceMutation<T>(cb: () => T, nodes: Node | Node[], allowAnyPhase?: boolean): T {
   if (!DEV) return cb();
@@ -919,14 +991,13 @@ export function setHandler(handler?: StrictErrorHandler): void {
 
 function setupLayoutDetectors() {
   for (const name of Object.keys(LAYOUT_CAUSES)) {
-    const causes = LAYOUT_CAUSES[name];
     const entity = (globalThis as Record<string, unknown>)[name];
     if (!entity) continue;
     const target = (typeof entity === 'object' ? entity : (entity as { prototype: object }).prototype) as Record<string, unknown>;
+    const causes = LAYOUT_CAUSES[name];
     for (const prop of causes.props ?? []) {
       const nativeGetter = Object.getOwnPropertyDescriptor(target, prop)?.get;
       if (!nativeGetter) continue; // not implemented here (jsdom lacks some)
-      nativeGetters.set(`${name}#${prop}`, nativeGetter);
       // Only `get` is replaced: an existing setter (scrollTop, innerText) stays.
       Object.defineProperty(target, prop, {
         get() {
@@ -934,36 +1005,24 @@ function setupLayoutDetectors() {
           return nativeGetter.call(this);
         },
       });
+      restores.push(() => Object.defineProperty(target, prop, { get: nativeGetter }));
     }
     for (const method of causes.methods ?? []) {
       const nativeMethod = target[method];
       if (typeof nativeMethod !== 'function') continue;
-      nativeMethods.set(`${name}#${method}`, nativeMethod as (...args: unknown[]) => unknown);
       target[method] = function (this: unknown, ...args: unknown[]) {
         onMeasure(method);
         return (nativeMethod as (...a: unknown[]) => unknown).apply(this, args);
       };
+      restores.push(() => {
+        target[method] = nativeMethod;
+      });
     }
   }
 }
 
 function clearLayoutDetectors() {
-  for (const name of Object.keys(LAYOUT_CAUSES)) {
-    const causes = LAYOUT_CAUSES[name];
-    const entity = (globalThis as Record<string, unknown>)[name];
-    if (!entity) continue;
-    const target = (typeof entity === 'object' ? entity : (entity as { prototype: object }).prototype) as Record<string, unknown>;
-    for (const prop of causes.props ?? []) {
-      const nativeGetter = nativeGetters.get(`${name}#${prop}`);
-      if (nativeGetter) Object.defineProperty(target, prop, { get: nativeGetter });
-    }
-    for (const method of causes.methods ?? []) {
-      const nativeMethod = nativeMethods.get(`${name}#${method}`);
-      if (nativeMethod) target[method] = nativeMethod;
-    }
-  }
-  nativeGetters.clear();
-  nativeMethods.clear();
+  for (const restore of restores.splice(0)) restore();
 }
 
 function onMeasure(name: string) {
@@ -980,7 +1039,7 @@ function setupMutationObserver() {
   observer = new MutationObserver((records) => {
     checkRecords(records, effectivePhase());
   });
-  observer.observe(document.body, { childList: true, attributes: true, subtree: true, characterData: false });
+  observer.observe(getNatives().body.call(document)!, { childList: true, attributes: true, subtree: true, characterData: false });
 }
 
 function clearMutationObserver() {
@@ -995,25 +1054,33 @@ function drainRecords() {
 
 function drainRecordsAs(phase: Phase) {
   if (observer === undefined) return;
-  const records = observer.takeRecords();
-  if (records.length) checkRecords(records, phase);
+  try {
+    const records = observer.takeRecords();
+    if (records.length) checkRecords(records, phase);
+  } catch (error) {
+    // Called from a phase listener and around applies: nothing here may throw into fasterdom or the core.
+    console.error('[frameact/stricterdom] checking mutation records failed', error);
+  }
 }
 
-function isEditable(el: HTMLElement): boolean {
+function isEditable(el: HTMLElement, closest: Element['closest']): boolean {
   const flag = (el as { isContentEditable?: boolean }).isContentEditable;
-  if (flag !== undefined) return flag;
-  return el.closest('[contenteditable]:not([contenteditable="false"])') !== null; // jsdom has no isContentEditable
+  if (typeof flag === 'boolean') return flag;
+  return closest.call(el, '[contenteditable]:not([contenteditable="false"])') !== null; // jsdom has no isContentEditable
 }
 
 function checkRecords(records: MutationRecord[], phase: Phase) {
   if (phase === 'mutate' || suppressed > 0) return;
   const path = runningPath();
+  // Prototype natives: content-named elements may shadow `document.contains` or a form's `closest` (natives.ts).
+  const { contains, nodeType, parentNode } = getNatives();
+  const closest = Element.prototype.closest;
   for (const { target, type, attributeName } of records) {
-    if (!document.contains(target)) continue; // detached meanwhile (a subtree removed in the same pass)
+    if (!contains.call(document, target)) continue; // detached meanwhile (a subtree removed in the same pass)
     if (forcedMutationAllowedFor.has(target)) continue;
-    const element = target.nodeType === 1 ? (target as Element) : target.parentElement;
-    if (element?.closest(`[${IGNORE_SUBTREE_ATTR}]`)) continue;
-    if (type === 'childList' && target instanceof HTMLElement && isEditable(target)) continue; // the engine edits a composer
+    const element = (nodeType.call(target) === 1 ? target : parentNode.call(target)) as Element | null;
+    if (element !== null && nodeType.call(element) === 1 && closest.call(element, `[${IGNORE_SUBTREE_ATTR}]`)) continue;
+    if (type === 'childList' && target instanceof HTMLElement && isEditable(target, closest)) continue; // the engine edits a composer
     if (attributeName?.startsWith('data-')) continue; // data-* is state for CSS and scripts, not layout
     if (attributeName === 'open' && target instanceof HTMLDetailsElement) continue; // toggled by the user agent
     const detail = type === 'attributes' ? attributeName! : type;
@@ -1070,6 +1137,7 @@ with
 
 ```ts
 import { createEffect, createMutationEffect, createRoot, createSignal, flushSync, requestMeasure, requestMutation } from '../../src/index';
+import { flushSync as flushFrame } from '../../src/scheduler/fasterdom';
 import { createComponent } from '../../src/dom/component';
 import { render } from '../../src/dom/render';
 import { Portal } from '../../src/dom/flow';
@@ -1113,6 +1181,11 @@ function testRoot(fn: () => void) {
 }
 
 const summary = (v: StrictViolationError) => `${v.kind}:${v.detail}:${v.phase}:${v.path ?? '-'}`;
+
+/** What `<img name="…">` does to `document` in a browser (jsdom has no named properties): an own shadow of a builtin. */
+function shadow(name: string) {
+  Object.defineProperty(document, name, { value: Document.prototype.createElement.call(document, 'img'), configurable: true });
+}
 
 it('enableStrict patches the layout getters/methods on the prototypes; disableStrict restores the natives', () => {
   const patched = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!.get!;
@@ -1245,6 +1318,12 @@ it('forceMutation sanctions writes to the given nodes in the measure phase; it r
   violations.length = 0;
   forceMutation(() => { el.className = 'x'; other.className = 'y'; }, [el, other]);
   expect(violations).toEqual([]);
+  // a nested sanction of the same node (a Portal inside a Portal, both into <body>) keeps the outer one in force
+  forceMutation(() => {
+    forceMutation(() => { el.className = 'inner'; }, el);
+    el.className = 'outer, after the inner one';
+  }, el);
+  expect(violations).toEqual([]);
   let refused: unknown;
   let allowed = false;
   requestMutation(() => {
@@ -1256,7 +1335,7 @@ it('forceMutation sanctions writes to the given nodes in the measure phase; it r
   expect(allowed).toBe(true);
 });
 
-it('forceMeasure opens a layout-read window inside the mutate phase; a write inside it is a violation; it refuses the measure phase', () => {
+it('forceMeasure opens a layout-read window inside the mutate phase; a write inside it is a violation; elsewhere it is a plain call', () => {
   const el = attached();
   let read = -1;
   requestMutation(() => {
@@ -1267,7 +1346,14 @@ it('forceMeasure opens a layout-read window inside the mutate phase; a write ins
   flushSync();
   expect(read).toBe(0);
   expect(violations.map(summary)).toEqual(['mutation:class:measure:-']);
-  expect(() => forceMeasure(() => 1)).toThrow("the current phase is 'measure' already");
+  // outside the mutate phase (event handlers, measure tasks — kit helpers run in both): no error, no window
+  violations.length = 0;
+  expect(forceMeasure(() => el.offsetWidth)).toBe(0);
+  let inMeasureTask = -1;
+  requestMeasure(() => { inMeasureTask = forceMeasure(() => el.clientWidth); });
+  flushSync();
+  expect(inMeasureTask).toBe(0);
+  expect(violations).toEqual([]);
 });
 
 it('suppressStrict silences both checks for its callback (re-entrant); violations before it are still reported', async () => {
@@ -1289,6 +1375,12 @@ it('suppressStrict silences both checks for its callback (re-entrant); violation
   await flushMicrotasks();
   expect(result).toBe(42);
   expect(violations.map(summary)).toEqual(['mutation:class:measure:-', 'measure:clientWidth:mutate:-']);
+  // strict switched off and on inside a window: the window still closes cleanly, later windows still suppress
+  suppressStrict(() => disableStrict());
+  enableStrict();
+  suppressStrict(() => { el.className = 'quiet'; });
+  await flushMicrotasks();
+  expect(violations).toHaveLength(2);
 });
 
 it('setHandler() without a handler restores console.error; a throwing handler reaches the caller of a layout read', () => {
@@ -1354,15 +1446,70 @@ it('a tickEnd effect writing the live DOM is reported synchronously after its ap
   flushSync();
   expect(violations.map(summary)).toEqual(['mutation:title:measure:Sidebar > logic']);
 });
+
+it('a write pending when an apply starts is not attributed to that effect (a handler writes a signal, then the DOM)', () => {
+  const el = attached();
+  const [n, setN] = createSignal(0);
+  testRoot(() => {
+    createComponent(
+      () => {
+        createEffect(() => n(), () => {}, undefined, { name: 'logic' });
+        return null;
+      },
+      {},
+      'Sidebar',
+    );
+  });
+  flushSync();
+  setN(1);
+  el.className = 'pressed';
+  // the tickEnd drain runs before the observer callback (Chrome's microtask order; flushSync reproduces it here)
+  flushSync();
+  expect(violations.map(summary)).toEqual(['mutation:class:measure:-']);
+  // ...and a raw measure task's write is not attributed to the measure effect that applies after it
+  violations.length = 0;
+  requestMeasure(() => { el.title = 'raw'; });
+  testRoot(() => {
+    createComponent(
+      () => {
+        createEffect(() => n(), () => {}, (run) => requestMeasure(run), { name: 'measured' });
+        return null;
+      },
+      {},
+      'Panel',
+    );
+  });
+  flushFrame();
+  expect(violations.map(summary)).toEqual(['mutation:title:measure:-']);
+});
+
+it('document clobbering (content-named `contains` / `body` on document) does not break the checks', async () => {
+  const el = attached();
+  shadow('contains');
+  shadow('body');
+  try {
+    el.className = 'x';
+    await flushMicrotasks();
+    expect(violations.map(summary)).toEqual(['mutation:class:measure:-']);
+    disableStrict();
+    enableStrict(); // finds the real <body> through the natives
+    el.className = 'y';
+    await flushMicrotasks();
+    expect(violations.map(summary)).toEqual(['mutation:class:measure:-', 'mutation:class:measure:-']);
+  } finally {
+    delete (document as { contains?: unknown }).contains;
+    delete (document as { body?: unknown }).body;
+  }
+});
 ```
 
 - [ ] **Step 6: Run the tests, then the full check**
 
 Run: `pnpm vitest run test/stricterdom/stricterdom.test.ts`
-Expected: `Tests  12 passed (12)`. Two failures that mean a transcription slip: a `childList` violation `of <body>` in almost every test → a `container()` was not wrapped in `suppressStrict`; `expected "error" to be called 1 times, but got 0` → the default handler captured `console.error` at module load instead of calling it at report time.
+Expected: `Tests  14 passed (14)`. Two failures that mean a transcription slip: a `childList` violation `of <body>` in almost every test → a `container()` was not wrapped in `suppressStrict`; `expected "error" to be called 1 times, but got 0` → the default handler captured `console.error` at module load instead of calling it at report time.
 
 Run: `pnpm check`
-Expected: lint silent; tsc 0 errors (a `TS4115 … must have an 'override' modifier` means a field was named `cause`); `Tests  875 passed (875)`.
+Expected: lint silent; tsc 0 errors (a `TS4115 … must have an 'override' modifier` means a field was named `cause`); `Tests  976 passed (976)`.
 
 - [ ] **Step 7: Commit**
 
@@ -1382,7 +1529,7 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `frameact/stricterdom` (Task 2), `frameact/dom` (`render`, `For`, `Show`, `Switch`/`Match`, `Dynamic`, `Portal`, `delegateEvents`), `frameact` (`createMeasureEffect`, `createMutationEffect`, `beginHeavyAnimation`, `onCleanup`), `useDomHarness`/`container`, `flushMicrotasks`. The file is compiled by `frameact/vite` (vitest config) with `sourceNames` on.
-- Produces: no code; this suite is the **gate** that the runtime (insert, reconcile, class/style/attr writers, `use:value`, flow components, deferred apply-cleanups, parking release) writes the live DOM only in the mutate phase. A violation here is a runtime bug, not a test to loosen.
+- Produces: no code; this suite is the **gate** that the runtime (insert, reconcile, class/style/attr writers, `use:value`, flow components incl. a Portal inside a Portal, deferred apply-cleanups, parking release) writes the live DOM only in the mutate phase. A violation here is a runtime bug, not a test to loosen.
 
 - [ ] **Step 1: Write the suite `test/stricterdom/attribution.test.tsx`**
 
@@ -1509,7 +1656,10 @@ function App(props: { items: () => Item[]; mode: () => 'list' | 'grid' | 'none';
       </Show>
       <Show when={portalOpen()}>
         <Portal>
-          <div class="toast">{props.text()}</div>
+          <div class="toast">
+            {props.text()}
+            <Portal><i class="tip" /></Portal>
+          </div>
         </Portal>
       </Show>
     </div>
@@ -1520,7 +1670,7 @@ function App(props: { items: () => Item[]; mode: () => 'list' | 'grid' | 'none';
   return view;
 }
 
-it('a full app — render, For (keyed and manual), Show/Switch/Dynamic/Portal, use:value, class/style/attr bindings, measure + mutate effects, heavy-animation parking, dispose — produces no violation', async () => {
+it('a full app — render, For (keyed and manual), Show/Switch/Dynamic/Portal (nested), use:value, class/style/attr bindings, measure + mutate effects, heavy-animation parking, dispose — produces no violation', async () => {
   const [items, setItems] = createSignal<Item[]>([{ id: 1, label: 'a' }, { id: 2, label: 'b' }]);
   const [mode, setMode] = createSignal<'list' | 'grid' | 'none'>('list');
   const [text, setText] = createSignal('');
@@ -1528,6 +1678,7 @@ it('a full app — render, For (keyed and manual), Show/Switch/Dynamic/Portal, u
   await frame(); // first measure apply
   expect(el.querySelectorAll('li').length).toBe(2);
   expect(document.querySelector('.toast')).not.toBeNull();
+  expect(document.querySelector('.tip')).not.toBeNull(); // a Portal inside a Portal: both sanction <body>
 
   setItems([{ id: 3, label: 'c' }, ...items()]);
   await frame();
@@ -1558,6 +1709,7 @@ it('a full app — render, For (keyed and manual), Show/Switch/Dynamic/Portal, u
   await frame();
   expect(el.innerHTML).toBe('');
   expect(document.querySelector('.toast')).toBeNull();
+  expect(document.querySelector('.tip')).toBeNull();
   await flushMicrotasks();
   expect(violations.map(summary)).toEqual([]);
 });
@@ -1584,7 +1736,7 @@ Run: `pnpm vitest run test/stricterdom/attribution.test.tsx`
 Expected: `Tests  4 passed (4)`. Known slips: `expected [] to deeply equal ['mutation:class:measure:-']` in the second test or `expected ' hi' to be 'HI'` in the third → the `delegateEvents(['click', 'input'])` in `beforeEach` is missing (handlers never ran); `Cannot read properties of undefined (reading 'style')` → the two effects of `App` were created before the JSX (the `ref` has not run yet at the synchronous first apply).
 
 Run: `pnpm check`
-Expected: lint silent (a `let box!: HTMLDivElement` with `ref={box}` instead of the callback is a **lint error** `eslint(no-unassigned-vars)`, and `pnpm check` stops there); `Tests  879 passed (879)`.
+Expected: lint silent (a `let box!: HTMLDivElement` with `ref={box}` instead of the callback is a **lint error** `eslint(no-unassigned-vars)`, and `pnpm check` stops there); `Tests  980 passed (980)`.
 
 - [ ] **Step 3: Commit**
 
@@ -1604,7 +1756,7 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 - Modify: `src/stricterdom/stricterdom.ts` (import + two calls), `src/stricterdom/index.ts` (exports)
 
 **Interfaces:**
-- Consumes: `getEffectDebugInfo`, `setRunObserver`, `EffectNode` (Task 1, `src/core/effects.ts`); `setDrainObserver`, `FramePhase` (`src/core/frame.ts`); `describeNode`, `effectPath` (`src/core/debug.ts`); `getPhase`.
+- Consumes: `getEffectDebugInfo`, `setRunObserver`, `EffectNode` (Task 1, `src/core/effects.ts`); `setDrainObserver`, `getDrainingPhase`, `FramePhase` (`src/core/frame.ts`); `describeNode`, `effectPath` (`src/core/debug.ts`); `getPhase`.
 - Produces (public, `frameact/stricterdom`): `SLOW_RUN_MS = 7`; `interface RunStats { path: string; runs: number; totalMs: number; maxMs: number }`; `interface RunLogOptions { filter?: string | RegExp }`; `enableRunLog(options?: RunLogOptions): void`; `disableRunLog(): void`; `getRunStats(): RunStats[]` (most runs first; copies); `resetRunStats(): void`. Internal: `setStrictProfiling(on: boolean)` (called by `enableStrict`/`disableStrict`). Console output formats: `` [frameact] run #<n> <path> [<phase>] ← signal "count" via memo "doubled" in Counter `` (`console.log`), `` [frameact] Slow effect run: 10.0 ms in <path> [<phase>] `` and `` [frameact] Slow <phase> drain: 10.0 ms, 1 effect run; slowest: <path> (10.0 ms) `` (`console.warn`).
 
 - [ ] **Step 1: Create `src/stricterdom/runlog.ts`**
@@ -1615,7 +1767,7 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 // signal (or store leaf) whose write scheduled it.
 import { DEV } from '../env';
 import { getEffectDebugInfo, setRunObserver, type EffectNode } from '../core/effects';
-import { setDrainObserver, type FramePhase } from '../core/frame';
+import { getDrainingPhase, setDrainObserver, type FramePhase } from '../core/frame';
 import { describeNode, effectPath } from '../core/debug';
 import { getPhase } from '../scheduler/fasterdom';
 
@@ -1642,10 +1794,19 @@ let attached = false;
 /** Who wants the observers: stricterdom (slow-run warnings + counters) and/or the run log. */
 let wantedByStrict = false;
 const stats = new Map<string, RunStats>();
+/** The slowest run of the drain in progress (runs outside a frame drain — tickEnd, idle — are not part of one). */
 let drainSlowest: { path: string; ms: number } | null = null;
+/** An effect's owner chain never changes: its path is built once, not on every run. */
+const paths = new WeakMap<EffectNode, string>();
+
+function pathOf(node: EffectNode): string {
+  let path = paths.get(node);
+  if (path === undefined) paths.set(node, (path = effectPath(node)));
+  return path;
+}
 
 function onRun(node: EffectNode, ms: number) {
-  const path = effectPath(node);
+  const path = pathOf(node);
   let entry = stats.get(path);
   if (entry === undefined) {
     entry = { path, runs: 0, totalMs: 0, maxMs: 0 };
@@ -1654,9 +1815,9 @@ function onRun(node: EffectNode, ms: number) {
   entry.runs++;
   entry.totalMs += ms;
   if (ms > entry.maxMs) entry.maxMs = ms;
-  if (drainSlowest === null || ms > drainSlowest.ms) drainSlowest = { path, ms };
+  if (getDrainingPhase() !== null && (drainSlowest === null || ms > drainSlowest.ms)) drainSlowest = { path, ms };
   if (ms > SLOW_RUN_MS) console.warn(`[frameact] Slow effect run: ${ms.toFixed(1)} ms in ${path} [${getPhase()}]`);
-  if (logging && (filter === null || filter.test(path))) {
+  if (logging && (filter === null || path.search(filter) !== -1)) { // (search: a /g filter has no lastIndex state)
     const info = getEffectDebugInfo(node)!;
     const why =
       info.root === null
@@ -1765,7 +1926,7 @@ export {
 - [ ] **Step 3: Write the failing test `test/stricterdom/runlog.test.ts`**
 
 ```ts
-import { createMemo, createMutationEffect, createRoot, createSignal, flushSync } from '../../src/index';
+import { createEffect, createMemo, createMutationEffect, createRoot, createSignal, flushSync } from '../../src/index';
 import { createComponent } from '../../src/dom/component';
 import { disableStrict, enableStrict, setHandler } from '../../src/stricterdom/stricterdom';
 import { disableRunLog, enableRunLog, getRunStats, resetRunStats, SLOW_RUN_MS } from '../../src/stricterdom/runlog';
@@ -1884,15 +2045,36 @@ it('a run slower than SLOW_RUN_MS warns with the path and the phase; so does a d
   flushSync();
   expect(warn).not.toHaveBeenCalled();
 });
+
+it('the slowest effect a drain warning names ran in that drain (a slow tickEnd run just before it is not)', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const clock = fakeClock();
+  const [count, setCount] = createSignal(0);
+  enableStrict();
+  createRoot((dispose) => {
+    disposers.push(dispose);
+    createEffect(() => count(), (v) => { if (v) clock.now += 12; }, undefined, { name: 'logic' });
+    createMutationEffect(() => count(), (v) => { if (v) clock.now += 8; }, { name: 'div.title' });
+  });
+  flushSync(); // the first (scheduled) tickEnd apply
+  warn.mockClear();
+  setCount(1);
+  flushSync(); // the tickEnd run (12 ms, outside any drain), then the mutate drain (8 ms)
+  expect(warn.mock.calls.map((c) => c[0])).toEqual([
+    '[frameact] Slow effect run: 12.0 ms in logic [measure]',
+    '[frameact] Slow effect run: 8.0 ms in div.title [mutate]',
+    '[frameact] Slow mutate drain: 8.0 ms, 1 effect run; slowest: div.title (8.0 ms)',
+  ]);
+});
 ```
 
 - [ ] **Step 4: Run it, then the full check**
 
 Run: `pnpm vitest run test/stricterdom/runlog.test.ts`
-Expected: `Tests  4 passed (4)`.
+Expected: `Tests  5 passed (5)`.
 
 Run: `pnpm check`
-Expected: lint silent; `Tests  883 passed (883)`.
+Expected: lint silent; `Tests  985 passed (985)`.
 
 - [ ] **Step 5: Commit**
 
@@ -1908,11 +2090,11 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 ### Task 5: `flushSync` production contract — allowed outside a frame pass, an error inside one
 
 **Files:**
-- Modify: `src/scheduler/fasterdom.ts` (`passDepth`, the four segment runners, `flushSync`), `src/core/flush.ts` (doc), `test/scheduler/fasterdom.test.ts` (+2), `test/effects/frame.test.ts` (+1 and an import), `docs/superpowers/specs/2026-10-11-frameact-design.md` (§3.1), `README.md`, `README.ru.md`, `README.zh-CN.md` (one bullet each)
+- Modify: `src/scheduler/fasterdom.ts` (`passDepth`, the four segment runners, `flushSync`), `src/core/flush.ts` (doc, the in-pass check before the tickEnd flush), `test/scheduler/fasterdom.test.ts` (+2), `test/effects/frame.test.ts` (+2 and an import), `docs/superpowers/specs/2026-10-11-frameact-design.md` (§3.1), `README.md`, `README.ru.md`, `README.zh-CN.md` (one bullet each)
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `flushSync()` (`src/scheduler/fasterdom.ts`, re-exported as `flushFrameSync` from `frameact/scheduler` and wrapped by the public `flushSync` of `frameact`) throws `Error('[frameact] flushSync() is not reentrant: it was called inside a frame pass (a frame effect, a requestMeasure/requestMutation/requestForcedReflow task or a forceMeasure callback). Write the signal and let the frame apply it, or call flushSync() from the event handler or action that started this.')` while a phase segment runs; `isInFramePass(): boolean` (`@internal`, exported for the kit's guards). The existing test `flushSync is not reentrant` keeps matching `/reentrant/`.
+- Produces: `flushSync()` (`src/scheduler/fasterdom.ts`, re-exported as `flushFrameSync` from `frameact/scheduler` and wrapped by the public `flushSync` of `frameact`) throws `Error('[frameact] flushSync() is not reentrant: it was called inside a frame pass (a frame effect, a requestMeasure/requestMutation/requestForcedReflow task or a forceMeasure callback). Write the signal and let the frame apply it, or call flushSync() from the event handler or action that started this.')` while a phase segment runs; the public `flushSync` (`src/core/flush.ts`) checks `isInFramePass()` **before** it flushes tickEnd work, so inside a pass it throws without running any pending tickEnd effect mid-pass; `isInFramePass(): boolean` (`@internal`; used by `core/flush.ts`, available to the kit's guards). The existing test `flushSync is not reentrant` keeps matching `/reentrant/`.
 
 - [ ] **Step 1: `src/scheduler/fasterdom.ts` (three edits)**
 
@@ -2022,14 +2204,23 @@ export function flushSync() {
 }
 ```
 
-- [ ] **Step 2: `src/core/flush.ts` — the doc**
+- [ ] **Step 2: `src/core/flush.ts` — the doc and the in-pass check (two edits)**
 
 Replace
+```ts
+import { flushSync as flushFrame, hasPendingFrameTasks } from '../scheduler/fasterdom';
+```
+with
+```ts
+import { flushSync as flushFrame, hasPendingFrameTasks, isInFramePass } from '../scheduler/fasterdom';
+```
+and replace
 ```ts
 /**
  * Run pending tickEnd effects and full synchronous frame passes until neither has work left (a
  * tickEnd apply can dirty frame work and vice versa). Tests and imperative glue only.
  */
+export function flushSync() {
 ```
 with
 ```ts
@@ -2040,6 +2231,8 @@ with
  * the current task ends — an iOS swipe-back gesture, a View Transition callback; inside a frame pass
  * it throws (scheduler/fasterdom.ts). Tests use it as their frame.
  */
+export function flushSync() {
+  if (isInFramePass()) flushFrame(); // throws the "not reentrant" error before any tickEnd effect runs inside the pass
 ```
 
 - [ ] **Step 3: Tests**
@@ -2109,8 +2302,25 @@ it('flushSync from a frame effect apply is that effect\'s error (reported, the d
   flushAll(); // the public flushSync: tickEnd effects first, then the frame
   expect(order).toEqual(['mutate:0:measure', 'tick', 'mutate:1:mutate', 'committed']);
 });
+
+it('the public flushSync inside a frame pass throws before it runs any pending tickEnd effect', () => {
+  const $c = signal(0);
+  const ran: number[] = [];
+  root(() => createEffect(() => $c(), (v) => { ran.push(v); }));
+  flushAll(); // the first (scheduled) tickEnd apply
+  let thrown: unknown;
+  root(() => createMutationEffect(() => $c(), (v) => {
+    if (v) { try { flushAll(); } catch (error) { thrown = error; } }
+  }));
+  $c.set(1);
+  flushSync(); // the frame only: the mutation apply calls the public flushSync; the tickEnd effect stays pending
+  expect(String(thrown)).toMatch(/flushSync\(\) is not reentrant/);
+  expect(ran).toEqual([0]);
+  flushAll();
+  expect(ran).toEqual([0, 1]);
+});
 ```
-(`frame.test.ts` imports `flushSync` from `fasterdom` — the frame-only one; the second half of the test deliberately uses the public one, `flushAll`, so the tickEnd effect runs first.)
+(`frame.test.ts` imports `flushSync` from `fasterdom` — the frame-only one; the second half of the first test deliberately uses the public one, `flushAll`, so the tickEnd effect runs first; the second test checks that the public one refuses a pass before touching the tickEnd queue.)
 
 - [ ] **Step 4: Docs**
 
@@ -2172,7 +2382,7 @@ Run: `pnpm vitest run test/scheduler/fasterdom.test.ts test/effects/frame.test.t
 Expected: `Tests  35 passed (35)`.
 
 Run: `pnpm check`
-Expected: lint silent; `Tests  886 passed (886)`.
+Expected: lint silent; `Tests  989 passed (989)`.
 
 - [ ] **Step 6: Commit**
 
@@ -2188,12 +2398,12 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 ### Task 6: The headless-Chrome lane, the surface test, README ×3, spec §3.4/§4/§5
 
 **Files:**
-- Create: `test/chrome/index.html`, `test/chrome/main.tsx`, `test/chrome/vite.config.ts`, `test/chrome/run.mjs`, `test/stricterdom/index.test.ts`
+- Create: `test/chrome/index.html`, `test/chrome/main.tsx`, `test/chrome/vite.config.ts`, `test/chrome/run.mjs`, `test/stricterdom/index.test.ts`, `test/stricterdom/production.test.ts`
 - Modify: `package.json` (`scripts.test:chrome`), `.gitignore`, `README.md`, `README.ru.md`, `README.zh-CN.md`, `docs/superpowers/specs/2026-10-11-frameact-design.md` (§3.4, §4, §5)
 
 **Interfaces:**
 - Consumes: the whole `frameact/stricterdom` surface (Tasks 2, 4); `frameact/vite` (`src/vite/index.ts`, default export `frameact(options)`); Vite's JS API (`build`, `preview`).
-- Produces: `pnpm test:chrome` — prints one `ok <name>` / `FAIL <name> — <detail>` line per scenario and `8/8 scenarios passed`, exit code 1 on any failure or when the page did not publish `data-result`; `CHROME_BIN` overrides the Chrome path. Not part of `pnpm check`.
+- Produces: `pnpm test:chrome` — prints one `ok <name>` / `FAIL <name> — <detail>` line per scenario and `9/9 scenarios passed`, exit code 1 on any failure or when the page did not publish `data-result`; `CHROME_BIN` overrides the Chrome path. Not part of `pnpm check`.
 
 - [ ] **Step 1: The page — `test/chrome/index.html`**
 
@@ -2223,7 +2433,9 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 // values, `innerText` / `elementFromPoint` / `scrollingElement` / `visualViewport`, the real
 // MutationObserver and rAF microtask ordering, `isContentEditable`. Each scenario records the
 // violations stricterdom reported; the page publishes the results in `data-result` on <html>.
-import { createMeasureEffect, createMutationEffect, createSignal, flushSync, requestMeasure, requestMutation } from 'frameact';
+import {
+  createEffect, createMeasureEffect, createMutationEffect, createRoot, createSignal, flushSync, requestMeasure, requestMutation,
+} from 'frameact';
 import { createComponent, Portal, render } from 'frameact/dom';
 import {
   enableStrict, forceMeasure, forceMutation, getRunStats, IGNORE_SUBTREE_ATTR, setHandler, type StrictViolationError,
@@ -2390,6 +2602,24 @@ async function main() {
     return committed && stats !== undefined && stats.runs >= 1 ? [] : [`committed=${committed} stats=${JSON.stringify(stats)}`];
   });
 
+  // 9. a handler writes a signal, then the DOM: in a browser the tickEnd drain runs BEFORE the observer
+  //    callback — the pending record must not be attributed to the tickEnd effect that applies first
+  await scenario('handler-write-before-tickEnd', async () => {
+    const [n, setN] = createSignal(0);
+    const button = document.createElement('button');
+    forceMutation(() => app.appendChild(button), app);
+    const dispose = createRoot((d) => {
+      createEffect(() => n(), () => {}, undefined, { name: 'logic' });
+      return d;
+    });
+    button.addEventListener('click', () => { setN(n() + 1); button.classList.add('pressed'); });
+    await nextFrame(); // the first apply is done and no observer microtask is queued any more
+    button.click();
+    await nextFrame();
+    dispose();
+    return ['mutation:class:measure:-'];
+  });
+
   document.documentElement.dataset.result = JSON.stringify(results);
 }
 
@@ -2404,8 +2634,10 @@ main().catch((error: unknown) => {
 ```ts
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-// (no `.ts` extension: this file is inside tsconfig's `include`, unlike the root vitest.config.ts)
-import frameact from '../../src/vite/index';
+// The `.ts` extension keeps Vite's native config loader from warning (as in the root vitest.config.ts); this file
+// is inside tsconfig's `include`, where an explicit `.ts` import is TS5097 without allowImportingTsExtensions.
+// @ts-expect-error TS5097 — Vite bundles the config, the extension is fine at runtime
+import frameact from '../../src/vite/index.ts';
 
 const src = (file: string) => fileURLToPath(new URL(`../../src/${file}`, import.meta.url));
 
@@ -2436,7 +2668,7 @@ export default defineConfig({
 // results the page published in `data-result`. Needs Google Chrome (CHROME_BIN overrides the path);
 // not part of `pnpm check` (jsdom covers the patch logic; this lane covers real layout and timing).
 import { execFile } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2451,11 +2683,12 @@ const port = 4178;
 
 await build({ configFile });
 const server = await preview({ configFile, preview: { port, strictPort: true } });
+const profile = mkdtempSync(join(tmpdir(), 'frameact-chrome-'));
 try {
   const { stdout } = await promisify(execFile)(
     chrome,
     [
-      '--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${mkdtempSync(join(tmpdir(), 'frameact-chrome-'))}`,
+      '--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${profile}`,
       '--virtual-time-budget=10000', '--dump-dom', `http://localhost:${port}/`,
     ],
     { maxBuffer: 16 * 1024 * 1024 },
@@ -2476,6 +2709,7 @@ try {
   }
 } finally {
   await new Promise((resolve) => server.httpServer.close(resolve));
+  rmSync(profile, { recursive: true, force: true });
 }
 ```
 
@@ -2498,11 +2732,12 @@ ok   forceMeasure
 ok   exceptions
 ok   selectionStart
 ok   render-portal-flushSync
-8/8 scenarios passed
+ok   handler-write-before-tickEnd
+9/9 scenarios passed
 ```
-`no data-result in the dumped DOM` with `<div class="box" …>` still in the dump means the page stalled waiting for a `requestAnimationFrame` that never fires under `--dump-dom` — check that `nextFrame()` has the 80 ms fallback. If Chrome is elsewhere: `CHROME_BIN=/path/to/chrome pnpm test:chrome`.
+`no data-result in the dumped DOM` with `<div class="box" …>` still in the dump means the page stalled waiting for a `requestAnimationFrame` that never fires under `--dump-dom` — check that `nextFrame()` has the 80 ms fallback. Scenario 9 is the one place the browser's microtask order (the tickEnd drain *before* the observer callback) is exercised: `got ["mutation:class:measure:logic"]` means the apply hook is not called before the apply (Task 1, Edit 6a). If Chrome is elsewhere: `CHROME_BIN=/path/to/chrome pnpm test:chrome`.
 
-- [ ] **Step 6: The surface test — `test/stricterdom/index.test.ts`**
+- [ ] **Step 6: The surface test — `test/stricterdom/index.test.ts` — and the production-build test — `test/stricterdom/production.test.ts`**
 
 ```ts
 import * as strict from '../../src/stricterdom/index';
@@ -2522,17 +2757,77 @@ it('exports the frameact/stricterdom surface', () => {
   expect(strict.LAYOUT_CAUSES.HTMLInputElement.props).toEqual(['selectionStart', 'selectionEnd']);
 });
 
-it('every escape is a plain call while strict is off (and in production builds)', () => {
+it('every escape is a plain call while strict is off', () => {
   const el = document.createElement('div');
   expect(strict.isStrictEnabled()).toBe(false);
   expect(strict.forceMutation(() => 1, el)).toBe(1);
   expect(strict.suppressStrict(() => 2)).toBe(2);
   expect(strict.getRunStats()).toEqual([]);
-  expect(() => strict.forceMeasure(() => 3)).toThrow("the current phase is 'measure' already"); // the DEV precondition
+  expect(strict.forceMeasure(() => 3)).toBe(3);
 });
 ```
 
-Run: `pnpm vitest run test/stricterdom/index.test.ts` — Expected: `Tests  2 passed (2)`.
+`test/stricterdom/production.test.ts` (a real `vite build` of an app that calls the whole surface, `NODE_ENV=production` vs `development`; about 0.3 s):
+```ts
+// @vitest-environment node
+// The DEV-only claim, checked on a real production build: an app that calls the whole
+// frameact/stricterdom surface keeps none of the detectors, the observer, the profiler or the
+// core's attribution fields — only the thin wrappers.
+import { fileURLToPath } from 'node:url';
+import { build, type Plugin } from 'vite';
+
+const src = (file: string) => fileURLToPath(new URL(`../../src/${file}`, import.meta.url));
+
+const ENTRY = `
+import { enableStrict, disableStrict, forceMeasure, forceMutation, suppressStrict, setHandler, enableRunLog, getRunStats } from ${JSON.stringify(src('stricterdom/index.ts'))};
+import { createMemo, createMutationEffect, createSignal, flushSync } from ${JSON.stringify(src('index.ts'))};
+enableStrict();
+setHandler(() => {});
+enableRunLog();
+const [a, setA] = createSignal(0);
+const doubled = createMemo(() => a() * 2);
+createMutationEffect(() => doubled(), (v) => {
+  forceMeasure(() => v);
+  forceMutation(() => v, document.body);
+  suppressStrict(() => v);
+});
+setA(1);
+flushSync();
+console.log(getRunStats());
+disableStrict();
+`;
+
+/** The app above as a virtual module. */
+const entryPlugin: Plugin = {
+  name: 'entry',
+  resolveId: (id) => (id.endsWith('virtual:app') ? '\0app' : null), // (lib mode resolves the entry against the root first)
+  load: (id) => (id === '\0app' ? ENTRY : null),
+};
+
+async function bundle(mode: 'production' | 'development'): Promise<string> {
+  const out = (await build({
+    configFile: false,
+    logLevel: 'silent',
+    mode,
+    plugins: [entryPlugin],
+    define: { 'process.env.NODE_ENV': JSON.stringify(mode) },
+    build: { write: false, minify: false, lib: { entry: 'virtual:app', formats: ['es'], fileName: 'app' } },
+  })) as { output: { code: string }[] }[];
+  return out[0].output[0].code;
+}
+
+const DEV_ONLY = ['MutationObserver', 'Unexpected measurement', 'getBoundingClientRect', 'Slow effect run', 'performance.now', 'stampNotify', '_dirtyDep', 'effectPath'];
+
+it('a production build keeps none of stricterdom, the profiler or the core attribution (a dev build keeps all)', async () => {
+  const prod = await bundle('production');
+  const dev = await bundle('development');
+  expect(DEV_ONLY.filter((s) => prod.includes(s))).toEqual([]);
+  expect(DEV_ONLY.filter((s) => !dev.includes(s))).toEqual([]);
+  expect(prod).toContain('function forceMeasure'); // the thin wrappers stay
+}, 30_000);
+```
+
+Run: `pnpm vitest run test/stricterdom/index.test.ts test/stricterdom/production.test.ts` — Expected: `Tests  3 passed (3)`.
 
 - [ ] **Step 7: README ×3**
 
@@ -2577,10 +2872,11 @@ if (import.meta.env.DEV) enableStrict();
 Component names come from the compiler's `sourceNames` (on in dev), binding names are the compiler's labels. Detached
 subtrees are never reported (that is how the runtime builds DOM), nor are `data-*` attributes, `details[open]`, edits
 inside `contenteditable` hosts and anything under `data-stricterdom-ignore`. Escapes: `forceMeasure(cb)` reads layout from
-the mutate phase (scroll anchoring), `forceMutation(cb, nodes)` writes from the measure phase (a mount — `render()` and
-`Portal` use it), `suppressStrict(cb)` turns both checks off for third-party code, `setHandler(fn)` replaces `console.error`
-(throw from it to fail a test). Mutation records are judged at every phase change and after every effect apply, so
-`flushSync()` never produces a false positive and the report arrives while the effect is still known.
+the mutate phase (scroll anchoring; a plain call anywhere else), `forceMutation(cb, nodes)` writes from the measure phase
+(a mount — `render()` and `Portal` use it), `suppressStrict(cb)` turns both checks off for third-party code,
+`setHandler(fn)` replaces `console.error` (throw from it to fail a test). Mutation records are judged at every phase change
+and around every effect apply, so `flushSync()` never produces a false positive and the report names the effect that made
+the write.
 
 The same switch turns on the DEV profiler: a run slower than 7 ms warns with its path (`Slow effect run: 12.3 ms in
 Message > span.children [mutate]`), so does a frame phase (`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`),
@@ -2626,10 +2922,10 @@ if (import.meta.env.DEV) enableStrict();
 Имена компонентов даёт `sourceNames` компилятора (включён в dev), имена биндингов — его метки. Detached-поддеревья не
 считаются нарушением (так рантайм и строит DOM), как и `data-*`-атрибуты, `details[open]`, правки внутри
 `contenteditable` и всё под `data-stricterdom-ignore`. Эскейпы: `forceMeasure(cb)` читает layout из mutate-фазы (якорь
-скролла), `forceMutation(cb, nodes)` пишет из measure-фазы (монтирование — так работают `render()` и `Portal`),
-`suppressStrict(cb)` выключает обе проверки для стороннего кода, `setHandler(fn)` заменяет `console.error` (бросьте из него,
-чтобы уронить тест). Записи мутаций разбираются при каждой смене фазы и после каждого apply эффекта, поэтому `flushSync()`
-не даёт ложных срабатываний, а отчёт приходит, пока эффект ещё известен.
+скролла; вне mutate-фазы — обычный вызов), `forceMutation(cb, nodes)` пишет из measure-фазы (монтирование — так работают
+`render()` и `Portal`), `suppressStrict(cb)` выключает обе проверки для стороннего кода, `setHandler(fn)` заменяет
+`console.error` (бросьте из него, чтобы уронить тест). Записи мутаций разбираются при каждой смене фазы и вокруг каждого
+apply эффекта, поэтому `flushSync()` не даёт ложных срабатываний, а отчёт называет эффект, который сделал запись.
 
 Тот же выключатель включает dev-профайлер: прогон дольше 7 мс предупреждает с путём (`Slow effect run: 12.3 ms in
 Message > span.children [mutate]`), фаза кадра — тоже (`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`),
@@ -2666,9 +2962,9 @@ if (import.meta.env.DEV) enableStrict();
 
 组件名来自编译器的 `sourceNames`（开发模式下开启），绑定名是编译器的标签。游离子树不会被报告（运行时就是这样构建 DOM 的），
 `data-*` 属性、`details[open]`、`contenteditable` 宿主内部的编辑以及 `data-stricterdom-ignore` 之下的一切也不会。逃生口：
-`forceMeasure(cb)` 在 mutate 阶段读取布局（滚动锚定），`forceMutation(cb, nodes)` 在 measure 阶段写入（挂载——`render()` 和
-`Portal` 就用它），`suppressStrict(cb)` 为第三方代码关闭两项检查，`setHandler(fn)` 替换 `console.error`（在其中抛出即可让测试失败）。
-变更记录在每次阶段切换和每个 effect apply 之后判定，因此 `flushSync()` 不会产生误报，报告到达时 effect 仍然可知。
+`forceMeasure(cb)` 在 mutate 阶段读取布局（滚动锚定；在其他阶段只是普通调用），`forceMutation(cb, nodes)` 在 measure 阶段写入（挂载——
+`render()` 和 `Portal` 就用它），`suppressStrict(cb)` 为第三方代码关闭两项检查，`setHandler(fn)` 替换 `console.error`（在其中抛出即可让测试失败）。
+变更记录在每次阶段切换以及每个 effect apply 的前后判定，因此 `flushSync()` 不会产生误报，报告指出做出写入的 effect。
 
 同一个开关还会开启开发分析器：超过 7 ms 的运行会带路径发出警告（`Slow effect run: 12.3 ms in Message > span.children
 [mutate]`），帧阶段同样（`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`），`getRunStats()` 按路径统计运行次数，
@@ -2692,8 +2988,8 @@ In `docs/superpowers/specs/2026-10-11-frameact-design.md`, replace the whole §3
 Порт `teact/src/lib/fasterdom/stricterdom.ts` и `layoutCauses.ts` (план 4): патч
 геттеров/методов, вызывающих layout → нарушение, если фаза не `measure`;
 `MutationObserver` на `document.body` → нарушение, если мутация при фазе не `mutate`.
-Detached-узлы игнорируются (`document.contains`), поэтому создание поддеревьев
-нарушением не считается. Исключения: `data-*`-атрибуты, `details[open]`, `childList`
+Detached-узлы игнорируются (`contains` документа через прототипные натив-методы —
+DOM clobbering, `natives.ts`), поэтому создание поддеревьев нарушением не считается. Исключения: `data-*`-атрибуты, `details[open]`, `childList`
 внутри `contentEditable`-хоста (`isContentEditable`; в jsdom — `closest('[contenteditable]')`),
 поддерево под `data-stricterdom-ignore` (константа `IGNORE_SUBTREE_ATTR`). `layoutCauses`
 дополнен `selectionStart`/`selectionEnd` (`HTMLInputElement`, `HTMLTextAreaElement`).
@@ -2703,17 +2999,21 @@ Detached-узлы игнорируются (`document.contains`), поэтому
 **Фаза и записи observer'а.** Фаза берётся из планировщика (`getPhase`), а не хранится
 отдельно; `forceMeasure` подменяет её локально. Записи `MutationObserver` **не ждут
 колбэка**: они снимаются (`takeRecords`) при каждой смене фазы (`onPhaseChange`) и
-проверяются против *предыдущей* фазы, а также после каждого apply эффекта вне
-mutate-фазы (хук `setAfterApplyHook` ядра) и вокруг `forceMeasure`/`forceMutation`/
+проверяются против *предыдущей* фазы, а также до и после каждого apply эффекта вне
+mutate-фазы (хук `setApplyHook` ядра) и вокруг `forceMeasure`/`forceMutation`/
 `suppressStrict`. Поэтому (а) внутри `flushSync` нет ложных срабатываний (колбэк
 observer'а пришёл бы уже после прохода, с фазой `measure`), (б) запись из apply
-measure-/tickEnd-эффекта атрибутируется этому эффекту синхронно. `suppressStrict` —
+measure-/tickEnd-эффекта атрибутируется этому эффекту синхронно, а запись, сделанная
+до apply (обработчик события, сырая задача), — не ему (в браузере tickEnd-дрен идёт
+раньше колбэка observer'а). `suppressStrict` —
 счётчик, а не unpatch/repatch; записи окна отбрасываются по его закрытию.
 
 **Публичный API `frameact/stricterdom`:** `enableStrict()`, `disableStrict()`,
-`isStrictEnabled()`, `forceMeasure(cb)` (dev-ошибка вне mutate-фазы; запись внутри —
-нарушение), `forceMutation(cb, nodes, allowAnyPhase?)` (dev-ошибка в mutate-фазе без
-`allowAnyPhase`; записи в `nodes` санкционированы), `suppressStrict(cb)`,
+`isStrictEnabled()`, `forceMeasure(cb)` (в mutate-фазе — окно measure, запись внутри —
+нарушение; в любом другом контексте — обычный вызов, без ошибки),
+`forceMutation(cb, nodes, allowAnyPhase?)` (dev-ошибка в mutate-фазе без `allowAnyPhase`;
+санкционированы записи, чья цель — один из `nodes`; вложенная санкция того же узла не
+снимает внешнюю), `suppressStrict(cb)`,
 `setHandler(handler?)`, класс `StrictViolationError { kind: 'measure' | 'mutation';
 detail; phase; path; target }`, `IGNORE_SUBTREE_ATTR`, `LAYOUT_CAUSES`. Шов
 `strictHooks.forceMutation` в `src/dom/strict.ts` (его зовут `render()` и `Portal`)
@@ -2733,8 +3033,12 @@ span.style:color [mutate]` — имена компонентов (третий �
 пути (`getRunStats()`/`resetRunStats()`); лог «почему выполнился» (`enableRunLog({ filter })`
 / `disableRunLog()`): `run #3 ChatList > li.class [mutate] ← signal "store.title" via memo
 "chatTitle" in ChatList`. Источник записывает `notify()` ядра перед вызовом планировщика
-(`notifyDep`/`notifyRoot`), листья стора получают dev-id `store.<ключ>`. Это замена
-`debugKey`/dblclick-дампов teact.
+(`notifyDep`/`notifyRoot`; на эффекте — до конца прогона, чтобы освобождённый лист
+стора не удерживался), листья стора получают dev-id `store.<ключ>` / `store.$TRACK` /
+`store.$VALUES`; «самый медленный эффект» дрена — только из этого дрена
+(`getDrainingPhase`). Это замена `debugKey`/dblclick-дампов teact. В production-сборке
+всё перечисленное — мёртвый код; это проверяет тест `production.test.ts` (настоящий
+`vite build`).
 
 Следствие архитектуры: поскольку **все** записи в живой DOM идут через mutate-фазу,
 любая точка вне её — безопасное окно для чтения layout. В teact это соглашение, у
@@ -2768,27 +3072,29 @@ with
   `Component > binding [phase]`; detached игнорируется; `selectionStart` в mutate
   → ошибка; исключения (`data-*`, `details[open]`, `contentEditable`,
   `data-stricterdom-ignore`); `forceMeasure`/`forceMutation`/`suppressStrict`/`setHandler`;
-  `render` и `Portal` через шов без ошибок; `flushSync` без ложных срабатываний; запись из
-  tickEnd-эффекта атрибутируется синхронно; полное приложение на компиляторе (For keyed и
-  manual, Show/Switch/Dynamic/Portal, `use:value`, парковка) — 0 нарушений; профайлер:
-  счётчики, лог «почему выполнился», slow run/drain (мок `performance.now`).
+  `render` и `Portal` (в том числе Portal в Portal) через шов без ошибок; `flushSync` без
+  ложных срабатываний; запись из tickEnd-эффекта атрибутируется синхронно, а запись до
+  apply — не ему; clobbering `document.contains`/`document.body` не ломает проверки;
+  полное приложение на компиляторе (For keyed и manual, Show/Switch/Dynamic/Portal,
+  `use:value`, парковка) — 0 нарушений; профайлер: счётчики, лог «почему выполнился»,
+  slow run/drain (мок `performance.now`); production-сборка без dev-кода (`vite build`).
 
 **Дорожка в headless Chrome (`pnpm test:chrome`, не входит в `pnpm check`).** Vite-сборка
 `test/chrome/main.tsx` через плагин frameact, `vite preview`, Chrome `--headless=new
 --dump-dom`; сценарии — то, чего jsdom не умеет: настоящий layout под measure-эффектом,
 `innerText`/`elementFromPoint`/`scrollingElement`/`visualViewport`, порядок микротасков
-настоящего rAF-прохода и observer'а, `isContentEditable`, `forceMeasure` с настоящим
-значением, `flushSync` из обработчика.
+настоящего rAF-прохода и observer'а (в том числе tickEnd-дрен раньше колбэка observer'а),
+`isContentEditable`, `forceMeasure` с настоящим значением, `flushSync` из обработчика.
 ```
 
 - [ ] **Step 9: Full check and commit**
 
 Run: `pnpm check`
-Expected: lint silent (a `warning unicorn(consistent-function-scoping)` on `run.mjs` means a helper was defined inside the `else` block — it must be at module scope); tsc 0 errors (a `TS5097` means `vite.config.ts` imports with a `.ts` extension); `Test Files  65 passed (65)`, `Tests  888 passed (888)`.
+Expected: lint silent (a `warning unicorn(consistent-function-scoping)` on `run.mjs` means a helper was defined inside the `else` block — it must be at module scope); tsc 0 errors (a `TS5097` on `test/chrome/vite.config.ts` means the `@ts-expect-error` line above its `.ts` import is missing); `Test Files  72 passed (72)`, `Tests  992 passed (992)`.
 
 ```bash
-git add test/chrome/index.html test/chrome/main.tsx test/chrome/vite.config.ts test/chrome/run.mjs test/stricterdom/index.test.ts package.json .gitignore README.md README.ru.md README.zh-CN.md docs/superpowers/specs/2026-10-11-frameact-design.md
-git commit -m "feat(stricterdom): headless-Chrome lane (pnpm test:chrome), surface test, README ×3, spec §3.4/§4/§5
+git add test/chrome/index.html test/chrome/main.tsx test/chrome/vite.config.ts test/chrome/run.mjs test/stricterdom/index.test.ts test/stricterdom/production.test.ts package.json .gitignore README.md README.ru.md README.zh-CN.md docs/superpowers/specs/2026-10-11-frameact-design.md
+git commit -m "feat(stricterdom): headless-Chrome lane (pnpm test:chrome), surface + production-build tests, README ×3, spec §3.4/§4/§5
 
 Co-Authored-By: <your model name> <noreply@anthropic.com>"
 ```
@@ -2797,9 +3103,9 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 
 ## Self-review (done while writing the plan)
 
-1. **Spec coverage.** §3.4: port of both files (Task 2); `phase !== 'measure'` → error on layout reads, `MutationObserver` on `document.body` for writes outside mutate (Task 2); detached ignored (Task 2 test "detached subtrees"); `data-*` and `contentEditable` excluded, plus the tt exceptions `data-stricterdom-ignore` and `details[open]` (Task 2); `forceMeasure`/`forceMutation`/`suppressStrict`/`setHandler` as in teact (+ `allowAnyPhase`) (Task 2); `enableStrict()` in dev, zero cost in prod (every function `if (!DEV)`; `index.test.ts` checks the escapes are plain calls while off); `selectionStart/End` in `layoutCauses` (Task 2, and the Task 3 test "selectionStart may be read at event time"); attribution `Message > MessageMeta > span.textContent [mutate]`-style with `createComponent` names and `sourceNames` binding labels (Task 1 + Task 3's compiled suite gives exactly `Message > MessageMeta > span.style:color`); "slow run > 7 ms with the same path" (Task 4, per run and per drain); "measure effect dirtied from the mutate phase" with the path (Task 1). Brief: `disableStrict` ✓, `strictHooks` seam implemented ✓, DEV run counters + "why did this run" (Task 4), `flushSync` production contract with the reentry error kept (Task 5), the headless-Chrome lane and jsdom tests for the patch logic (Tasks 6, 2), attribution headers + `THIRD_PARTY_LICENSES.md` (Task 2), exact public signatures for plan 6 (Interfaces of Tasks 2 and 4). §5: "render into an attached container gives no stricterdom error" (Tasks 2, 3), "layout read in mutate / write in measure → error with path", "detached ignored", "`selectionStart` in mutate → error" ✓.
+1. **Spec coverage.** §3.4: port of both files (Task 2); `phase !== 'measure'` → error on layout reads, `MutationObserver` on `document.body` for writes outside mutate (Task 2); detached ignored (Task 2 test "detached subtrees"); `data-*` and `contentEditable` excluded, plus the tt exceptions `data-stricterdom-ignore` and `details[open]` (Task 2); `forceMeasure`/`forceMutation`/`suppressStrict`/`setHandler` as in teact (+ `allowAnyPhase`) (Task 2); `enableStrict()` in dev, zero cost in prod (every function `if (!DEV)`; `index.test.ts` checks the escapes are plain calls while off, `production.test.ts` checks a real production build); `selectionStart/End` in `layoutCauses` (Task 2, and the Task 3 test "selectionStart may be read at event time"); attribution `Message > MessageMeta > span.textContent [mutate]`-style with `createComponent` names and `sourceNames` binding labels (Task 1 + Task 3's compiled suite gives exactly `Message > MessageMeta > span.style:color`); "slow run > 7 ms with the same path" (Task 4, per run and per drain); "measure effect dirtied from the mutate phase" with the path (Task 1). Brief: `disableStrict` ✓, `strictHooks` seam implemented ✓, DEV run counters + "why did this run" (Task 4), `flushSync` production contract with the reentry error kept (Task 5), the headless-Chrome lane and jsdom tests for the patch logic (Tasks 6, 2), attribution headers + `THIRD_PARTY_LICENSES.md` (Task 2), exact public signatures for plan 6 (Interfaces of Tasks 2 and 4). §5: "render into an attached container gives no stricterdom error" (Tasks 2, 3), "layout read in mutate / write in measure → error with path", "detached ignored", "`selectionStart` in mutate → error" ✓.
 2. **Placeholder scan.** No TBD/TODO; every code step shows the code; every modify step shows old → new text; every run step names the command and the expected output.
-3. **Type consistency.** `StrictViolationError(kind, detail, phase, path, target)` is constructed the same way in `stricterdom.ts`, `index.test.ts` and read as `.detail` in all three test suites and `main.tsx`; `setAfterApplyHook`/`setRunObserver`/`setDrainObserver` take `fn | null` everywhere; `getEffectDebugInfo` returns `{ dep, root, runs }` and `runlog.ts` reads exactly those; `setStrictProfiling(on: boolean)` is defined in Task 4 and called from `stricterdom.ts` only after Task 4's edit; the `frame.test.ts` additions of Tasks 1 and 5 both rely on its existing imports (`signal`, `root`, `createMeasureEffect`, `createMutationEffect`, `createEffect`, `getPhase`, `flushSync`, `frame`, `raf`) plus the `flushAll` import added in Task 5.
+3. **Type consistency.** `StrictViolationError(kind, detail, phase, path, target)` is constructed the same way in `stricterdom.ts`, `index.test.ts` and read as `.detail` in all three test suites and `main.tsx`; `setApplyHook`/`setRunObserver`/`setDrainObserver` take `fn | null` everywhere; `getEffectDebugInfo` returns `{ dep, root, runs }` and `runlog.ts` reads exactly those; `setStrictProfiling(on: boolean)` is defined in Task 4 and called from `stricterdom.ts` only after Task 4's edit; the `frame.test.ts` additions of Tasks 1 and 5 both rely on its existing imports (`signal`, `root`, `createMeasureEffect`, `createMutationEffect`, `createEffect`, `getPhase`, `flushSync`, `frame`, `raf`) plus the `flushAll` import added in Task 5.
 
 **Execution notes for the implementer.** Tasks are independent in review but sequential in code: 1 → 2 → 3 → 4 → 5 → 6 (Task 2 imports Task 1's hooks; Task 4 edits Task 2's file; Task 6's lane imports Task 4's `getRunStats`). After every task read the **whole tail** of `pnpm check` — a lint error stops the chain before vitest. The only step outside `pnpm check` is Task 6 Step 5 (`pnpm test:chrome`): if there is no Chrome on the machine, skip it and say so in the commit message.
 
@@ -2810,3 +3116,6 @@ Co-Authored-By: <your model name> <noreply@anthropic.com>"
 3. `enableStrict()` observes `document.body` only: attribute writes on `<html>` (theme classes) are never reported. Decide with the kit whether to observe `document.documentElement` with an allow-list for `class`/`style` on `<html>`.
 4. The stricterdom `setHandler` and the core's effect-error logging are two reporters; a single `setErrorReporter` for the whole core (plan 2's deferred item) could unify them.
 5. The run log cannot name the *store path* beyond the leaf key (`store.title`): `StoreNode` has no parent pointer. A DEV-only parent/key pair on `StoreNode` would give `store.chats.123.title`.
+6. CI for `pnpm test:chrome`: the lane runs only locally (it needs Google Chrome). A CI job with Chrome (`CHROME_BIN`) would keep the browser-only scenarios (real layout, the microtask order of scenario 9) from rotting.
+7. Between the mutate segment of a rAF pass and its forced-reflow segment the scheduler phase stays `mutate` (teact parity), so a tickEnd effect or a promise continuation running in that microtask gap writes the DOM unreported (judged as `mutate`). frameact drains records at phase changes, so ending each mutate segment with `setPhase('measure')` would close the gap — decide together with the phase consumers (`applyCleanupDisposer`, the measure-dirtied warning).
+8. A `flushSync()` from inside a `forceMeasure` window that was opened in that gap (outside a pass, so it is allowed) runs the nested pass under the forced `measure` phase: its mutate-phase applies would be reported. Rare; resetting `forcedPhase` on a phase change would fix it if it ever shows up.
