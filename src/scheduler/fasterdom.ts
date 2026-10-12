@@ -157,6 +157,13 @@ export function flushSync() {
       '[frameact] flushSync() is not reentrant: it was called inside a frame pass (a frame effect, a requestMeasure/requestMutation/requestForcedReflow task or a forceMeasure callback). Write the signal and let the frame apply it, or call flushSync() from the event handler or action that started this.',
     );
   }
+  // Nothing queued (the common case on a write → flushSync() loop): the pass would only toggle the
+  // phase there and back and allocate three empty task arrays. Same end state as the full pass;
+  // no segment runs, so passDepth stays untouched.
+  if (!hasPendingFrameTasks()) {
+    setPhase('measure');
+    return;
+  }
   try {
     runMeasureTasks();
     runMutationTasks();

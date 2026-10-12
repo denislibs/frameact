@@ -95,6 +95,19 @@ it('flushSync is not reentrant', () => {
   expect(String(thrown)).toMatch(/reentrant/);
 });
 
+it('flushSync with nothing queued is a no-op pass: phase stays measure, listeners are not called', async () => {
+  const { onPhaseChange } = await import('../../src/scheduler/fasterdom');
+  const seen: string[] = [];
+  const off = onPhaseChange((p) => seen.push(p));
+  flushSync();
+  expect(seen).toEqual([]);
+  expect(getPhase()).toBe('measure');
+  requestMutation(() => seen.push('task:' + getPhase()));
+  flushSync();
+  expect(seen).toEqual(['mutate', 'task:mutate', 'measure', 'mutate', 'measure']); // a real pass runs all four phases
+  off();
+});
+
 it('flushSync inside a rAF pass segment throws instead of interleaving the phases; the pass completes', async () => {
   const log: string[] = [];
   let thrown: unknown;
