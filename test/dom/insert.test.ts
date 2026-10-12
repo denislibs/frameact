@@ -530,3 +530,35 @@ describe('falsy primitives in root mode', () => {
     expect(el2.innerHTML).toBe('0');
   });
 });
+
+describe('render: disposer boundaries', () => {
+  it('survives the removal of a pre-existing child (splash scenario)', () => {
+    const el = container();
+    const splash = document.createElement('div');
+    el.append(splash);
+    const dispose = render(() => 'app', el);
+    expect(el.textContent).toBe('app');
+    splash.remove();
+    dispose();
+    expect(el.innerHTML).toBe('');
+  });
+
+  it('a vanished end marker: only the markers go, never "to the end of the container", with a warning', () => {
+    const el = container();
+    el.innerHTML = '<i>x</i>';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const dispose = render(() => 'app', el);
+      const tail = document.createElement('u');
+      el.append(tail);
+      // the end marker is the empty Text node right after 'app'
+      el.lastChild!.previousSibling!.remove();
+      dispose();
+      expect(el.querySelector('u')).toBe(tail);
+      expect(el.querySelector('i')).not.toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
