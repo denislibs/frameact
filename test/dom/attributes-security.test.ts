@@ -173,3 +173,30 @@ describe('URL scheme policy (I3)', () => {
     expect(isUnsafeAttribute('to', 'javascript:x')).toBe(true);
   });
 });
+
+describe('srcdoc is an HTML sink (I4)', () => {
+  it.each(['srcdoc', 'SRCDOC', 'attr:srcdoc'])('refuses a string %s through the dispatcher', (name) => {
+    const frame = document.createElement('iframe');
+    setAttribute(frame, name, '<script>alert(1)</script>');
+    expect(frame.hasAttribute('srcdoc')).toBe(false);
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(String(errors.mock.calls[0][0])).toContain('prop:srcdoc');
+  });
+
+  it('refuses non-strings too, and null/false only remove', () => {
+    const frame = document.createElement('iframe');
+    setAttribute(frame, 'srcdoc', new String('<b>x</b>'));
+    expect(frame.hasAttribute('srcdoc')).toBe(false);
+    setAttribute(frame, 'srcdoc', null);
+    setAttribute(frame, 'srcdoc', false);
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(isUnsafeAttribute('srcdoc', '<b>')).toBe(true);
+    expect(isUnsafeAttribute('srcdoc', null)).toBe(false);
+  });
+
+  it('prop:srcdoc is the explicit opt-in', () => {
+    const frame = document.createElement('iframe');
+    setAttribute(frame, 'prop:srcdoc', '<b>trusted</b>');
+    expect(frame.getAttribute('srcdoc')).toBe('<b>trusted</b>');
+  });
+});

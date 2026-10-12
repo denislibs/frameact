@@ -85,7 +85,7 @@ function camelEvent(name: string): string {
 }
 
 /** Why an attribute write is refused (`null`: it is allowed). `value` is a string for non-handler attributes. */
-type Refusal = 'handler-string' | 'handler-function' | 'handler-value' | 'url';
+type Refusal = 'handler-string' | 'handler-function' | 'handler-value' | 'url' | 'srcdoc';
 
 function refusal(name: string, value: unknown): Refusal | null {
   // HTML attribute names are case-insensitive (`ONCLICK`, `formAction`): decide on the lowercase name.
@@ -96,6 +96,7 @@ function refusal(name: string, value: unknown): Refusal | null {
     if (typeof value === 'function') return 'handler-function';
     return 'handler-value'; // numbers, true, …: anything that would be stringified into the attribute
   }
+  if (lower === 'srcdoc') return value == null || value === false ? null : 'srcdoc'; // an HTML sink, like innerHTML
   if (typeof value !== 'string') return null;
   if (URL_ATTRIBUTES.has(lower) ? isUnsafeUrl(value, lower) : ANIMATION_VALUES.has(lower) && isUnsafeAnimationValue(value)) return 'url';
   return null;
@@ -118,6 +119,9 @@ function stringifyObject(value: unknown): unknown {
 function report(name: string, value: unknown, reason: Refusal): void {
   if (!DEV) return;
   if (reason === 'url') console.error(`[frameact] refused an unsafe URL in ${name}=`, value);
+  else if (reason === 'srcdoc') {
+    console.error(`[frameact] ${name}= is an HTML sink and is not written through attributes. Opt in explicitly with prop:srcdoc={html} (trusted HTML only).`);
+  }
   else if (reason === 'handler-function') {
     console.warn(`[frameact] ${name}={fn}: a lowercase event attribute attaches nothing. Use ${camelEvent(name.toLowerCase())}={fn}.`);
   } else {
