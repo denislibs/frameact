@@ -107,10 +107,13 @@ export function ref(fn: () => unknown, element: Element): void {
   runWithOwner(null, () => applyRef(resolved, element));
 }
 
-// Prop bags are untrusted: keys are copied with defineProperty and read through own-key checks, never
-// with `bag[key] = value` / `bag[key]` / `key in bag` (a `__proto__` key would reach the prototype).
+// Prop bags are untrusted: keys are written with a plain assignment (fast) except `__proto__`, which is
+// defined as an own data property: on a normal object `bag.__proto__ = v` would reach the prototype.
+// (The bags this module makes are null-prototype objects, where either way is safe; `assign` also
+// accepts a caller's `prevProps`.) Reads go through own-key checks, never `key in bag`.
 function put(bag: Record<string, unknown>, key: string, value: unknown): void {
-  Object.defineProperty(bag, key, { value, writable: true, enumerable: true, configurable: true });
+  if (key === '__proto__') Object.defineProperty(bag, key, { value, writable: true, enumerable: true, configurable: true });
+  else bag[key] = value;
 }
 
 function getOwn(bag: Record<string, unknown>, key: string): unknown {
@@ -135,7 +138,8 @@ export function spread(
   skip?: (key: string) => boolean,
   name?: string,
 ): Record<string, unknown> {
-  const prevProps: Record<string, unknown> = {};
+  const prevProps: Record<string, unknown> = Object.create(null);
+  const keys = new Set<string>(); // reused by every pass of the effect below
   const sources: PropsSource[] = Array.isArray(props) ? props : [props];
   // Function sources are called once per pass; the attribute effect and the children slot share the result.
   const resolved = createMemo(() => sources.map(resolveSource));
@@ -143,12 +147,13 @@ export function spread(
   if (!skipChildren && !(skip !== undefined && skip('children'))) {
     insert(node, () => childrenOf(resolved()), undefined, undefined, name === undefined ? undefined : { name: `${name}.children` });
   }
+  const traits: Traits = { fresh: true, isSVG: node.namespaceURI === SVG_NS, dashed: node.nodeName.includes('-') };
   createRenderEffect(
-    () => collectProps(resolved(), skip),
+    () => collectProps(resolved(), keys, skip),
     (next) => {
       const r = next.ref;
-      if (r !== getOwn(prevProps, 'ref') && (typeof r === 'function' || Array.isArray(r))) ref(() => r, node);
-      assign(node, next, true, prevProps, true);
+      if (r !== prevProps.ref && (typeof r === 'function' || Array.isArray(r))) ref(() => r, node);
+      applyProps(node, next, true, prevProps, true, traits);
     },
     name === undefined ? undefined : { name: `${name}.spread` },
   );
@@ -161,9 +166,21 @@ export function spread(
  * through to an earlier source). Values are read from the end, so a getter shadowed by a later
  * defined value is neither called nor tracked.
  */
-function collectProps(sources: (Record<PropertyKey, any> | null)[], skip?: (key: string) => boolean): Record<string, unknown> {
+function collectProps(
+  sources: (Record<PropertyKey, any> | null)[],
+  keys: Set<string>,
+  skip?: (key: string) => boolean,
+): Record<string, unknown> {
   const out: Record<string, unknown> = Object.create(null);
-  const keys = new Set<string>();
+  if (sources.length === 1) {
+    // One source (the usual `{...props}`): its own enumerable keys are the keys, no shadowing to resolve.
+    const only = sources[0];
+    if (only) {
+      for (const key of Object.keys(only)) if (key !== 'children' && !(skip !== undefined && skip(key))) put(out, key, only[key]);
+    }
+    return out;
+  }
+  keys.clear();
   for (const s of sources) {
     if (s) for (const key of Object.keys(s)) if (key !== 'children' && !(skip !== undefined && skip(key))) keys.add(key);
   }
@@ -186,6 +203,17 @@ function childrenOf(sources: (Record<PropertyKey, any> | null)[]): unknown {
   return undefined;
 }
 
+/** What `applyProps` may assume about `next`/`prevProps` and what it need not re-read from the node. */
+interface Traits {
+  /** `next` is a `collectProps` bag and `prevProps` a null-prototype bag of `spread`: own keys by `in`, `for…in` visits. */
+  fresh: boolean;
+  isSVG: boolean;
+  /** The tag name has a dash (a custom element). */
+  dashed: boolean;
+}
+
+const own = (bag: Record<string, unknown>, key: string, fresh: boolean) => (fresh ? key in bag : isOwnProp(bag, key));
+
 /**
  * Compiler/author primitive: write `props` onto `node`, removing props present in `prevProps` but
  * absent now. Same trust rule as `spread`: the bag's keys must be trusted, its values are policed.
@@ -194,35 +222,81 @@ export function assign(
   node: Element,
   props: Record<string, unknown> | null | undefined,
   skipChildren?: boolean,
-  prevProps: Record<string, unknown> = {},
+  prevProps: Record<string, unknown> = Object.create(null),
   skipRef = false,
 ): void {
-  const next = props || {};
-  const isSVG = node.namespaceURI === SVG_NS;
-  const isCE = node.nodeName.includes('-') || isOwnProp(next, 'is');
-  for (const prop of Object.keys(prevProps)) {
-    if (isOwnProp(next, prop) || prop === 'children') continue;
-    assignProp(node, prop, null, prevProps[prop], isSVG, isCE, skipRef);
-    delete prevProps[prop];
+  applyProps(node, props || {}, skipChildren, prevProps, skipRef, {
+    fresh: false,
+    isSVG: node.namespaceURI === SVG_NS,
+    dashed: node.nodeName.includes('-'),
+  });
+}
+
+function applyProps(
+  node: Element,
+  next: Record<string, unknown>,
+  skipChildren: boolean | undefined,
+  prevProps: Record<string, unknown>,
+  skipRef: boolean,
+  traits: Traits,
+): void {
+  const { fresh, isSVG } = traits;
+  const isCE = traits.dashed || own(next, 'is', fresh);
+  if (fresh) {
+    for (const prop in prevProps) dropProp(node, next, prop, prevProps, skipRef, isSVG, isCE, true);
+  } else {
+    for (const prop of Object.keys(prevProps)) dropProp(node, next, prop, prevProps, skipRef, isSVG, isCE, false);
   }
   // `class` and `className` write the one class channel: in one bag their tokens are combined.
-  const bothClasses = isOwnProp(next, 'class') && isOwnProp(next, 'className');
+  const bothClasses = own(next, 'class', fresh) && own(next, 'className', fresh);
   if (bothClasses && DEV && !warnedClassPair.has(node)) {
     warnedClassPair.add(node);
     console.error('[frameact] class and className in one props bag: their tokens are combined; use class.');
   }
-  for (const prop of Object.keys(next)) {
-    if (prop === 'children') {
-      if (!skipChildren) insertExpression(node, normalize(next.children, false, false), undefined);
-      continue;
-    }
-    if (bothClasses && prop === 'className') {
-      put(prevProps, prop, next.className);
-      continue;
-    }
-    const value = bothClasses && prop === 'class' ? [next.class, next.className] : next[prop];
-    put(prevProps, prop, assignProp(node, prop, value, getOwn(prevProps, prop), isSVG, isCE, skipRef));
+  if (fresh) {
+    for (const prop in next) applyOne(node, next, prop, prevProps, skipChildren, skipRef, isSVG, isCE, bothClasses, true);
+  } else {
+    for (const prop of Object.keys(next)) applyOne(node, next, prop, prevProps, skipChildren, skipRef, isSVG, isCE, bothClasses, false);
   }
+}
+
+function dropProp(
+  node: Element,
+  next: Record<string, unknown>,
+  prop: string,
+  prevProps: Record<string, unknown>,
+  skipRef: boolean,
+  isSVG: boolean,
+  isCE: boolean,
+  fresh: boolean,
+): void {
+  if (own(next, prop, fresh) || prop === 'children') return;
+  assignProp(node, prop, null, prevProps[prop], isSVG, isCE, skipRef);
+  delete prevProps[prop];
+}
+
+function applyOne(
+  node: Element,
+  next: Record<string, unknown>,
+  prop: string,
+  prevProps: Record<string, unknown>,
+  skipChildren: boolean | undefined,
+  skipRef: boolean,
+  isSVG: boolean,
+  isCE: boolean,
+  bothClasses: boolean,
+  fresh: boolean,
+): void {
+  if (prop === 'children') {
+    if (!skipChildren) insertExpression(node, normalize(next.children, false, false), undefined);
+    return;
+  }
+  if (bothClasses && prop === 'className') {
+    put(prevProps, prop, next.className);
+    return;
+  }
+  const value = bothClasses && prop === 'class' ? [next.class, next.className] : next[prop];
+  put(prevProps, prop, assignProp(node, prop, value, fresh ? prevProps[prop] : getOwn(prevProps, prop), isSVG, isCE, skipRef));
 }
 
 const warnedClassPair = new WeakSet<Element>();
@@ -306,8 +380,9 @@ function assignProp(
   isCE: boolean,
   skipRef: boolean,
 ): unknown {
-  // `style` (an applied-string/object memo on the element) and `class` (applied token set) are
-  // idempotent: they run on every pass so unrelated updates leave imperative styles/classes alone.
+  // An identical value is already applied: `style` and `class` need no pass (their diff against
+  // `prev` would be empty), and neither does anything else below.
+  if (value === prev) return prev;
   if (prop === 'style') {
     style(node, value, prev);
     return value;
@@ -320,7 +395,6 @@ function assignProp(
     classList(node, value);
     return value;
   }
-  if (value === prev) return prev;
   if (prop === 'ref') {
     if (!skipRef && value) ref(() => value, node);
     return value;

@@ -290,7 +290,7 @@ describe('props are never [[Set]]-copied', () => {
     expect(Object.getPrototypeOf(el)).toBe(elProto);
     expect((el as any).polluted).toBeUndefined();
     expect(({} as any).polluted).toBeUndefined();
-    expect(Object.getPrototypeOf(applied)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(applied)).toBe(null); // a null-prototype bag: no `__proto__` setter to reach
     expect((applied as any).polluted).toBeUndefined();
     expect(Object.hasOwn(applied, '__proto__')).toBe(true);
   });
@@ -773,5 +773,42 @@ describe('<select value> through spread and Dynamic ends on the value, whatever 
     select.append(option('a'), option('b'));
     await flushMicrotasks();
     expect(select.value).toBe('b');
+  });
+});
+
+describe('unchanged class/style values are not re-applied', () => {
+  it('an identical class string / style object on a later pass is left alone; a changed one is applied', async () => {
+    const el = container();
+    const style = { color: 'red' };
+    const [title, setTitle] = createSignal('a');
+    const [cls, setCls] = createSignal('x');
+    createRoot(() =>
+      spread(el, () => ({ get title() { return title(); }, class: cls(), style }), true),
+    );
+    expect(el.className).toBe('x');
+    expect(el.style.color).toBe('red');
+    // outside tampering that a re-application would repair:
+    el.classList.remove('x');
+    el.style.color = 'blue';
+    setTitle('b'); // the whole bag re-evaluates, class/style are the identical values
+    await frame();
+    expect(el.getAttribute('title')).toBe('b');
+    expect(el.className).toBe('');
+    expect(el.style.color).toBe('blue');
+    setCls('y');
+    await frame();
+    expect(el.className).toBe('y');
+  });
+
+  it('props that disappear are removed on the next pass (the key set is rebuilt each pass)', async () => {
+    const el = container();
+    const [bag, setBag] = createSignal<Record<string, unknown>>({ id: 'a', title: 't', 'data-x': '1' });
+    createRoot(() => spread(el, () => bag(), true));
+    setBag({ id: 'a' });
+    await frame();
+    expect(attrNames(el)).toEqual(['id']);
+    setBag({ title: 'u' });
+    await frame();
+    expect(attrNames(el)).toEqual(['title']);
   });
 });
