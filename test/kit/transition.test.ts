@@ -1,4 +1,4 @@
-import { createHeavyAnimationScope, createMutationEffect, createRoot, createSignal, onCleanup, type HeavyAnimationScope } from '../../src/index';
+import { createHeavyAnimationScope, createMeasureEffect, createMutationEffect, createRoot, createSignal, onCleanup, type HeavyAnimationScope } from '../../src/index';
 import { createComponent } from '../../src/dom/component';
 import { insert } from '../../src/dom/insert';
 import { Transition, type TransitionSlide } from '../../src/kit/transition';
@@ -374,4 +374,31 @@ it('disposal mid-animation: the fallback timer and a late end event do nothing, 
   expect(classes(t)).toBe('Transition Transition-slide'); // no class write after dispose
   expect(classes(s1)).toBe('Transition_slide Transition_slide-from');
   expect(classes(s2)).toBe('Transition_slide Transition_slide-to');
+});
+
+it('slide.isActive() is current in the frame of the switch: a measure effect in a slide sees it at once, with no "dirtied during the mutate phase" warning (N2)', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const seen: string[] = [];
+  const { root, setKey } = setup({
+    renderCount: 2, // both slides stay alive, so a switch back reuses a slide whose measure effect already exists
+    children: (slide: TransitionSlide) => {
+      createMeasureEffect(() => slide.isActive(), (active) => { seen.push(`${slide.key}:${active}`); });
+      return document.createElement('b');
+    },
+  });
+  await frame();
+  setKey(1);
+  await frame();
+  await frame(); // the new slide's first measure run
+  animationEnd(slidesOf(root)[1]);
+  await frame();
+  seen.length = 0;
+  setKey(0);
+  await frame(); // ONE frame: both measure effects ran with the new value
+  expect(seen).toHaveLength(2);
+  expect(seen).toContain('0:true');
+  expect(seen).toContain('1:false');
+  await frame();
+  expect(seen.length).toBe(2);
+  expect(warn.mock.calls.filter((c) => String(c[0]).includes('dirtied during the mutate phase'))).toEqual([]);
 });

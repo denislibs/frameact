@@ -26,7 +26,7 @@
 //     scope, so a step is never parked by this transition's own blocking animation.
 import { DEV } from '../env';
 import {
-  createEffect, createHeavyAnimationScope, createMutationEffect, createRoot, createSignal, currentHeavyAnimationScope, getOwner,
+  createEffect, createHeavyAnimationScope, createMemo, createMutationEffect, createRoot, createSignal, currentHeavyAnimationScope, getOwner,
   onCleanup, provideHeavyAnimationScope, runWithOwner, untrack, type Accessor, type HeavyAnimationScope,
 } from '../index';
 import { compute, createScope } from '../core/core';
@@ -41,8 +41,11 @@ export type TransitionDirection = 'auto' | 'inverse' | 1 | -1;
 
 export interface TransitionSlide {
   key: number;
+  /** Follows `props.activeKey` at once (the frame of the switch, measure effects included). */
   isActive: Accessor<boolean>;
+  /** True while this slide is the one animating out; written with the step's DOM classes (mutate phase). */
   isFrom: Accessor<boolean>;
+  /** The transition's `activeKey` (same timing as `isActive`). */
   activeKey: Accessor<number>;
 }
 
@@ -163,7 +166,9 @@ export function Transition(props: TransitionProps): unknown {
   const owner = getOwner();
 
   let currentKey = untrack(() => props.activeKey);
-  const [activeKey, setActiveKey] = createSignal(currentKey);
+  // `activeKey` follows the prop at once (a memo, not a write from the step's mutate apply): a measure
+  // effect inside a slide that reads `isActive()` sees the new value in the frame of the switch.
+  const activeKey = createMemo(() => props.activeKey);
   const [fromKey, setFromKey] = createSignal<number | undefined>(undefined);
   const slides: SlideRecord[] = []; // ascending key order = DOM order
   const inFlight: Step[] = [];
@@ -315,7 +320,6 @@ export function Transition(props: TransitionProps): unknown {
 
   function applyStep(key: number, prevKey: number | undefined): void {
     currentKey = key;
-    setActiveKey(key);
     const next = findSlide(key)!;
     if (prevKey === undefined) {
       // Mount: the active slide, no animation.
