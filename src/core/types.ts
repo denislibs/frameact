@@ -6,7 +6,7 @@ export interface Computation<T = any> extends Scope {
 
   /** @internal */
   _effect: boolean;
-  /** @internal F_INIT | F_COMPUTING | F_MISSED (core.ts) */
+  /** @internal F_INIT | F_COMPUTING | F_MISSED | F_REENTERED | F_UNSURE | F_THREW | F_ERRORED (core.ts) */
   _flags: number;
   /** @internal write epoch of this node's last value-changing write (0 = never) */
   _writtenAt: number;
