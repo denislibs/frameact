@@ -5,13 +5,14 @@
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import type { EffectOptions } from '../core/effects';
+import { getNatives } from './natives';
 import { manualOrderOf, ownedBy, reconcileArrays, reconcileManual, tagManualOrder, tagSlot } from './reconcile';
 
 // No `Document`: lib.dom types its `textContent` as a read-only `null`, and mounting into a Document is meaningless anyway.
 export type MountableElement = Element | ShadowRoot | DocumentFragment;
 
 export interface InsertOptions {
-  /** Portal: the slot's logical host. Inserted top-level nodes get a `_$host` getter for event retargeting. */
+  /** Portal: the slot's logical host. Inserted top-level nodes are registered for event retargeting (`portalHostOf`). */
   host?: () => Node | null;
   /** Dev label from the compiler's sourceNames (`div.children`). */
   name?: string;
@@ -19,9 +20,6 @@ export interface InsertOptions {
 
 /** Returned by the outer insert compute when a nested effect owns the slot (its apply then does nothing). */
 const INNER_OWNED: unique symbol = Symbol('frameact.innerOwned');
-/** Compiler/portal contract: a getter on portal content nodes pointing at the logical parent. */
-export const HOST_KEY = '_$host';
-const HOST_TAG: unique symbol = Symbol('frameact.hostTag');
 /** Text nodes created by this module. Only these are reused as positional text slots; a Text node handed in by the user is a plain node. */
 const ownText = new WeakSet<Text>();
 
@@ -114,7 +112,7 @@ export function insert(
   options?: InsertOptions,
 ): void {
   const multi = marker !== undefined;
-  const host = options?.host && hostGetter(parent, options.host);
+  const host = options?.host && { parent, host: options.host };
   if (multi && !initial) initial = [];
   if (typeof accessor !== 'function' || (accessor as (...args: unknown[]) => unknown).length) {
     const value = normalize(accessor, multi, true);
@@ -287,32 +285,34 @@ function appendNodes(parent: MountableElement, array: any[], marker: Node | null
   }
 }
 
-type HostGetter = (this: Node) => Node | null;
-
-let nativeParentNode: ((this: Node) => Node | null) | undefined;
-
-/**
- * The `_$host` accessor of Portal content. It answers only while the node is still a direct child of
- * the portal's mount (`parent`): a node that was moved out, or removed, stops reporting the old host
- * without anything having to remove the getter. `parentNode` is read through the prototype getter
- * (a `<form>` with a control named `parentNode` shadows it).
- */
-function hostGetter(parent: MountableElement, host: () => Node | null): HostGetter {
-  return function (this: Node) {
-    nativeParentNode ??= Object.getOwnPropertyDescriptor(Node.prototype, 'parentNode')!.get!;
-    return nativeParentNode.call(this) === parent ? host() : null;
-  };
+interface HostTag {
+  parent: MountableElement;
+  host: () => Node | null;
 }
 
+/** Portal content node -> its insert call's tag. A WeakMap, not a property: nothing on the node can clobber or throw. */
+const portalHosts = new WeakMap<Node, HostTag>();
+
 /**
- * Portal content: top-level nodes learn their logical host (delegated events bubble through it). Only
- * an own accessor property counts as a host for event delegation (events.ts), never a data property.
+ * The logical parent of a portal's top-level content node, or null. Reported only while the node's
+ * native `parentNode` (prototype getter: a `<form>` control named `parentNode` shadows the property) is
+ * that insert's mount, so a node moved out of the portal, or removed, stops reporting the old host.
+ * Limitation: a node moved by hand elsewhere under the SAME mount (the default, `document.body`) keeps
+ * its host; only leaving the mount is detected.
  */
-function tagHost(value: any, getter: HostGetter): void {
+export function portalHostOf(node: Node): Node | null {
+  const tag = portalHosts.get(node);
+  return tag !== undefined && getNatives().parentNode.call(node) === tag.parent ? tag.host() : null;
+}
+
+/** Test seam: register `node` as portal content hosted by `host` while it is a child of `parent` (default: its current parent). */
+export function tagPortalHost(node: Node, host: () => Node | null, parent: MountableElement = node.parentNode as MountableElement): void {
+  portalHosts.set(node, { parent, host });
+}
+
+/** Portal content: top-level nodes learn their logical host (delegated events bubble through it). */
+function tagHost(value: any, tag: HostTag): void {
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) tagHost(value[i], getter);
-  } else if (value && value.nodeType && value[HOST_TAG] !== getter) {
-    value[HOST_TAG] = getter;
-    Object.defineProperty(value, HOST_KEY, { get: getter, configurable: true });
-  }
+    for (let i = 0; i < value.length; i++) tagHost(value[i], tag);
+  } else if (value && value.nodeType && portalHosts.get(value) !== tag) portalHosts.set(value, tag);
 }

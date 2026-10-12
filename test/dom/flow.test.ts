@@ -1,5 +1,5 @@
 import { createRoot, createSignal, onError } from '../../src/index';
-import { HOST_KEY, insert } from '../../src/dom/insert';
+import { insert, portalHostOf } from '../../src/dom/insert';
 import { createComponent } from '../../src/dom/component';
 import { Dynamic, Match, Portal, Show, Switch } from '../../src/dom/flow';
 import { addEvent, delegateEvents } from '../../src/dom/events';
@@ -193,7 +193,7 @@ describe('Portal', () => {
     expect(second.childNodes.length).toBe(0);
   });
 
-  it('the host is an own accessor (never a data property); a delegated click reaches the logical parent handlers, not the mount ancestors', () => {
+  it('the host is kept in a registry, not on the node; a delegated click reaches the logical parent handlers, not the mount ancestors', () => {
     const logical = container();
     const mountEl = container();
     const clicks: string[] = [];
@@ -203,10 +203,8 @@ describe('Portal', () => {
     const inner = el('span');
     addEvent(inner, 'click', () => clicks.push('inner'), true);
     mount(logical, () => createComponent(Portal, { mount: mountEl, children: inner }));
-    const descriptor = Object.getOwnPropertyDescriptor(inner, HOST_KEY)!;
-    expect(typeof descriptor.get).toBe('function');
-    expect('value' in descriptor).toBe(false);
-    expect((inner as any)[HOST_KEY]).toBe(logical);
+    expect(Object.getOwnPropertyNames(inner)).not.toContain('_$host'); // nothing is written onto the node
+    expect(portalHostOf(inner)).toBe(logical);
     inner.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
     expect(clicks).toEqual(['inner', 'logical']);
   });
@@ -221,13 +219,13 @@ describe('Portal', () => {
     delegateEvents(['click']);
     const inner = el('span');
     mount(logical, () => createComponent(Portal, { mount: mountEl, children: inner }));
-    expect((inner as any)[HOST_KEY]).toBe(logical);
+    expect(portalHostOf(inner)).toBe(logical);
     elsewhere.appendChild(inner);
-    expect((inner as any)[HOST_KEY]).toBeNull();
+    expect(portalHostOf(inner)).toBeNull();
     inner.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
     expect(clicks).toEqual(['elsewhere']);
     inner.remove();
-    expect((inner as any)[HOST_KEY]).toBeNull();
+    expect(portalHostOf(inner)).toBeNull();
   });
 
   it('attaching into a live mount goes through the forceMutation seam, at creation and on cleanup', async () => {
