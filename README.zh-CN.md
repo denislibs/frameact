@@ -137,7 +137,7 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 嵌套调用在当前 action 之后执行，`afterActions(cb)` 在整个级联之后执行。
 
 在正在进行重动画的子树中，由 store 驱动的帧 effect 会*按原因停靠*：只有当 store 写入是它变脏的唯一原因时才等待。
-本地 signal、用户事件或通过 `live()` 的读取会让它立即运行，并读取当前的 store —— 任何计算都不会看到 store 的两个时刻。
+本地 signal 或通过 `live()` 的读取会让它立即运行，并读取当前的 store。写入 store 的事件处理器会让该 effect 继续停靠（处理器本身和命令式读取看到的是当前状态，视图在动画结束后跟上）—— 任何计算都不会看到 store 的两个时刻。
 tickEnd 逻辑从不停靠，受控输入（`use:value` / `use:checked`）从不等待，`ungated(() => setState(…))` 在写入侧绕过闸门。
 
 ```ts

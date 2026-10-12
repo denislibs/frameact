@@ -151,8 +151,9 @@ explicit (`merge()`), a value at a path replaces, `undefined` deletes the key. A
 (`defineActions`); a nested call runs after the current one, `afterActions(cb)` after the cascade.
 
 Store-driven frame effects inside a subtree that runs a heavy animation are *parked* by cause: an effect waits only
-while store writes are the sole reason it is dirty. A local signal, a user event or a `live()` read runs it at once,
-and it reads the current store — no computation ever sees two moments of the store. tickEnd logic is never parked,
+while store writes are the sole reason it is dirty. A local signal or a `live()` read runs it at once, and it reads the current store.
+An event handler that writes the store leaves the effect parked (the handler itself and imperative reads see the
+current state; the view catches up when the animation ends) — no computation ever sees two moments of the store. tickEnd logic is never parked,
 controlled inputs (`use:value` / `use:checked`) never wait, `ungated(() => setState(…))` bypasses the gate on write.
 
 ```ts
