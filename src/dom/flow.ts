@@ -175,8 +175,8 @@ export function Dynamic(props: { component?: ((props: any) => unknown) | string 
         component.toLowerCase() === 'script'
           ? inertScript()
           : SVGElements.has(component)
-            ? document.createElementNS(SVG_NS, component)
-            : document.createElement(component);
+            ? getNatives().createElementNS.call(document, SVG_NS, component)
+            : getNatives().createElement.call(document, component);
       spread(node, props, false, isComponentKey);
       return node;
     }
@@ -193,11 +193,12 @@ export function Dynamic(props: { component?: ((props: any) => unknown) | string 
  * the prototype natives (a `<form>` mount with a descendant named `appendChild` works).
  */
 export function Portal(props: { mount?: Element; children: unknown }): unknown {
-  const treeMarker = document.createTextNode('');
-  const startMarker = document.createTextNode('');
-  const endMarker = document.createTextNode('');
+  const { createTextNode, body } = getNatives();
+  const treeMarker = createTextNode.call(document, '');
+  const startMarker = createTextNode.call(document, '');
+  const endMarker = createTextNode.call(document, '');
   // Compared by identity: a getter that re-runs and returns the same element must not rebuild the portal.
-  const mount = createMemo<Element>(() => props.mount || document.body);
+  const mount = createMemo<Element>(() => props.mount || (body.call(document) as Element));
   const content = createMemo(() => [startMarker, props.children]);
   createRenderEffect<[Element, Scope | null]>(
     () => [mount(), getOwner()],

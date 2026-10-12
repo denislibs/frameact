@@ -332,7 +332,7 @@ function nativePrototype(node: Element): object | null {
   let proto = byTag.get(key);
   if (proto === undefined) {
     try {
-      proto = Object.getPrototypeOf(doc.createElementNS(ns, local)) as object;
+      proto = Object.getPrototypeOf(getNatives().createElementNS.call(doc, ns, local)) as object;
     } catch {
       proto = null;
     }

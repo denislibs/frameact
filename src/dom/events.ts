@@ -17,7 +17,7 @@ export function delegateEvents(eventNames: readonly string[], doc: Document = wi
   for (const name of eventNames) {
     if (!names.has(name)) {
       names.add(name);
-      doc.addEventListener(name, eventHandler);
+      getNatives().addEventListener.call(doc, name, eventHandler);
     }
   }
 }
@@ -26,7 +26,7 @@ export function delegateEvents(eventNames: readonly string[], doc: Document = wi
 export function clearDelegatedEvents(doc: Document = window.document): void {
   const names = delegated.get(doc);
   if (names) {
-    for (const name of names) doc.removeEventListener(name, eventHandler);
+    for (const name of names) getNatives().removeEventListener.call(doc, name, eventHandler);
     delegated.delete(doc);
   }
   for (const hook of clearHooks) hook(doc);

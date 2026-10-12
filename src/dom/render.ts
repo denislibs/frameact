@@ -23,8 +23,9 @@ export function render(code: () => unknown, element: MountableElement, init?: un
   const { firstChild, nextSibling, parentNode, appendChild, removeChild, setTextContent } = getNatives();
   let disposer!: () => void;
   const bounded = firstChild.call(element) !== null;
-  const start = bounded ? document.createTextNode('') : null;
-  const end = bounded ? document.createTextNode('') : null;
+  const { createTextNode } = getNatives();
+  const start = bounded ? createTextNode.call(document, '') : null;
+  const end = bounded ? createTextNode.call(document, '') : null;
   strictHooks.forceMutation(() => {
     if (start && end) {
       appendChild.call(element, start);

@@ -26,7 +26,7 @@ const INNER_OWNED: unique symbol = Symbol('frameact.innerOwned');
 const ownText = new WeakSet<Text>();
 
 function createOwnText(data: string): Text {
-  const node = document.createTextNode(data);
+  const node = getNatives().createTextNode.call(document, data);
   ownText.add(node);
   return node;
 }

@@ -11,7 +11,9 @@
 // caches the `parentNode` getter. jsdom implements getters in JS, so the jsdom benchmarks do not show it.
 //
 // Covered: structure getters, insertion/removal, identity getters, `textContent`, the attribute
-// methods. Not covered: `classList`, `style`, `addEventListener`, `value`, `data` and other
+// methods, and the `document` surface the runtime uses (`createTextNode`, `createElement`,
+// `createElementNS`, `importNode`, `addEventListener`/`removeEventListener`, `body`, `activeElement`).
+// Not covered: `classList`, `style`, `value`, `data`, the element-level `addEventListener` and other
 // per-feature APIs of a form whose descendant takes exactly that name. That case fails loudly, not
 // silently, and stays local to the element: the binding's effect throws on every run (its `_applied`
 // never advances, so the error repeats), and because the compiler groups an element's dynamic
@@ -19,11 +21,13 @@
 // same effect or spread are not applied either. Other elements, the list and the frame are unaffected
 // (unless an `onError` handler or ErrorBoundary sits above: it receives the error, and its fallback may
 // replace the boundary's content).
-// Also not covered: `document` has `[LegacyOverrideBuiltIns]` too — a `<form name="addEventListener">`
-// or `<img name="addEventListener">` in the document shadows `document.addEventListener`, which
-// `delegateEvents` and the controlled-input listeners call (a `name`, not an `id`, is needed: low
-// risk; `querySelectorAll` is already taken from the prototype for the same reason). Both are
-// follow-ups (plan 3, "Follow-ups").
+// `document` has `[LegacyOverrideBuiltIns]` too: a content-named `<img name="createTextNode">` (or
+// `<form>`, `<iframe>`, `<embed>`, `<object id|name>`) anywhere in the document shadows
+// `document.createTextNode` (every new row would fail), `name="body"` points `document.body` at the
+// element (a default `<Portal>` would mount inside an `<img>`), `createElement` / `importNode` break the
+// first render of every template. Those are called through the prototype natives with `.call(document, …)`.
+// A method called through `.call` costs the same as a direct call; the two getters are read once per
+// Portal / focus check.
 export interface Natives {
   parentNode: (this: Node) => Node | null;
   firstChild: (this: Node) => ChildNode | null;
@@ -46,6 +50,17 @@ export interface Natives {
   removeAttribute: (this: Element, name: string) => void;
   setAttributeNS: (this: Element, namespace: string | null, name: string, value: string) => void;
   removeAttributeNS: (this: Element, namespace: string | null, localName: string) => void;
+  /** `Document.prototype` methods the runtime calls on a document (call with `.call(document, …)`). */
+  createTextNode: Document['createTextNode'];
+  createElement: Document['createElement'];
+  createElementNS: Document['createElementNS'];
+  importNode: Document['importNode'];
+  /** `EventTarget.prototype` listeners: a document-level `<img name="addEventListener">` shadows the instance method. */
+  addEventListener: EventTarget['addEventListener'];
+  removeEventListener: EventTarget['removeEventListener'];
+  /** `Document.prototype` getters: `<img name="body">` shadows `document.body`. */
+  body: (this: Document) => HTMLElement | null;
+  activeElement: (this: Document) => Element | null;
   /** `HTMLFormElement.prototype.elements` (`<input name="elements">` shadows `form.elements`). */
   formElements: (this: HTMLFormElement) => HTMLFormControlsCollection;
   /** `querySelectorAll` of a document / shadow root / element (a form named `querySelectorAll` shadows it on `document`). */
@@ -83,6 +98,14 @@ export function getNatives(): Natives {
     removeAttribute: Element.prototype.removeAttribute,
     setAttributeNS: Element.prototype.setAttributeNS,
     removeAttributeNS: Element.prototype.removeAttributeNS,
+    createTextNode: Document.prototype.createTextNode,
+    createElement: Document.prototype.createElement,
+    createElementNS: Document.prototype.createElementNS,
+    importNode: Document.prototype.importNode,
+    addEventListener: EventTarget.prototype.addEventListener,
+    removeEventListener: EventTarget.prototype.removeEventListener,
+    body: getter(Document.prototype, 'body'),
+    activeElement: getter(Document.prototype, 'activeElement'),
     formElements: getter(HTMLFormElement.prototype, 'elements'),
     querySelectorAll: {
       document: Document.prototype.querySelectorAll,
