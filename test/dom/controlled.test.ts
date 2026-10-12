@@ -279,3 +279,43 @@ it('use:checked, compiler-wrapped plain form: an accepted toggle never flickers 
   await frame();
   expect(box.checked).toBe(true);
 });
+
+// ---- fix round 1 -------------------------------------------------------------
+
+it('M6: an accessor outside any owner (imperative, no effect running) gets a dev error that does not claim an effect apply', () => {
+  const input = textInput();
+  const [text] = createSignal('ab');
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  setAttribute(input, 'use:value', text);
+  expect(input.value).toBe('ab');
+  expect(err).toHaveBeenCalledTimes(1);
+  const message = String(err.mock.calls[0][0]);
+  expect(message).not.toContain('inside an effect apply');
+  expect(message).toContain('outside any owner');
+  err.mockRestore();
+  type(input, 'ab1'); // still rolled back against the live accessor
+  expect(input.value).toBe('ab');
+});
+
+it('M1: a plain value written from a parent compute (subtree creation) is not tied to that parent: a rejected keystroke is restored while the parent is parked', async () => {
+  const input = textInput();
+  const [n, setN] = createSignal(0);
+  const scope = createHeavyAnimationScope();
+  createRoot(() => {
+    provideHeavyAnimationScope(scope);
+    effect(
+      () => {
+        const v = n();
+        if (v === 0) setAttribute(input, 'use:value', 'x'); // a constant, written once at creation
+        return v;
+      },
+      () => {},
+    );
+  });
+  const end = scope.begin(Infinity, true);
+  setN(1); // the parent is dirty and parked: it will never deliver to the input
+  type(input, 'x1');
+  await frame();
+  expect(input.value).toBe('x');
+  end();
+});

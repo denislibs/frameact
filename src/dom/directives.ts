@@ -266,11 +266,22 @@ const APPLY_HINTS = {
   checked: ['use:checked={flag}', 'use:checked={props.flag()}'],
 } as const;
 
-/** DEV: an accessor reached a controlled-input directive from inside an effect apply (no owner). */
-function reportAccessorInApply(name: keyof typeof APPLY_HINTS): void {
+/**
+ * The effect whose apply is running right now, or null. An apply runs with no owner; a compute runs
+ * with its effect as the owner (a subtree created there is not a delivery from that effect).
+ */
+function applyingEffect(): EffectNode | null {
+  return getOwner() === null ? getRunningEffect() : null;
+}
+
+/** DEV: an accessor reached a controlled-input directive where no binding effect can be owned. */
+function reportUnownedAccessor(name: keyof typeof APPLY_HINTS, inApply: boolean): void {
   const [accessorForm, valueForm] = APPLY_HINTS[name];
+  const where = inApply
+    ? `inside an effect apply (a compiler-wrapped use:${name}={props.x} where props.x is a function)`
+    : 'outside any owner (no component or createRoot)';
   console.error(
-    `[frameact] use:${name} received an accessor inside an effect apply (a compiler-wrapped use:${name}={props.x} where props.x is a function), so it cannot own a binding effect and will not follow later changes. Pass the accessor directly: ${accessorForm}, or a value: ${valueForm}.`,
+    `[frameact] use:${name} received an accessor ${where}, so it cannot own a binding effect: the value is written once and later changes are not followed (input is still checked against the accessor). Pass the accessor directly under an owner: ${accessorForm}, or a value: ${valueForm}.`,
   );
 }
 
@@ -278,16 +289,19 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
   installListeners(el.ownerDocument);
   let b = kind.bindings.get(el);
   if (!b) kind.bindings.set(el, (b = kind.create(el)));
+  const applying = applyingEffect();
   if (typeof value === 'function') {
     const accessor = value as () => unknown;
     const owned = b;
     owned.accessor = accessor; // the document-level rollback check always reads the live accessor
     owned.live = true;
+    owned.effect = null;
     if (getOwner() === null) {
-      // Inside an effect apply (no owner): the compiler wrapped `use:value={props.text}` where
-      // `props.text` is itself an accessor. An effect created here would be unowned (DEV throws), so
-      // write once and tell the author how to get a live binding.
-      if (DEV) reportAccessorInApply(kind.name);
+      // No owner: inside an effect apply (the compiler wrapped `use:value={props.text}` where
+      // `props.text` is itself an accessor) or imperative code outside any root. An effect created
+      // here would be unowned (DEV throws inside an apply), so write once and tell the author how to
+      // get a live binding.
+      if (DEV) reportUnownedAccessor(kind.name, applying !== null);
       kind.write(owned, untrack(accessor));
       return;
     }
@@ -304,10 +318,11 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
     );
   } else {
     // Effect-driven form: the compiler's effect calls us with plain values; the rollback check is
-    // deferred to the mutate phase (see `verify`). No allocation per delivery.
+    // deferred to the mutate phase (see `verify`). No allocation per delivery. Outside an apply (a
+    // constant written while a subtree is created) nothing will deliver again: effect stays null.
     b.accessor = null;
     b.live = false;
-    b.effect = getRunningEffect(); // the compiler's effect: we are inside its apply
+    b.effect = applying;
     b.delivered = value;
     kind.write(b, value);
   }
