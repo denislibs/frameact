@@ -301,7 +301,7 @@ function targetOf(e: Event): unknown {
 }
 
 /** The element forceControlledValue is blurring / writing / refocusing right now. */
-let forcing: Element | null = null;
+const forcing: Element[] = []; // a stack: an app blur handler may force another field in the middle of a cycle
 
 /**
  * Capture-phase, on the document: the commit an engine fires synchronously inside `blur()` (a
@@ -309,10 +309,11 @@ let forcing: Element | null = null;
  * the cleared text back into the signal. Nothing below the document sees these events.
  */
 function swallowWhileForcing(e: Event): void {
-  if (forcing === null || targetOf(e) !== forcing) return;
+  const target = targetOf(e) as Element;
+  if (!forcing.includes(target)) return;
   e.stopImmediatePropagation();
   if (e.type === 'compositionend') {
-    const b = valueKind.bindings.get(forcing);
+    const b = valueKind.bindings.get(target);
     if (b) b.cancelled = false; // the cancelled composition has ended here
   }
 }
@@ -599,14 +600,19 @@ export function forceControlledValue(el: HTMLInputElement | HTMLTextAreaElement 
   b.delivered = value === undefined ? b.delivered : value;
   b.hasSelection = false;
   const cycle = wasComposing && focused;
-  forcing = el;
+  forcing.push(el);
   try {
     if (cycle) el.blur(); // ends the composition: the engine commits or drops its text first
     el.value = next;
     if (cycle) el.focus({ preventScroll: true });
   } finally {
-    forcing = null;
+    // The engine may commit inside focus() and put the old text back; the window swallowed our own
+    // listeners too, so nobody else would notice. Fix it here, and re-check next frame for a commit
+    // delivered asynchronously after the cycle (covered only by this deferred check).
+    if (el.value !== next) el.value = next;
+    forcing.pop();
   }
+  if (cycle) deferCheck(b);
   if (isFocused(el) && 'setSelectionRange' in el) {
     try {
       el.setSelectionRange(next.length, next.length);
@@ -622,5 +628,5 @@ export function forceControlledValue(el: HTMLInputElement | HTMLTextAreaElement 
  * from the user leaving the field (draft saving, "stopped typing", closing a tooltip).
  */
 export function isForcingControlledValue(el?: Element): boolean {
-  return forcing !== null && (el === undefined || el === forcing);
+  return el === undefined ? forcing.length > 0 : forcing.includes(el);
 }

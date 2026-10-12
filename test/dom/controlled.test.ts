@@ -892,6 +892,15 @@ function plain() {
   return { input, setText };
 }
 
+/** The engine commits the composition inside focus() and puts the old text back. */
+function commitOnFocus(input: HTMLInputElement) {
+  input.addEventListener('focus', () => {
+    input.value = 'hello';
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'hello' }));
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  });
+}
+
 function preventError(e: ErrorEvent) {
   e.preventDefault();
 }
@@ -973,6 +982,66 @@ describe('forceControlledValue: explicit write-through (Android "Send -> clear")
     type(input, 'w');
     expect(text()).toBe('w');
     expect(seen).toEqual(['input']);
+  });
+
+  it('R-7 (F1b): a commit inside focus() that re-inserts the old text is corrected before the call returns (accessor form)', async () => {
+    const input = textInput();
+    const { text, setText } = controlled(input, acceptAll, '');
+    commitOnFocus(input);
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    setText('');
+    forceControlledValue(input);
+    expect(input.value).toBe('');
+    expect(text()).toBe('');
+    await frame();
+    await frame();
+    expect(input.value).toBe('');
+    expect(text()).toBe('');
+  });
+
+  it('R-7 (F1d): the handler skips composing input, the signal is already empty: the field does not keep the old text', async () => {
+    const input = textInput();
+    const [text, setText] = createSignal('');
+    createRoot(() => setAttribute(input, 'use:value', text));
+    (input as any)[EVENT_KEY + 'input'] = (e: Event) => {
+      if (!(e as InputEvent).isComposing) setText((e.currentTarget as HTMLInputElement).value);
+    };
+    delegateEvents(['input']);
+    commitOnFocus(input);
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello'); // skipped by the handler: the signal stays ''
+    forceControlledValue(input);
+    expect(input.value).toBe('');
+    await frame();
+    await frame();
+    expect(input.value).toBe('');
+    expect(text()).toBe('');
+  });
+
+  it('R-8 (W3): a nested forceControlledValue from an app blur handler does not close the outer window', () => {
+    const a = textInput();
+    const other = document.createElement('input');
+    container().appendChild(other);
+    controlled(a, acceptAll, '');
+    const otherSignal = createSignal('');
+    createRoot(() => setAttribute(other, 'use:value', otherSignal[0]));
+    other.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    const during: boolean[] = [];
+    a.addEventListener('blur', () => {
+      forceControlledValue(other, ''); // nested, for another field
+      during.push(isForcingControlledValue(a), isForcingControlledValue(other));
+    });
+    const seen: string[] = [];
+    a.addEventListener('input', () => seen.push('input'));
+    commitOnFocus(a);
+    a.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(a, 'hello');
+    seen.length = 0;
+    forceControlledValue(a, '');
+    expect(during).toEqual([true, false]); // the outer window is still open after the nested one closed
+    expect(seen).toEqual([]); // the commit inside focus() of the outer cycle was still swallowed
+    expect(isForcingControlledValue()).toBe(false);
   });
 
   it('R-1: the forcing window is closed even when blur throws (finally)', () => {
