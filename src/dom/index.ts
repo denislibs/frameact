@@ -4,3 +4,5 @@ export {
   Properties, ChildProperties, BooleanAttributes, Aliases, getPropAlias, DelegatedEvents, SVGElements, SVGNamespace,
   DOMElements, SVG_NS,
 } from './constants';
+export { insert, type InsertOptions, type MountableElement } from './insert';
+export { render } from './render';
