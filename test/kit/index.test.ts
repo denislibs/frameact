@@ -4,7 +4,7 @@ import pkg from '../../package.json';
 it('frameact/kit exposes the client-readiness kit', () => {
   for (const name of [
     'waitForAnimationEnd', 'waitForTransitionEnd', 'createShowTransition', 'createMediaTransition', 'ShowTransition',
-    'Transition',
+    'Transition', 'createScrollAnchor', 'InfiniteScroll',
   ]) {
     expect(typeof (kit as Record<string, unknown>)[name], name).toBe('function');
   }

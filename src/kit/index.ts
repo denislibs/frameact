@@ -12,3 +12,5 @@ export {
   Transition, ACTIVE_SLIDE_CLASS_NAME, TO_SLIDE_CLASS_NAME,
   type TransitionProps, type TransitionSlide, type TransitionDirection,
 } from './transition';
+export { createScrollAnchor, type ScrollAnchor, type ScrollAnchorOptions } from './scrollAnchor';
+export { InfiniteScroll, type InfiniteScrollProps, type LoadMoreDirection } from './infiniteScroll';
