@@ -1,6 +1,6 @@
 import { createMemo, createMutationEffect, createRoot, createSignal, flushSync } from '../../src/index';
 import { createComponent, effect } from '../../src/dom/component';
-import { createStore } from '../../src/store/index';
+import { createStore, live } from '../../src/store/index';
 import { notifyDep, notifyRoot } from '../../src/core/core';
 import { describeNode, effectPath, ownerPath } from '../../src/core/debug';
 import { getEffectDebugInfo, getRunningEffect, setRunObserver, type EffectNode } from '../../src/core/effects';
@@ -140,4 +140,37 @@ it('the notify walk does not keep the last written node (a store leaf, its subtr
   flushSync();
   expect(notifyDep).toBeNull();
   expect(notifyRoot).toBeNull();
+});
+
+it('a live() store reader names the leaf whose write scheduled it (the live relay keeps its cause)', () => {
+  const [state, setState] = createStore({ typing: false });
+  let node!: EffectNode;
+  testRoot(() => {
+    createMutationEffect(() => live(() => state.typing), () => { node = captureEffect(); });
+  });
+  setState('typing', true);
+  const info = getEffectDebugInfo(node)!;
+  expect(describeNode(info.root)).toBe('signal "store.typing"');
+  expect(info.dep).toBe(info.root);
+});
+
+it('a run re-delivered for a write that landed during the effect\'s own compute (a latched write) still names it', () => {
+  const [a, setA] = createSignal(0, { id: 'a' });
+  const roots: string[] = [];
+  setRunObserver((_node, _ms, _dep, root) => { roots.push(describeNode(root)); });
+  let reads = 0;
+  testRoot(() => {
+    createMutationEffect(
+      () => {
+        const v = a();
+        if (++reads === 2) setA(100); // lands after this compute read `a`: latched, re-delivered when the compute ends
+        return v;
+      },
+      () => {},
+    );
+  });
+  setA(1);
+  flushSync();
+  expect(reads).toBe(3); // the scheduled run (writes 100) and the run the latched write caused
+  expect(roots).toEqual(['signal "a"', 'signal "a"']);
 });
