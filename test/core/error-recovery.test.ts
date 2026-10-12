@@ -1,12 +1,13 @@
-// Core perf pass, stage 3: a pull or a notify walk aborted by a throw leaves nodes CHECK/DIRTY
-// whose subscribers were not reached (the reader whose pull threw is CLEAN; a walk cut short by a
-// throwing scheduler never visited the rest). Those nodes are marked F_UNSURE: the next walk that
-// reaches them descends into their subscribers although they are already dirty. Pre-existing
-// since the vendored maverick (995e983): an effect whose source threw two levels down never ran
-// again when the source recovered. The flag is also what keeps the shallow marking of a recomputed
-// memo's CHECK subscribers sound (notifySubs, stage 3).
+// Core perf pass, stage 3 + review fix round 1: error recovery. An error never freezes part of the
+// graph: a memo whose compute threw (unhandled) holds the error — every read rethrows it, in
+// whichever phase it was recomputed — and recovering (even to the old value) is a change for its
+// readers; a node whose compute threw recomputes on its next check (F_THREW); the first good result
+// after a failed first run reaches the readers that saw the failure. A pull or walk aborted by an
+// unexpected throw marks the unverified nodes F_UNSURE (safety net; the shallow marking of a
+// recomputed memo's CHECK subscribers relies on it). Pre-existing since the vendored maverick
+// (995e983): an effect whose source threw two levels down never ran again when it recovered.
 import { computed, signal } from '../../src/core/signals';
-import { root } from '../../src/core/core';
+import { onError, root } from '../../src/core/core';
 import { createEffect, type Schedule } from '../../src/core/effects';
 
 function queue() {
@@ -50,7 +51,7 @@ it('an effect whose source threw two levels down runs again when the source reco
 
 it('a memo that caught a throwing read two levels down recomputes when the source recovers', () => {
   const $s = signal(0);
-  const $k = signal(0); // makes the reader DIRTY, so the throwing pull happens inside its compute
+  const $k = signal(0); // (makes the reader DIRTY: the throwing pull happens inside its compute)
   const $m2 = computed(() => {
     if ($s() === 1) throw new Error('boom');
     return $s();
@@ -67,7 +68,7 @@ it('a memo that caught a throwing read two levels down recomputes when the sourc
   expect($r()).toBe(0);
   $s.set(1);
   $k.set(1);
-  expect($r()).toBe(-1); // the reader handled the error: CLEAN, $m1 left CHECK
+  expect($r()).toBe(-1); // the reader handled the error
   $s.set(2); // reaches the reader only through $m2 → $m1
   expect($r()).toBe(20);
 });
@@ -102,11 +103,10 @@ it('a walk cut short by a throwing scheduler: the next write through the dirty m
   expect(seen).toEqual([[0, 2], [0, 2], [0, 2]]);
 });
 
-it('a recomputed memo marks its CHECK subscriber DIRTY without walking below it — unless that one was left unsure by an error', () => {
-  // M1 = M2 + M3, E reads M1. M3 and M2 both change; E's pull reaches M2 first, which throws: the
-  // pull aborts with M1 CHECK (M3 still DIRTY, never pulled) and E CLEAN (error handled). Then
-  // another reader pulls M3: its result write reaches M1 (CHECK) — no write walk passes M1 again.
-  // A shallow mark would stop at M1 and E would never run again.
+it('while a dep holds an error, the reader catching it keeps its fallback; recovery brings the other input in', () => {
+  // M1 = M2 + M3, E reads M1 (catching). M2 throws: M1 holds the error (its run stopped at M2, so
+  // it no longer reads M3); M3 changes meanwhile. When M2 recovers to its old value, M1 recomputes
+  // (it was errored) and picks up M3's change.
   const { schedule, flush } = queue();
   const $s = signal(0);
   const $t = signal(0);
@@ -117,17 +117,28 @@ it('a recomputed memo marks its CHECK subscriber DIRTY without walking below it 
   const $m3 = computed(() => $t() * 100);
   const $m1 = computed(() => $m2() + $m3());
   const seen: number[] = [];
-  root(() => createEffect(() => $m1(), (v) => { seen.push(v); }, schedule));
+  root(() =>
+    createEffect(() => {
+      try {
+        return $m1();
+      } catch {
+        return -1;
+      }
+    }, (v) => { seen.push(v); }, schedule),
+  );
   const $other = computed(() => $m3() + 1);
   expect($other()).toBe(1);
   flush();
   $t.set(1);
   $s.set(1);
-  flush(); // E's pull: M2 throws before M3 is checked
-  expect(seen).toEqual([0]);
-  expect($other()).toBe(101); // recomputes M3: its result write reaches M1 (CHECK)
   flush();
-  expect(seen).toEqual([0, 100]); // E ran again (M2 kept its last value, 0)
+  expect(seen).toEqual([0, -1]);
+  expect($other()).toBe(101);
+  flush();
+  expect(seen).toEqual([0, -1]);
+  $s.set(0);
+  flush();
+  expect(seen).toEqual([0, -1, 100]);
 });
 
 it('shallow marking: a computing reader that consumed the memo was latched by the walk that made it CHECK', () => {
@@ -154,51 +165,54 @@ it('shallow marking: a computing reader that consumed the memo was latched by th
   expect($w()).toBe(10);
 });
 
-describe('stage-3 review: an aborted pull leaves other dirty deps of the reader unchecked', () => {
-  it('P1: the reader still hears from a CHECK dep the aborted pull never reached (another reader pulls its source)', () => {
-    const { schedule, flush } = queue();
-    const $s1 = signal(0);
-    const $s2 = signal(0);
-    const $y1 = computed(() => {
-      if ($s1() === 1) throw new Error('boom');
-      return $s1();
-    });
-    const $y2 = computed(() => $s2());
-    const $x1 = computed(() => $y1() * 10);
-    const $x2 = computed(() => $y2() * 100);
-    const seen: number[] = [];
-    root(() => createEffect(() => $x1() + $x2(), (v) => { seen.push(v); }, schedule));
+/** P1/P1b graph: an effect reads a throwing branch ($s1 → $y1 → $x1) and a healthy one. */
+function setupP1() {
+  const q = queue();
+  const $s1 = signal(0);
+  const $s2 = signal(0);
+  const $y1 = computed(() => {
+    if ($s1() === 1) throw new Error('boom');
+    return $s1();
+  });
+  const $y2 = computed(() => $s2());
+  const $x1 = computed(() => $y1() * 10);
+  const $x2 = computed(() => $y2() * 100);
+  const seen: number[] = [];
+  root(() => createEffect(() => $x1() + $x2(), (v) => { seen.push(v); }, q.schedule));
+  return { ...q, $s1, $s2, $y2, seen };
+}
+
+describe('stage-3 review, P1/P1b: an error in one branch does not blind the reader to the other', () => {
+  // (Under the stage-3 code the effect's pull aborted with $x2/$y2 left dirty and unmarked: the
+  // effect never heard from that branch again — HEAD [0] where 5d60063 gave [0, 100].)
+  it('P1: another reader pulls the healthy branch while the effect is errored; recovery to the old value applies both', () => {
+    const { flush, $s1, $s2, $y2, seen } = setupP1();
     const $r = computed(() => $y2() + 1);
     $r();
     flush();
     $s1.set(1);
     $s2.set(1);
-    flush(); // the effect's pull: $y1 throws before $x2 is checked; the effect ends CLEAN
+    flush(); // the effect's compute gets $x1's error
     expect(seen).toEqual([0]);
-    $r(); // recomputes $y2: its result write reaches $x2 (CHECK) — must reach the effect too
+    $r(); // recomputes $y2
     flush();
-    expect(seen).toEqual([0, 100]); // $x1 keeps its last value (0)
+    expect(seen).toEqual([0]);
+    $s1.set(0); // back to the old value: $y1 and $x1 were errored, so this is a change
+    flush();
+    expect(seen).toEqual([0, 100]);
   });
 
-  it('P1b: the reader still hears from a source behind a DIRTY memo the aborted pull never reached', () => {
-    const { schedule, flush } = queue();
-    const $s1 = signal(0);
-    const $s2 = signal(0);
-    const $y1 = computed(() => {
-      if ($s1() === 1) throw new Error('boom');
-      return $s1();
-    });
-    const $y2 = computed(() => $s2());
-    const $x1 = computed(() => $y1() * 10);
-    const $x2 = computed(() => $y2() * 100);
-    const seen: number[] = [];
-    root(() => createEffect(() => $x1() + $x2(), (v) => { seen.push(v); }, schedule));
+  it('P1b: the healthy source changes again while the effect is errored; recovery applies the latest', () => {
+    const { flush, $s1, $s2, seen } = setupP1();
     flush();
     $s1.set(1);
     $s2.set(1);
-    flush(); // aborted: $x2 CHECK, $y2 DIRTY, neither reached
+    flush();
     expect(seen).toEqual([0]);
-    $s2.set(2); // the walk stops at $y2 (already DIRTY) unless it is marked unsure
+    $s2.set(2);
+    flush();
+    expect(seen).toEqual([0]);
+    $s1.set(0);
     flush();
     expect(seen).toEqual([0, 200]);
   });
@@ -266,4 +280,88 @@ it('stage-3 review, Important 3 (P2): the first successful result of a memo whos
   $s.set(2); // $t's first successful run: 2 (it never had a value before)
   flush();
   expect(seen).toEqual([-1, 20]);
+});
+
+describe('a memo whose compute threw (unhandled) holds the error: every read rethrows it until it recomputes', () => {
+  it('a reader catching errors in its compute gets the error of a dep even when the dep is pulled in the check phase', () => {
+    const $s = signal(0);
+    const $m2 = computed(() => {
+      if ($s() === 1) throw new Error('boom');
+      return $s();
+    });
+    const $m1 = computed(() => $m2() * 10);
+    const $r = computed(() => {
+      try {
+        return $m1();
+      } catch (error) {
+        return (error as Error).message;
+      }
+    });
+    expect($r()).toBe(0);
+    $s.set(1); // $r is only CHECK: $m2 is recomputed while $r's deps are verified
+    expect($r()).toBe('boom');
+    $s.set(2);
+    expect($r()).toBe(20);
+  });
+
+  it('every reader sees the error, not only the one whose pull ran the throwing compute', () => {
+    const $s = signal(0);
+    const $t = computed(() => {
+      if ($s() === 1) throw new Error('boom');
+      return $s();
+    });
+    const $a = computed(() => $t() + 1);
+    const $b = computed(() => $t() + 2);
+    expect([$a(), $b()]).toEqual([1, 2]);
+    $s.set(1);
+    expect(() => $a()).toThrow('boom');
+    expect(() => $b()).toThrow('boom');
+    expect(() => $t()).toThrow('boom');
+    $s.set(0); // recovers to its old value: the readers saw an error, so they hear about it
+    expect([$a(), $b(), $t()]).toEqual([1, 2, 0]);
+  });
+
+  it('an effect catching errors in its compute gets the fallback, not an effect error', () => {
+    const { schedule, flush } = queue();
+    const $s = signal(0);
+    const $m2 = computed(() => {
+      if ($s() === 1) throw new Error('boom');
+      return $s();
+    });
+    const $m1 = computed(() => $m2() * 10);
+    const seen: unknown[] = [];
+    root(() =>
+      createEffect(() => {
+        try {
+          return $m1();
+        } catch {
+          return 'fallback';
+        }
+      }, (v) => { seen.push(v); }, schedule),
+    );
+    flush();
+    $s.set(1);
+    flush();
+    $s.set(2);
+    flush();
+    expect(seen).toEqual([0, 'fallback', 20]);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('an error handled by onError is not held: readers keep the last value', () => {
+    const $s = signal(0);
+    const handled: unknown[] = [];
+    let $t!: () => number;
+    root(() => {
+      onError((e) => { handled.push((e as Error).message); });
+      $t = computed(() => {
+        if ($s() === 1) throw new Error('boom');
+        return $s();
+      });
+    });
+    expect($t()).toBe(0);
+    $s.set(1);
+    expect($t()).toBe(0);
+    expect(handled).toEqual(['boom']);
+  });
 });

@@ -41,6 +41,11 @@ const NOOP = () => {};
  * recomputes it even if no dep changed: that run may have read inputs that had changed, and the
  * thrower may recover to its old value (no change to see). Survives update()'s exit; the next
  * compute clears it on entry.
+ * F_ERRORED (computeds only): the last compute threw and no onError handler took the error. The
+ * error is the node's value (held in `_value`) until a compute succeeds: every read rethrows it —
+ * in whichever phase the node was recomputed (a reader's compute, or the verification of its
+ * deps), so a reader's try/catch always sees it. The transitions value → error and error → value
+ * are changes for its subscribers (even back to the same value).
  * The F_MISSED clear on entry is only a safety net; the clear on exit (update()'s `finally`, after
  * reading it) is the one that keeps the latch from leaking into the next run. They are not
  * duplicates: do not remove either.
@@ -50,7 +55,8 @@ export const F_INIT = 1,
   F_MISSED = 4,
   F_REENTERED = 8,
   F_UNSURE = 16,
-  F_THREW = 32;
+  F_THREW = 32,
+  F_ERRORED = 64;
 
 // For more information about this graph tracking scheme see Reactively:
 // https://github.com/modderme123/reactively/blob/main/packages/core/src/core.ts#L21
@@ -398,7 +404,10 @@ export function handleError(scope: Scope | null, error: unknown) {
 }
 
 export function read(this: Computation): any {
-  if (this._state === STATE_DISPOSED) return this._value;
+  if (this._state === STATE_DISPOSED) {
+    if (this._flags & F_ERRORED) throw this._value;
+    return this._value;
+  }
 
   // P4: subscribe as the read completes — from here on, any change to this dep reaches the
   // reader's latch through the link (notify(): a link confirmed in the running compute means its
@@ -414,10 +423,8 @@ export function read(this: Computation): any {
         link(this, currentObserver);
       }
     }
-    return this._value;
-  }
-
-  if (currentObserver !== null && !this._effect) link(this, currentObserver);
+  } else if (currentObserver !== null && !this._effect) link(this, currentObserver);
+  if (this._flags & F_ERRORED) throw this._value; // (linked: the reader wakes when it recovers)
   return this._value;
 }
 
@@ -751,7 +758,8 @@ export function update(node: Computation) {
     node._flags |= F_REENTERED;
     return;
   }
-  node._flags = (node._flags & F_INIT) | F_COMPUTING;
+  // (F_ERRORED stays until a compute succeeds: a re-entrant read meanwhile still gets the error)
+  node._flags = (node._flags & (F_INIT | F_ERRORED)) | F_COMPUTING;
   let computeStarted = false;
   const prevScope = currentScope,
     prevObserver = currentObserver,
@@ -774,11 +782,13 @@ export function update(node: Computation) {
     currentCycle = prevCycle;
     purgeDeps(node);
 
+    const errored = node._flags & F_ERRORED;
+    node._flags &= ~F_ERRORED;
     if (!node._effect && node._flags & F_INIT) {
       // A computed's result write: a value, never an updater (not routed through write()); not a
       // signal write either (no epoch stamp, never latched by a reader mid-compute — it is a lazy
-      // pull that reader reads fresh).
-      if (node._changed(node._value, result)) {
+      // pull that reader reads fresh). After an error, any value is a change.
+      if (errored || node._changed(node._value, result)) {
         node._value = result;
         notifySubs(node);
       }
@@ -790,7 +800,9 @@ export function update(node: Computation) {
       // the `initial` value: while this first run was still going (see the re-entry guard above),
       // or from an earlier first run that threw (its readers stay linked: `_subs`). Announced if
       // the result differs from it. (`!==`, not the user's `equals`: it never sees `initial`.)
-      if ((node._flags & F_REENTERED || node._subs !== null) && initial !== result) notifySubs(node);
+      if ((node._flags & F_REENTERED || node._subs !== null) && (errored || initial !== result)) {
+        notifySubs(node);
+      }
     }
   } catch (error) {
     currentScope = prevScope;
@@ -813,10 +825,22 @@ export function update(node: Computation) {
     // purging would unlink every dep and the node would never wake again.
     if (computeStarted) purgeDeps(node);
     node._flags |= F_THREW;
-    handleError(node, error);
+    if (node._effect) {
+      handleError(node, error); // unhandled: rethrown to effects.ts, which reports it
+    } else {
+      try {
+        handleError(node, error); // taken by an onError handler: the node keeps its last value
+      } catch (unhandled) {
+        // The error becomes the node's value until a compute succeeds (reads rethrow it).
+        const wasErrored = node._flags & F_ERRORED;
+        node._value = unhandled;
+        node._flags |= F_ERRORED;
+        if (!wasErrored && node._subs !== null) notifySubs(node); // value → error: a change
+      }
+    }
   } finally {
     const missed = node._flags & F_MISSED;
-    node._flags &= F_INIT | F_THREW;
+    node._flags &= F_INIT | F_THREW | F_ERRORED;
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;
       if (missed) {

@@ -448,8 +448,8 @@ describe('per-run flags do not leak between runs', () => {
   });
 });
 
-describe('error in compute: documented state (node CLEAN, previous value, retries on next change)', () => {
-  it('an unhandled throw propagates to the reader; the node is CLEAN with its previous value', () => {
+describe('error in compute: documented state (unhandled: the node holds the error; handled: previous value; retries on next change)', () => {
+  it('an unhandled throw propagates to the reader; the node holds the error (reads rethrow it, no recompute)', () => {
     const $n = signal(0);
     const spy = vi.fn(() => {
       const v = $n();
@@ -460,7 +460,7 @@ describe('error in compute: documented state (node CLEAN, previous value, retrie
     expect($c()).toBe(0);
     $n.set(1);
     expect(() => $c()).toThrow('unhandled');
-    expect($c()).toBe(0); // CLEAN: no recompute, previous value
+    expect(() => $c()).toThrow('unhandled'); // CLEAN: no recompute, the held error
     expect(spy).toHaveBeenCalledTimes(2);
     $n.set(2);
     expect($c()).toBe(20);
