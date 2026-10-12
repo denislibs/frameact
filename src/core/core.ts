@@ -269,8 +269,19 @@ let disposeTop = 0;
 export function dispose(this: Scope, self = true) {
   if (this._state === STATE_DISPOSED) return;
 
+  disposeChildrenOf(this);
+
+  if (self && this._state !== STATE_DISPOSED) {
+    const owner = this[SCOPE];
+    if (owner !== null) unlinkChild(owner, this);
+    disposeNode(this as Computation);
+  }
+}
+
+/** The children walk of dispose() (also for a node already DISPOSED: see disposeLate()). */
+function disposeChildrenOf(top: Scope) {
   const base = disposeTop;
-  let cur: Scope = this;
+  let cur: Scope = top;
   try {
     for (;;) {
       const last = cur._lastChild;
@@ -279,7 +290,7 @@ export function dispose(this: Scope, self = true) {
         cur = last;
         continue;
       }
-      if (disposeTop === base) break; // back at `this`: its children are gone
+      if (disposeTop === base) break; // back at `top`: its children are gone
       const owner = disposeStack[--disposeTop]!;
       disposeStack[disposeTop] = null;
       // (a cleanup may have disposed `cur` already, together with the rest of its subtree)
@@ -293,11 +304,29 @@ export function dispose(this: Scope, self = true) {
     // Normally already at `base`; after a throw (disposals never throw), drop this call's frames.
     while (disposeTop > base) disposeStack[--disposeTop] = null;
   }
+}
 
-  if (self && this._state !== STATE_DISPOSED) {
-    const owner = this[SCOPE];
-    if (owner !== null) unlinkChild(owner, this);
-    disposeNode(this as Computation);
+/** Rounds of disposeLate() before a cleanup that keeps re-creating work is cut off. */
+const MAX_LATE_ROUNDS = 100;
+
+/**
+ * Stage-3 review (Minor 7): a cleanup of a node being disposed may create owners under it or
+ * register more cleanups on it (runWithOwner/scoped with that node). Dispose those too instead of
+ * leaving an orphan with a DISPOSED owner, or a cleanup that never runs.
+ */
+function disposeLate(node: Computation) {
+  for (let round = 0; node._lastChild !== null || node._disposal !== null; round++) {
+    if (round === MAX_LATE_ROUNDS) {
+      console.error(
+        `[frameact] a cleanup keeps creating owners or cleanups on its disposed owner${DEV && node.id ? ` \`${node.id}\`` : ''}; dropping them`,
+      );
+      node._disposal = null;
+      for (let c = node._lastChild; c !== null; c = c._prevSibling) c[SCOPE] = null;
+      node._lastChild = null;
+      return;
+    }
+    if (node._lastChild !== null) disposeChildrenOf(node);
+    if (node._disposal !== null) emptyDisposal(node);
   }
 }
 
@@ -325,6 +354,7 @@ function disposeNode(node: Computation) {
   node._state = STATE_DISPOSED;
   if (node._disposal) emptyDisposal(node);
   if (node._effect) effectDisposeHook(node);
+  if (node._lastChild !== null || node._disposal !== null) disposeLate(node);
   if (node._deps) unlinkDeps(node._deps); // (plain scopes have no link fields)
   node[SCOPE] = null;
   node._deps = null;
@@ -768,6 +798,8 @@ export function update(node: Computation) {
 
   try {
     cleanup(node);
+    // A cleanup disposed the node itself (e.g. a child's cleanup disposing its owner): no compute.
+    if (node._state === STATE_DISPOSED) return;
 
     computeStarted = true;
     node._depsTail = null; // link() walks the old deps from the start

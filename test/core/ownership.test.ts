@@ -178,3 +178,77 @@ describe('removal while a dispose is iterating', () => {
     expect($m.node!._state).toBe(STATE_DISPOSED);
   });
 });
+
+describe('stage-3 review, Minor 7: owners created or cleanups registered during a dispose', () => {
+  it('D2: a child created by a cleanup under an ancestor that is on the dispose stack is disposed too', () => {
+    const log: string[] = [];
+    const top = createScope();
+    const mid = child(top, log, 'mid');
+    let late!: Scope;
+    child(mid, log, 'leaf', () => {
+      late = child(top, log, 'late'); // created under `top`, which is still being disposed
+    });
+    dispose.call(top);
+    expect(log).toEqual(['leaf', 'mid', 'late']);
+    expect(late._state).toBe(STATE_DISPOSED);
+    expect(childrenOf(top)).toEqual([]);
+  });
+
+  it('D1: a child created by a cleanup of the node being disposed is disposed too (no orphan)', () => {
+    const log: string[] = [];
+    const p = createScope();
+    let late!: Scope;
+    scoped(() => onDispose(() => {
+      log.push('p');
+      late = child(p, log, 'late');
+    }), p);
+    dispose.call(p);
+    expect(log).toEqual(['p', 'late']);
+    expect(late._state).toBe(STATE_DISPOSED);
+    expect(late[SCOPE]).toBeNull();
+  });
+
+  it('D3: a cleanup registered by a cleanup of the node being disposed runs', () => {
+    const log: string[] = [];
+    const p = createScope();
+    scoped(() => onDispose(() => {
+      log.push('first');
+      scoped(() => onDispose(() => log.push('second')), p);
+    }), p);
+    dispose.call(p);
+    expect(log).toEqual(['first', 'second']);
+    expect(p._disposal).toBeNull();
+  });
+
+  it('a cleanup that keeps registering cleanups on its own node is cut off (no endless dispose)', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const p = createScope();
+    let n = 0;
+    const again = () => {
+      n++;
+      scoped(() => onDispose(again), p);
+    };
+    scoped(() => onDispose(again), p);
+    dispose.call(p);
+    expect(n).toBeLessThan(1000);
+    expect(errors).toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it('D4: a cleanup that disposes its owner during a memo re-run stops that run (no compute on a disposed node)', () => {
+    const log: string[] = [];
+    let runs = 0;
+    const $m = computed(() => {
+      runs++;
+      const me = getScope()!;
+      if (runs === 1) child(me, log, 'kid', () => dispose.call(me));
+      return runs;
+    });
+    root(() => $m());
+    $m.node!._state = 2;
+    $m();
+    expect(log).toEqual(['kid']);
+    expect($m.node!._state).toBe(STATE_DISPOSED);
+    expect(runs).toBe(1);
+  });
+});
