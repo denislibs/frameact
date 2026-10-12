@@ -389,3 +389,63 @@ it('M1: a skipped deferred check is re-armed: the effect turning clean without a
   await frame();
   expect(pending()).toBe(0); // the re-armed check stopped once it ran
 });
+
+/** Handler factory for `controlled`: accepts input only up to `max` characters (rejects longer). */
+function limit(max: number) {
+  return (setText: (v: string) => void) => (e: Event) => {
+    const v = (e.currentTarget as HTMLInputElement).value;
+    if (v.length <= max) setText(v);
+  };
+}
+
+/** Handler factory for `controlled`: accepts input truncated to `max` characters. */
+function truncate(max: number) {
+  return (setText: (v: string) => void) => (e: Event) => setText((e.currentTarget as HTMLInputElement).value.slice(0, max));
+}
+
+describe('I1: the caret is anchored on the common suffix of the DOM value and the written value', () => {
+  it('a rejected keystroke mid-string puts the caret back where it was (limit 5, after the "h" of "hello")', () => {
+    const input = textInput();
+    controlled(input, limit(5), 'hello');
+    input.setSelectionRange(1, 1);
+    type(input, 'hxello', 2);
+    expect(input.value).toBe('hello');
+    expect(input.selectionStart).toBe(1);
+    type(input, 'hxello', 2); // the next rejected keystroke does not creep to the right
+    expect(input.selectionStart).toBe(1);
+    expect(input.selectionEnd).toBe(1);
+  });
+
+  it('a rejected emoji (surrogate pair) inserted mid-string puts the caret back at 1', () => {
+    const input = textInput();
+    controlled(input, (setText) => (e) => {
+      const v = (e.currentTarget as HTMLInputElement).value;
+      if (/^[a-z]*$/.test(v)) setText(v);
+    });
+    type(input, 'a😀b', 3);
+    expect(input.value).toBe('ab');
+    expect(input.selectionStart).toBe(1);
+  });
+
+  it('max-length truncation keeps the caret after the typed character, and after the kept part of a paste', () => {
+    const input = textInput();
+    controlled(input, truncate(5), 'hello');
+    type(input, 'hxello', 2);
+    expect(input.value).toBe('hxell');
+    expect(input.selectionStart).toBe(2);
+
+    const pasted = textInput();
+    controlled(pasted, truncate(7), 'hello');
+    type(pasted, 'heXYZllo', 5); // paste "XYZ" after "he"
+    expect(pasted.value).toBe('heXYZll');
+    expect(pasted.selectionStart).toBe(5);
+  });
+
+  it('a length-changing replacement (":)" -> emoji) puts the caret after the replacement, never inside the pair', () => {
+    const input = textInput();
+    controlled(input, (setText) => (e) => setText((e.currentTarget as HTMLInputElement).value.replace(':)', '🙂')));
+    type(input, 'a:)b', 3);
+    expect(input.value).toBe('a🙂b');
+    expect(input.selectionStart).toBe(3);
+  });
+});

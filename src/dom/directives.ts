@@ -76,11 +76,13 @@ interface Binding<E extends Element = Element> {
 }
 
 interface ValueBinding extends Binding<TextControl> {
-  /** Caret snapshot taken at event time (measure phase); the mutate-phase applier only restores from it. */
+  /**
+   * Caret snapshot taken at event time (measure phase), relative to the DOM value of that moment;
+   * the mutate-phase applier only restores from it (it never reads the selection).
+   */
   hasSelection: boolean;
   selStart: number;
   selEnd: number;
-  atEnd: boolean;
   composing: boolean;
 }
 
@@ -172,23 +174,57 @@ function snapshot(b: ValueBinding): void {
     b.hasSelection = false; // selects, inputs without a text selection
     return;
   }
-  const end = input.selectionEnd ?? start;
   b.hasSelection = true;
   b.selStart = start;
-  b.selEnd = end;
-  b.atEnd = start === end && end === input.value.length;
+  b.selEnd = input.selectionEnd ?? start;
+}
+
+function isHighSurrogate(c: number): boolean {
+  return c >= 0xd8_00 && c <= 0xdb_ff;
+}
+
+/** `i` falls between the two halves of a surrogate pair. */
+function splitsPair(s: string, i: number): boolean {
+  return i > 0 && i < s.length && isHighSurrogate(s.charCodeAt(i - 1)) && (s.charCodeAt(i) & 0xfc_00) === 0xdc_00;
+}
+
+/** Length of the common suffix of `a` and `b`, never ending inside a surrogate pair. */
+function commonSuffix(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  let n = 0;
+  while (n < max && a.charCodeAt(a.length - 1 - n) === b.charCodeAt(b.length - 1 - n)) n++;
+  while (n > 0 && (splitsPair(a, a.length - n) || splitsPair(b, b.length - n))) n--;
+  return n;
+}
+
+/**
+ * Map a caret index from `prev` (the DOM value it was taken on) to `next`. A caret inside the common
+ * tail keeps its distance from the end (a rejected or truncated edit before it puts it back where it
+ * was); a caret inside the changed part keeps its index, clamped to that part. Never inside a pair.
+ */
+function mapCaret(i: number, prev: string, next: string, suffix: number): number {
+  let j = i >= prev.length - suffix ? next.length - (prev.length - i) : Math.min(i, next.length - suffix);
+  if (j < 0) j = 0;
+  if (splitsPair(next, j)) j++;
+  return j;
 }
 
 function writeValue(b: ValueBinding, v: unknown): void {
   if (b.composing) return; // IME: never write mid-composition
   const el = b.el;
   const next = toText(v);
-  if (el.value === next) return;
+  const prev = el.value;
+  if (prev === next) return;
   el.value = next;
   if (b.hasSelection && document.activeElement === el && 'setSelectionRange' in el) {
+    const suffix = commonSuffix(prev, next);
+    const start = mapCaret(b.selStart, prev, next, suffix);
+    const end = b.selEnd === b.selStart ? start : mapCaret(b.selEnd, prev, next, suffix);
+    // The snapshot follows the DOM: a later write in the same frame maps from this value.
+    b.selStart = start;
+    b.selEnd = end;
     try {
-      if (b.atEnd) el.setSelectionRange(next.length, next.length);
-      else el.setSelectionRange(b.selStart, b.selEnd);
+      el.setSelectionRange(start, end);
     } catch {
       // input types without a selection API
     }
@@ -203,7 +239,6 @@ const valueKind: Kind<ValueBinding> = {
     b.hasSelection = false;
     b.selStart = 0;
     b.selEnd = 0;
-    b.atEnd = false;
     b.composing = false;
     return b;
   },
