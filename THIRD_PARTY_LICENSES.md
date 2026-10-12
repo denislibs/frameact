@@ -8,10 +8,16 @@ Each adapted file carries an `Adapted from …` header.
 `src/core/types.ts`, `src/core/symbols.ts`
 
 ## teact (Ajaxy/teact) — MIT License, Copyright (c) 2022 Alexander Zinchuk
-`src/scheduler/schedulers.ts`, `src/scheduler/fasterdom.ts`, `src/scheduler/heavyAnimation.ts`
+`src/scheduler/schedulers.ts`, `src/scheduler/fasterdom.ts`, `src/scheduler/heavyAnimation.ts`,
+`src/dom/classes.ts`, `src/dom/styles.ts`, `src/dom/directives.ts`, `src/dom/list.ts`
 
 ## dom-expressions (ryansolid/dom-expressions) — MIT License, Copyright (c) 2017 Ryan Carniato
-(plan 2: `src/dom/*`)
+`src/dom/constants.ts`, `src/dom/template.ts`, `src/dom/insert.ts`, `src/dom/events.ts`,
+`src/dom/attributes.ts`, `src/dom/props.ts`, `src/jsx/jsx.d.ts`
+
+## solidjs/solid (packages/web, packages/babel-plugin) — MIT License, Copyright (c) 2016-2025 Ryan Carniato
+`src/dom/template.ts`, `src/dom/reconcile.ts`, `src/dom/insert.ts`, `src/dom/attributes.ts`,
+`src/dom/classes.ts`, `src/dom/styles.ts`, `src/dom/flow.ts`, `test/dom/fixtures/**` (compiler fixtures, `__dom_fixtures__`)
 
 ---
 
