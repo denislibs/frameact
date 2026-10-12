@@ -1,5 +1,6 @@
 import { beginHeavyAnimation, createMeasureEffect, createMutationEffect, createSignal, flushSync, onCleanup } from 'frameact';
 import { delegateEvents, Dynamic, For, Portal, render, Show, Switch, Match } from 'frameact/dom';
+import { createStore } from 'frameact/store';
 import { disableStrict, enableStrict, setHandler, suppressStrict, type StrictViolationError } from 'frameact/stricterdom';
 import { container, useDomHarness } from '../helpers/dom';
 import { flushMicrotasks } from '../helpers/micro';
@@ -94,7 +95,10 @@ it('an event handler that writes the DOM directly is reported as a mutation outs
 
 interface Item { id: number; label: string }
 
-function App(props: { items: () => Item[]; mode: () => 'list' | 'grid' | 'none'; text: () => string; setText: (s: string) => void }) {
+interface Chat { title: string; tags: string[] }
+type ChatView = { readonly title: string; readonly tags: readonly string[] };
+
+function App(props: { items: () => Item[]; mode: () => 'list' | 'grid' | 'none'; text: () => string; setText: (s: string) => void; chat: ChatView }) {
   const [portalOpen, setPortalOpen] = createSignal(true);
   const text = props.text; // a plain identifier: `use:value={text}` compiles to the static (accessor) form
   let box!: HTMLDivElement;
@@ -102,6 +106,8 @@ function App(props: { items: () => Item[]; mode: () => 'list' | 'grid' | 'none';
   onCleanup(() => setPortalOpen(false));
   const view = (
     <div ref={(el) => { box = el; }} class="app" classList={{ grid: props.mode() === 'grid' }} data-count={props.items().length}>
+      <h1 class={{ long: props.chat.title.length > 3 }}>{props.chat.title}</h1>
+      <For each={props.chat.tags}>{(tag) => <b>{tag}</b>}</For>
       <input use:value={text} onInput={(e) => props.setText(e.currentTarget.value.trimStart().toUpperCase())} />
       <Switch fallback={<p>none</p>}>
         <Match when={props.mode() === 'list'}>
@@ -138,7 +144,8 @@ it('a full app — render, For (keyed and manual), Show/Switch/Dynamic/Portal (n
   const [items, setItems] = createSignal<Item[]>([{ id: 1, label: 'a' }, { id: 2, label: 'b' }]);
   const [mode, setMode] = createSignal<'list' | 'grid' | 'none'>('list');
   const [text, setText] = createSignal('');
-  const el = mount(() => <App items={items} mode={mode} text={text} setText={setText} />);
+  const [chat, setChat] = createStore<Chat>({ title: 'ab', tags: ['x'] });
+  const el = mount(() => <App items={items} mode={mode} text={text} setText={setText} chat={chat} />);
   await frame(); // first measure apply
   expect(el.querySelectorAll('li').length).toBe(2);
   expect(document.querySelector('.toast')).not.toBeNull();
@@ -163,11 +170,17 @@ it('a full app — render, For (keyed and manual), Show/Switch/Dynamic/Portal (n
   const end = beginHeavyAnimation(300, true);
   setMode('none');
   setItems([]);
+  setChat('title', 'abcd'); // store writes: the store gate parks their readers, release drains them in a measure task
+  setChat('tags', (tags) => [...tags, 'y']);
   await frame(); // parked
   expect(el.querySelector('p')).toBeNull();
+  expect(el.querySelector('h1')!.textContent).toBe('ab');
   end();
   await frame(); // released: measure then mutate in one frame
   expect(el.querySelector('p')!.textContent).toBe('none');
+  expect(el.querySelector('h1')!.textContent).toBe('abcd');
+  expect(el.querySelector('h1')!.className).toBe('long');
+  expect([...el.querySelectorAll('b')].map((b) => b.textContent)).toEqual(['x', 'y']);
 
   for (const d of disposers.splice(0)) d();
   await frame();
