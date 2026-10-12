@@ -688,6 +688,33 @@ describe('I5: number and email inputs', () => {
     expect(input.value).toBe('5');
   });
 
+  it('N-1: type=number with badInput (intermediate "-") is not rolled back, so -5 can be typed', async () => {
+    const input = textInput();
+    input.type = 'number';
+    // jsdom does not emulate badInput: stub what Chrome reports for '-' / '1e' (value reads as '').
+    let badInput = false;
+    Object.defineProperty(input, 'validity', { get: () => ({ badInput }), configurable: true });
+    const [num, setNum] = createSignal(3);
+    createRoot(() => setAttribute(input, 'use:value', num));
+    (input as any)[EVENT_KEY + 'input'] = (e: Event) => {
+      const n = (e.currentTarget as HTMLInputElement).valueAsNumber;
+      if (!Number.isNaN(n)) setNum(n);
+    };
+    delegateEvents(['input']);
+    expect(input.value).toBe('3');
+    input.value = '';
+    badInput = true;
+    input.dispatchEvent(new InputEvent('input', { bubbles: true })); // user typed '-'
+    await frame();
+    expect(input.value).toBe(''); // the browser's raw text is not ours to overwrite
+    expect(num()).toBe(3);
+    badInput = false;
+    typeRaw(input, '-5');
+    await frame();
+    expect(input.value).toBe('-5');
+    expect(num()).toBe(-5);
+  });
+
   it('selectionStart is null on email/number: no caret snapshot, rollback still works and nothing throws', () => {
     const input = textInput();
     input.type = 'email';

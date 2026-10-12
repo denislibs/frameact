@@ -108,9 +108,15 @@ function current(b: Binding<any>): unknown {
   return b.accessor !== null ? untrack(b.accessor) : b.delivered;
 }
 
-/** Compare the live DOM with the authoritative value and restore it if they differ. Never mid-composition. */
+/**
+ * Compare the live DOM with the authoritative value and restore it if they differ. Never mid-composition,
+ * and never over an intermediate number text ('-', '1e'): it reads as '' with `validity.badInput`, it is
+ * not a value yet, and a handler like `if (!isNaN(n)) setN(n)` must let the user type '-5'. (Programmatic
+ * writes still go through `write`: a real change of the signal replaces the half-typed text.)
+ */
 function check(b: Binding<any>): void {
-  if (!b.composing) b.kind.write(b, current(b));
+  if (b.composing || (b.el as HTMLInputElement).validity?.badInput) return;
+  b.kind.write(b, current(b));
 }
 
 /** The element's live binding of this kind; a binding whose delivering effect was disposed is dropped. */
