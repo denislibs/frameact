@@ -135,6 +135,7 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 不复制任何东西，身份（代理、`For` 行）保持不变。服务端数据按键 diff 合并（`reconcile`），草稿通过 `produce` 修改，
 浅合并只能显式进行（`merge()`），路径上的值直接替换，`undefined` 删除键。action 是普通的带类型函数（`defineActions`）；
 嵌套调用在当前 action 之后执行，`afterActions(cb)` 在整个级联之后执行。
+遍历大字典请使用 `frameact/store` 的 `keys(obj)` / `values(obj)` / `entries(obj)`（与普通对象同速，只有一次订阅）；对 store 代理使用 `Object.keys` 可行，但慢约 20 倍。
 
 在正在进行重动画的子树中，由 store 驱动的帧 effect 会*按原因停靠*：只有当 store 写入是它变脏的唯一原因时才等待。
 本地 signal 或通过 `live()` 的读取会让它立即运行，并读取当前的 store。写入 store 的事件处理器会让该 effect 继续停靠（处理器本身和命令式读取看到的是当前状态，视图在动画结束后跟上）—— 任何计算都不会看到 store 的两个时刻。

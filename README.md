@@ -149,6 +149,8 @@ place and wakes that leaf only — one row out of a thousand recomputes, nothing
 rows) are kept. Server data merges by key with `reconcile`, drafts mutate through `produce`, shallow merges are
 explicit (`merge()`), a value at a path replaces, `undefined` deletes the key. Actions are plain typed functions
 (`defineActions`); a nested call runs after the current one, `afterActions(cb)` after the cascade.
+To walk a big dictionary use `keys(obj)` / `values(obj)` / `entries(obj)` from `frameact/store` (plain-object speed,
+one subscription); `Object.keys` over a store proxy works but is 20x slower.
 
 Store-driven frame effects inside a subtree that runs a heavy animation are *parked* by cause: an effect waits only
 while store writes are the sole reason it is dirty. A local signal or a `live()` read runs it at once, and it reads the current store.

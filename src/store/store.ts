@@ -87,12 +87,17 @@ class StoreNode {
   self: Computation | null;
   /** the shape signal's value: bumped by every shape change */
   shape: number;
+  /** values signal (`values()`/`entries()` readers): fires on every effective write to this object */
+  vals: Computation | null;
+  valsVer: number;
 
   constructor(raw: object) {
     this.raw = raw;
     this.sigs = null;
     this.self = null;
     this.shape = 0;
+    this.vals = null;
+    this.valsVer = 0;
     this.proxy = new Proxy(raw, this as ProxyHandler<any>);
     nodes.set(raw, this);
     if (DEV) storeStats.nodes++;
@@ -123,17 +128,24 @@ class StoreNode {
 
   ownKeys(target: any): ArrayLike<string | symbol> {
     trackSelf(this);
-    return Reflect.ownKeys(target);
+    const ks = Reflect.ownKeys(target);
+    if (DEV && ks.length > BIG_KEYS && !warnedBig) {
+      warnedBig = true;
+      console.warn(
+        `[frameact/store] enumerating a store object with ${ks.length} keys through its proxy (Object.keys/values/entries, spread, for…in) is 30–80x slower than on a plain object: use keys()/values()/entries() from "frameact/store".`,
+      );
+    }
+    return ks;
   }
 
   getOwnPropertyDescriptor(target: any, key: PropertyKey): PropertyDescriptor | undefined {
     const desc = Reflect.getOwnPropertyDescriptor(target, key);
-    if (!desc || desc.get || desc.set || !desc.configurable) return desc;
-    // An accessor: Object.keys / spread check enumerability without reading (tracking) the value.
-    const proxy = this.proxy;
-    delete desc.value;
-    delete desc.writable;
-    desc.get = () => proxy[key];
+    if (desc === undefined || !desc.configurable || desc.get !== undefined || desc.set !== undefined) return desc;
+    // A data property: a LITERAL descriptor (no `delete`s, no per-key getter closure — those made every
+    // key iteration 30–80x slower than on a plain object). Its value is the read-only view of the value;
+    // Object.values / spread / entries then read the value through `get`, which is where it is tracked.
+    const v = desc.value;
+    if (typeof v === 'object' && v !== null) desc.value = wrap(v); // (the descriptor is a fresh object: reuse it)
     return desc;
   }
 
@@ -154,6 +166,10 @@ class StoreNode {
   }
 }
 
+/** DEV: enumerating a store object with more keys than this through its proxy is reported once. */
+const BIG_KEYS = 1000;
+let warnedBig = false;
+
 function trackKey(node: StoreNode, key: PropertyKey, value: unknown) {
   let sigs = node.sigs;
   if (sigs === null) sigs = node.sigs = new SigTable();
@@ -170,6 +186,16 @@ function trackSelf(node: StoreNode) {
   let s = node.self;
   if (s === null) {
     s = node.self = createSignalNode(0);
+    if (DEV) storeStats.leafSignals++;
+  }
+  trackNode(s);
+}
+
+function trackVals(node: StoreNode) {
+  if (getObserver() === null) return;
+  let s = node.vals;
+  if (s === null) {
+    s = node.vals = createSignalNode(0);
     if (DEV) storeStats.leafSignals++;
   }
   trackNode(s);
@@ -213,6 +239,52 @@ export function snapshot<T>(value: T): T {
   return structuredClone(unwrap(value));
 }
 
+/**
+ * `keys(obj)` / `values(obj)` / `entries(obj)`: `Object.keys`/`values`/`entries` for store objects, at the
+ * speed of a plain object — they read the raw object (no proxy trap per key) and subscribe ONCE: `keys` to
+ * the shape (a key added or removed), `values`/`entries` to every write into the object (they hand out
+ * the values, so a replaced or changed value must re-run the reader; reading a nested field of a returned
+ * item is tracked by that item as usual). Object values come back wrapped (read-only views). Arrays: any
+ * item write. A non-store argument is handed to the `Object` function.
+ */
+export function keys<T extends object>(obj: T): Extract<keyof T, string>[] {
+  const raw = (obj as any)[$RAW];
+  if (raw === undefined) return Object.keys(obj) as Extract<keyof T, string>[];
+  trackSelf(nodes.get(raw)!);
+  return Object.keys(raw) as Extract<keyof T, string>[];
+}
+export function values<T extends object>(obj: T): T[Extract<keyof T, string>][] {
+  const raw = (obj as any)[$RAW];
+  if (raw === undefined) return Object.values(obj);
+  trackShapeOrVals(raw);
+  const ks = Object.keys(raw);
+  const out: unknown[] = [];
+  out.length = ks.length;
+  for (let i = 0; i < ks.length; i++) {
+    const v = raw[ks[i]];
+    out[i] = typeof v === 'object' && v !== null ? wrap(v) : v;
+  }
+  return out as T[Extract<keyof T, string>][];
+}
+export function entries<T extends object>(obj: T): [Extract<keyof T, string>, T[Extract<keyof T, string>]][] {
+  const raw = (obj as any)[$RAW];
+  if (raw === undefined) return Object.entries(obj) as [Extract<keyof T, string>, T[Extract<keyof T, string>]][];
+  trackShapeOrVals(raw);
+  const ks = Object.keys(raw);
+  const out: unknown[] = [];
+  out.length = ks.length;
+  for (let i = 0; i < ks.length; i++) {
+    const v = raw[ks[i]];
+    out[i] = [ks[i], typeof v === 'object' && v !== null ? wrap(v) : v];
+  }
+  return out as [Extract<keyof T, string>, T[Extract<keyof T, string>]][];
+}
+function trackShapeOrVals(raw: object) {
+  const node = nodes.get(raw)!;
+  if (Array.isArray(raw)) trackSelf(node); // (an array's shape signal fires on every item write)
+  else trackVals(node);
+}
+
 // ---- writes -------------------------------------------------------------------------------------
 
 /** @internal > 0 inside `ungated()` (Task 6): leaf writes run plain walks instead of store walks. */
@@ -243,9 +315,9 @@ function adopt(v: object): object {
   let stack: object[] = [v];
   while (stack.length !== 0) {
     const o = stack.pop() as Record<string, unknown>;
-    const keys = Object.keys(o);
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
+    const ks = Object.keys(o);
+    for (let i = 0; i < ks.length; i++) {
+      const k = ks[i];
       if (k === PROTO_KEY) {
         delete o[k];
         dropProto('new data');
@@ -315,6 +387,8 @@ export function setProperty(raw: any, key: PropertyKey, value: unknown, deleteOn
   }
   const self = node.self;
   if (self !== null && (isArr || had === del)) notifyLeaf(self, ++node.shape);
+  const vals = node.vals;
+  if (vals !== null) notifyLeaf(vals, ++node.valsVer);
 }
 
 declare const MERGED: unique symbol;
@@ -338,10 +412,10 @@ export function merge<P extends object>(partial: P): Merger<P> {
     if (!isWrappable(prev) || Array.isArray(prev)) {
       throw new TypeError('[frameact/store] merge(): the value at the path is not a plain object');
     }
-    const keys = Object.keys(next);
-    for (let i = 0; i < keys.length; i++) {
-      if (keys[i] === PROTO_KEY) dropProto('merge');
-      else setProperty(prev, keys[i], next[keys[i]]);
+    const ks = Object.keys(next);
+    for (let i = 0; i < ks.length; i++) {
+      if (ks[i] === PROTO_KEY) dropProto('merge');
+      else setProperty(prev, ks[i], next[ks[i]]);
     }
     return prev;
   }) as unknown as Merger<P>;
@@ -405,9 +479,9 @@ function updatePath(current: any, path: unknown[], i: number, dry: boolean): voi
   const last = path.length - 1; // the value
   for (; i < last - 1; i++) {
     const part = path[i] as PathPart;
-    const keys = fanKeys(current, part);
-    if (keys !== null) {
-      for (let j = 0; j < keys.length; j++) updatePath(descend(current, keys[j]), path, i + 1, dry);
+    const fan = fanKeys(current, part);
+    if (fan !== null) {
+      for (let j = 0; j < fan.length; j++) updatePath(descend(current, fan[j]), path, i + 1, dry);
       return;
     }
     current = descend(current, part as PropertyKey);
@@ -421,13 +495,13 @@ function updatePath(current: any, path: unknown[], i: number, dry: boolean): voi
     return;
   }
   const part = path[last - 1] as PathPart;
-  const keys = fanKeys(current, part);
-  if (keys !== null) {
-    for (let j = 0; j < keys.length; j++) {
+  const fan = fanKeys(current, part);
+  if (fan !== null) {
+    for (let j = 0; j < fan.length; j++) {
       if (dry) {
-        checkIndex(current, keys[j]);
-        if (value === undefined && Array.isArray(current)) checkHole(current, keys[j]);
-      } else applyAt(current, keys[j], value);
+        checkIndex(current, fan[j]);
+        if (value === undefined && Array.isArray(current)) checkHole(current, fan[j]);
+      } else applyAt(current, fan[j], value);
     }
   } else if (dry) {
     checkIndex(current, part as PropertyKey);

@@ -2,7 +2,7 @@ import * as store from 'frameact/store';
 
 it('frameact/store exports the public surface and nothing internal', () => {
   for (const name of [
-    'createStore', 'merge', 'produce', 'reconcile', 'unwrap', 'snapshot', 'live', 'ungated', 'defineActions', 'afterActions',
+    'createStore', 'merge', 'produce', 'reconcile', 'unwrap', 'snapshot', 'live', 'ungated', 'defineActions', 'afterActions', 'keys', 'values', 'entries',
     '$TRACK', '$RAW',
   ]) {
     expect(typeof (store as any)[name], name).not.toBe('undefined');
