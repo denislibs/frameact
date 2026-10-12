@@ -17,7 +17,8 @@ Each adapted file carries an `Adapted from …` header. The license texts follow
 
 ## solidjs/solid (packages/web, packages/babel-plugin) — MIT License, Copyright (c) 2016-2025 Ryan Carniato
 `src/dom/template.ts`, `src/dom/reconcile.ts`, `src/dom/insert.ts`, `src/dom/attributes.ts`,
-`src/dom/classes.ts`, `src/dom/styles.ts`, `src/dom/flow.ts`, `test/dom/fixtures/**` (compiler fixtures, `__dom_fixtures__`)
+`src/dom/classes.ts`, `src/dom/styles.ts`, `src/dom/flow.ts`, `src/dom/props.ts` (mergeProps), `src/dom/component.ts` (children),
+`test/dom/fixtures/**` (compiler fixtures, `__dom_fixtures__`)
 
 ## udomdiff (WebReflection/udomdiff) — ISC License, Copyright (c) 2020 Andrea Giammarchi
 `src/dom/reconcile.ts` (via solidjs/solid `packages/web/src/reconcile.ts`)

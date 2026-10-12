@@ -1,4 +1,12 @@
-// Adapted from dom-expressions / solid-js mergeProps semantics (MIT, © 2017 Ryan Carniato).
+// Adapted from solidjs/solid `mergeProps` (packages/solid/src/render/component.ts)
+// (MIT, © 2016-2025 Ryan Carniato) — https://github.com/solidjs/solid
+//
+// Notes for consumers (spread/assign, Task 9):
+// - Keys are OWN, enumerable, string and symbol; inherited keys are never props.
+// - A source's own `__proto__` key passes through as a plain own property (defined, never assigned):
+//   copy keys with defineProperty / object spread, never with `target[key] = value`.
+// - The Proxy branch re-resolves every function source on each trap (O(keys x sources) per
+//   Object.keys + descriptor sweep); keep sweeps rare in hot paths.
 
 export type PropsSource =
   | Record<PropertyKey, any>

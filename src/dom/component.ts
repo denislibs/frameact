@@ -1,3 +1,5 @@
+// `children` adapted from solidjs/solid (packages/solid/src/reactive/signal.ts)
+// (MIT, © 2016-2025 Ryan Carniato) — https://github.com/solidjs/solid
 import { DEV } from '../env';
 import { compute, createScope, getScope } from '../core/core';
 import { createRenderEffect } from '../core/frame';
@@ -33,7 +35,10 @@ export function effect<T>(
   createRenderEffect(computeFn, apply, options);
 }
 
-/** Compiler primitive: `memo(fn)` — a plain memo (`===` equality). */
+/**
+ * Compiler primitive: `memo(fn)` — a plain memo (`===` equality). The compiler's optional second
+ * argument (`equal`) is ignored for now; what rc.14 actually emits is verified in Task 13.
+ */
 export function memo<T>(fn: () => T): () => T {
   return createMemo(fn);
 }

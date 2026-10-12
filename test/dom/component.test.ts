@@ -72,10 +72,15 @@ it('claimElement returns the node (link claims are out of scope)', () => {
 describe('mergeProps', () => {
   it('later sources win, undefined falls through, getters stay lazy', () => {
     const [n, set] = createSignal(1);
-    const merged = mergeProps({ a: 1, b: 1, get c() { return n(); } }, { a: 2, b: undefined });
+    let calls = 0;
+    const merged = mergeProps({ a: 1, b: 1, get c() { calls++; return n(); } }, { a: 2, b: undefined });
+    expect(calls).toBe(0); // merging alone never reads a getter
+    expect(Object.keys(merged)).toContain('c');
+    expect(calls).toBe(0); // neither does listing the keys
     expect(merged.a).toBe(2);
     expect(merged.b).toBe(1);
     expect(merged.c).toBe(1);
+    expect(calls).toBe(1);
     set(5);
     expect(merged.c).toBe(5);
     expect(new Set(Object.keys(merged))).toEqual(new Set(['a', 'b', 'c']));
@@ -101,11 +106,10 @@ describe('mergeProps', () => {
   });
 
   it('only own keys count: inherited keys are not props and never override an earlier own value', () => {
-    const inheriting = () => Object.create({ a: 'inherited', toString: 1 });
-    const proto = Object.create({ a: 'inherited' });
+    const proto = Object.create({ a: 'inherited', toString: 1 });
     for (const merged of [
       mergeProps({ a: 'own' }, proto),
-      mergeProps({ a: 'own' }, inheriting),
+      mergeProps({ a: 'own' }, () => proto),
     ]) {
       expect(merged.a).toBe('own');
       expect(Object.hasOwn(merged, 'toString')).toBe(false);
@@ -125,5 +129,42 @@ describe('mergeProps', () => {
       expect(Reflect.ownKeys(merged)).not.toContain(hidden);
       expect(Object.getOwnPropertySymbols(merged)).toEqual([sym]);
     }
+  });
+
+  it('an own __proto__ key of a source never changes the prototype (own data property only)', () => {
+    const hostile = JSON.parse('{"__proto__":{"polluted":1},"a":1}');
+    for (const merged of [mergeProps(hostile), mergeProps(hostile, () => ({}))]) {
+      expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+      expect(merged.polluted).toBeUndefined();
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      expect(Object.keys(merged)).toContain('__proto__');
+    }
+  });
+});
+
+it('children() recomputes when a nested accessor changes', () => {
+  const [v, set] = createSignal('a');
+  createRoot(() => {
+    const c = children(() => [() => v(), 'b']);
+    expect(c()).toEqual(['a', 'b']);
+    set('z');
+    expect(c()).toEqual(['z', 'b']);
+    expect(c.toArray()).toEqual(['z', 'b']);
+  });
+});
+
+it('children() holds a thrown error and recovers once the source is fixed', () => {
+  const [ok, setOk] = createSignal(true);
+  createRoot(() => {
+    const c = children(() => {
+      if (!ok()) throw new Error('boom');
+      return ['a', 'b'];
+    });
+    expect(c()).toEqual(['a', 'b']);
+    setOk(false);
+    expect(() => c()).toThrow('boom');
+    expect(() => c.toArray()).toThrow('boom');
+    setOk(true);
+    expect(c()).toEqual(['a', 'b']);
   });
 });
