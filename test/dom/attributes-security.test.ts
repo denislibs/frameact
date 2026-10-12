@@ -72,6 +72,20 @@ describe('URL attributes (C2, C3)', () => {
     expect(a.getAttribute('href')).toBe('https://example.com/x');
   });
 
+  it('checks the string that is written for functions with a custom toString too (N2)', () => {
+    const a = document.createElement('a');
+    const route = Object.assign(() => {}, { toString: () => 'javascript:alert(1)' });
+    setAttribute(a, 'href', route);
+    expect(a.hasAttribute('href')).toBe(false);
+    expect(isUnsafeAttribute('href', route)).toBe(true);
+    const ok = Object.assign(() => {}, { toString: () => '/route' });
+    setAttribute(a, 'href', ok);
+    expect(a.getAttribute('href')).toBe('/route');
+    const svgUse = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    setAttributeNS(svgUse, XLINK, 'xlink:href', route);
+    expect(svgUse.hasAttributeNS(XLINK, 'href')).toBe(false);
+  });
+
   it('stringifies once (a toString that changes its answer cannot pass the check)', () => {
     const a = document.createElement('a');
     let calls = 0;
@@ -113,29 +127,28 @@ describe('URL scheme policy (I3)', () => {
     }
   });
 
-  it('refuses data: on navigational attributes, whatever the MIME type', () => {
+  it('refuses data: with any other MIME type on every URL attribute', () => {
     const el = document.createElement('div');
-    for (const name of ['href', 'action', 'formaction', 'xlink:href', 'data']) {
-      for (const value of ['data:text/html,<script>1</script>', 'DATA:image/png;base64,AAAA', ' data:,x']) {
+    for (const name of URL_ATTRS) {
+      for (const value of ['data:text/html,<script>1</script>', 'DATA:application/xhtml+xml,x', ' data:,x', 'data:;base64,AAAA', 'data:imagefoo/png,x', 'd\tata:te\next/html,x']) {
         setAttribute(el, name, value);
         expect(el.hasAttribute(name), `${name}=${value}`).toBe(false);
       }
     }
   });
 
-  it('allows data: on src/poster/srcset only for image/, audio/ and video/', () => {
-    const el = document.createElement('img');
-    for (const name of ['src', 'poster', 'srcset']) {
+  it('allows data: with an image/, audio/ or video/ MIME type on every URL attribute (SVG <image href>, icons, iframes)', () => {
+    const el = document.createElement('div');
+    for (const name of URL_ATTRS) {
       for (const value of ['data:image/png;base64,AAAA', 'DATA:Image/SVG+xml,<svg/>', 'data:audio/ogg;base64,AA', ' data:\tvideo/mp4;base64,AA']) {
         setAttribute(el, name, value);
         expect(el.getAttribute(name), `${name}=${value}`).toBe(value);
         el.removeAttribute(name);
       }
-      for (const value of ['data:text/html,<script>1</script>', 'data:,hi', 'data:application/xhtml+xml,x', 'data:;base64,AAAA', 'data:imagefoo/png,x']) {
-        setAttribute(el, name, value);
-        expect(el.hasAttribute(name), `${name}=${value}`).toBe(false);
-      }
     }
+    const image = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+    setAttribute(image, 'href', 'data:image/png;base64,AAAA');
+    expect(image.getAttribute('href')).toBe('data:image/png;base64,AAAA');
   });
 
   it('allows http, https, mailto, tel, blob:, relative URLs and custom app schemes', () => {
@@ -168,6 +181,7 @@ describe('URL scheme policy (I3)', () => {
   it('isUnsafeAttribute follows the same policy', () => {
     expect(isUnsafeAttribute('href', 'vbscript:x')).toBe(true);
     expect(isUnsafeAttribute('href', 'data:text/html,x')).toBe(true);
+    expect(isUnsafeAttribute('href', 'data:image/png;base64,AA')).toBe(false);
     expect(isUnsafeAttribute('src', 'data:image/png;base64,AA')).toBe(false);
     expect(isUnsafeAttribute('src', 'data:text/html,x')).toBe(true);
     expect(isUnsafeAttribute('to', 'javascript:x')).toBe(true);

@@ -12,23 +12,25 @@ import { setStyleProperty } from './styles';
 
 // URL policy. Every attribute below holds a URL the browser may navigate to or load.
 //   - `javascript:` and `vbscript:` are refused everywhere.
-//   - `data:` is refused on the navigational attributes (it opens a document); on the loading
-//     attributes in NON_NAVIGATIONAL it is allowed for image/, audio/ and video/ MIME types only.
+//   - `data:` is allowed on every URL attribute for image/, audio/ and video/ MIME types only (SVG
+//     `<image href>`, `<link rel=icon>`, `<img src>`); any other `data:` type (text/html, …) is refused.
 //   - Everything else (http, https, mailto, tel, blob, relative, custom app schemes like `tg:`) is allowed.
 // Not covered, because the compiler emits direct property writes the runtime never sees: `prop:href`,
 // `<a href={…}>` compiled to `el.href = …` where the compiler chooses a property, and `setProperty`.
-// Also not covered: `data:image/svg+xml` in `<iframe src>`/`<embed src>` (an opaque origin, no access
-// to the app); do not feed untrusted values to those elements.
+// Also allowed: `data:image/svg+xml` in `<iframe src>`/`<embed src>`. Such a document gets an opaque
+// origin (no access to the app), exactly what `src="https://attacker.example"` gets, which the policy
+// cannot refuse either. Untrusted frames need `sandbox` and a CSP `frame-src`, not a scheme filter.
 const URL_ATTRIBUTES = new Set([
   'href', 'src', 'action', 'formaction', 'xlink:href', 'poster', 'srcset', 'data', 'background', 'codebase',
   'manifest', 'longdesc', 'cite', 'ping',
 ]);
-const NON_NAVIGATIONAL = new Set(['src', 'poster', 'srcset']);
 // SVG animation (`<set attributeName="href" to="javascript:…">`): the value attributes are checked always.
 const ANIMATION_VALUES = new Set(['to', 'from', 'by', 'values']);
 const LOWERCASE_EVENT = /^on[a-z]+$/;
 const MEDIA_MIME = /^(?:image|audio|video)\//;
 
+// Scheme characters: ASCII letters, digits, `+`, `-`, `.`. The URL parser also requires a letter first;
+// accepting a digit or punctuation first only means a few extra (never fewer) candidates are inspected.
 function isSchemeChar(c: number): boolean {
   return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c === 43 || c === 45 || c === 46;
 }
@@ -65,10 +67,10 @@ function dataMime(value: string, end: number): string {
   return mime.trim().toLowerCase();
 }
 
-function isUnsafeUrl(value: string, lowerName: string): boolean {
+function isUnsafeUrl(value: string): boolean {
   const { scheme, end } = urlScheme(value);
   if (scheme === 'javascript' || scheme === 'vbscript') return true;
-  if (scheme === 'data') return !(NON_NAVIGATIONAL.has(lowerName) && MEDIA_MIME.test(dataMime(value, end)));
+  if (scheme === 'data') return !MEDIA_MIME.test(dataMime(value, end));
   return false;
 }
 
@@ -98,7 +100,7 @@ function refusal(name: string, value: unknown): Refusal | null {
   }
   if (lower === 'srcdoc') return value == null || value === false ? null : 'srcdoc'; // an HTML sink, like innerHTML
   if (typeof value !== 'string') return null;
-  if (URL_ATTRIBUTES.has(lower) ? isUnsafeUrl(value, lower) : ANIMATION_VALUES.has(lower) && isUnsafeAnimationValue(value)) return 'url';
+  if (URL_ATTRIBUTES.has(lower) ? isUnsafeUrl(value) : ANIMATION_VALUES.has(lower) && isUnsafeAnimationValue(value)) return 'url';
   return null;
 }
 
@@ -108,12 +110,19 @@ function refusal(name: string, value: unknown): Refusal | null {
  * to the write (`setAttribute` does), a second `String(value)` could answer differently.
  */
 export function isUnsafeAttribute(name: string, value: unknown): boolean {
-  return refusal(name, stringifyObject(value)) !== null;
+  return refusal(name, stringifyValue(name, value)) !== null;
 }
 
-/** Objects (URL, String, anything with toString) are what the DOM would stringify: decide on that string. */
-function stringifyObject(value: unknown): unknown {
-  return typeof value === 'object' && value !== null ? String(value) : value;
+/**
+ * What the DOM would write: objects and functions (`URL`, `String`, a route function with `toString`)
+ * become their string once, and the string is what is checked and written. Event-handler names keep
+ * the original value so a function is told apart from a string.
+ */
+function stringifyValue(name: string, value: unknown): unknown {
+  if ((typeof value === 'object' && value !== null) || (typeof value === 'function' && !LOWERCASE_EVENT.test(name.toLowerCase()))) {
+    return String(value);
+  }
+  return value;
 }
 
 function report(name: string, value: unknown, reason: Refusal): void {
@@ -158,7 +167,7 @@ export function setAttribute(node: Element, name: string, value: unknown): void 
     node.removeAttribute(name);
     return;
   }
-  value = stringifyObject(value); // stringified once: what is checked is what is written
+  value = stringifyValue(name, value); // stringified once: what is checked is what is written
   const text = value === true ? '' : String(value);
   const reason = refusal(name, value);
   if (reason) {
@@ -174,7 +183,7 @@ export function setAttributeNS(node: Element, namespace: string, name: string, v
     node.removeAttributeNS(namespace, local);
     return;
   }
-  value = stringifyObject(value);
+  value = stringifyValue(name, value);
   const text = value === true ? '' : String(value);
   const reason = refusal(name, value);
   if (reason) {
