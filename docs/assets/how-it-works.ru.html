@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>frameact — как это рендерит</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,900&family=Unbounded:wght@800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#ebedf5;--ink:#10131f;--cobalt:#2743ff;--mute:#6b7290;--amber:#e39a1c;--red:#e5484d;--panel:rgba(16,19,31,.045)}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1280px;height:640px;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:"IBM Plex Mono",monospace;position:relative}
+.h{opacity:0}
+.stage{position:absolute;inset:0}
+
+/* chrome */
+.brand{position:absolute;left:88px;top:40px;display:flex;align-items:baseline;gap:14px}
+.brand .w{font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:22px;letter-spacing:-.03em}
+.brand .s{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.chapters{position:absolute;left:88px;right:88px;bottom:40px;display:flex;justify-content:space-between;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.chapters span{display:flex;align-items:center;gap:8px}
+.chapters i{width:7px;height:7px;border-radius:50%;background:var(--mute);opacity:.4}
+.progress{position:absolute;left:88px;right:88px;bottom:66px;height:1px;background:rgba(16,19,31,.15)}
+.progress i{position:absolute;inset:0;background:var(--cobalt);transform:scaleX(0);transform-origin:0 0}
+
+/* scene layout */
+.scene{position:absolute;inset:0;opacity:0}
+.left{position:absolute;left:88px;top:104px;width:512px}
+.kick{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--cobalt);margin-bottom:14px}
+.t{font-family:Unbounded,sans-serif;font-weight:800;font-size:27px;line-height:1.05;letter-spacing:-.02em;margin-bottom:18px}
+.cap{font-size:15px;line-height:1.6;color:var(--mute);margin-bottom:22px;min-height:48px}
+.cap b{color:var(--ink);font-weight:500}
+.code{font-size:12.5px;line-height:1.6;background:var(--panel);border-left:3px solid var(--cobalt);padding:14px 18px;border-radius:0 8px 8px 0;white-space:pre}
+.code .c{color:var(--mute)}.code .f{color:var(--cobalt)}.code .s{color:#1f7a4d}
+.code .ln{display:block;margin:0 -18px;padding:0 18px}
+.right{position:absolute;left:620px;top:120px;width:572px;height:420px}
+svg{overflow:visible}
+svg *{transform-box:fill-box;transform-origin:center}
+#oc rect,#s4panel{transform-origin:0 0}
+.lbl{font-family:"IBM Plex Mono",monospace;font-size:12px;fill:var(--mute);letter-spacing:.04em}
+.lbl.k{fill:var(--ink);font-weight:500}
+.lbl.c{fill:var(--cobalt);font-weight:500}
+.lbl.a{fill:var(--amber);font-weight:500}
+.lbl.r{fill:var(--red);font-weight:500}
+.mono{font-family:"IBM Plex Mono",monospace;font-size:13px;fill:var(--ink);font-weight:500}
+
+/* intro / outro */
+.center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.big{font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:120px;line-height:1;letter-spacing:-.04em}
+.sub{margin-top:22px;font-size:16px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.outro .word{position:relative;width:760px;height:150px}
+.outro .word text{font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:130px;letter-spacing:-.04em}
+.outro .outline{fill:none;stroke:var(--ink);stroke-width:2.5}
+.outro .filled{fill:var(--ink);clip-path:url(#oc)}
+#oc rect{transform:scaleX(0);transform-origin:0 0}
+.outro .tick{position:absolute;left:0;right:0;top:71px;height:3px;background:var(--cobalt);transform:scaleX(0);transform-origin:0 50%}
+.outro .tag{margin-top:26px;font-family:Unbounded,sans-serif;font-weight:800;font-size:22px;letter-spacing:-.02em}
+.outro .tag span{color:var(--cobalt)}
+/* credits */
+.credits .photo{position:relative;width:240px;height:240px;isolation:isolate;background:var(--bg)}
+.credits .photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:grayscale(1) contrast(1.08) brightness(1.04);clip-path:inset(100% 0 0 0)}
+.credits .photo .tint{position:absolute;inset:0;background:var(--cobalt);mix-blend-mode:multiply;opacity:.22;clip-path:inset(100% 0 0 0)}
+.credits .photo svg{position:absolute;inset:-8px;width:256px;height:256px;overflow:visible}
+.credits .photo rect{fill:none;stroke:var(--cobalt);stroke-width:3;stroke-dasharray:1024;stroke-dashoffset:1024}
+.credits .line{position:absolute;left:0;right:0;top:50%;height:3px;background:var(--cobalt);transform:scaleX(0);transform-origin:50% 50%}
+.credits .by{margin-top:34px;display:flex;flex-direction:column;align-items:center;gap:6px}
+.credits .small{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+.credits .name{font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:40px;letter-spacing:-.03em;line-height:1.05}
+.credits .amp{font-family:Unbounded,sans-serif;font-weight:800;font-size:19px;letter-spacing:-.02em;color:var(--cobalt)}
+</style>
+</head>
+<body>
+<div class="stage">
+
+<div class="brand h" id="brand"><span class="w">frameact</span><span class="s">как это рендерит</span></div>
+
+<!-- INTRO -->
+<div class="scene" id="intro">
+  <div class="center">
+    <div class="big h" id="introWord">frameact</div>
+    <div class="sub h" id="introSub">как это рендерит · в шести кадрах</div>
+  </div>
+</div>
+
+<!-- 01 SIGNALS -->
+<div class="scene" id="s1">
+  <div class="left">
+    <div class="kick h">01 · сигналы, а не VDOM</div>
+    <div class="t h">Граф — сразу.<br>DOM — в кадре.</div>
+    <div class="cap h" id="s1cap"><b>set()</b> сразу помечает зависимые узлы грязными. DOM никто не трогает до следующего тика rAF.</div>
+    <div class="code h"><span class="ln">const [count, setCount] = <span class="f">createSignal</span>(0)</span><span class="ln">const label = <span class="f">createMemo</span>(() =&gt; `${count()} unread`)</span><span class="ln"> </span><span class="ln"><span class="f">createMutationEffect</span>(</span><span class="ln">  () =&gt; label(),             <span class="c">// compute · чисто</span></span><span class="ln">  (v) =&gt; el.textContent = v   <span class="c">// apply · в кадре</span></span><span class="ln">)</span></div>
+  </div>
+  <div class="right">
+    <svg width="572" height="420" viewBox="0 0 572 420">
+      <!-- DOM box -->
+      <rect x="372" y="30" width="190" height="64" rx="8" fill="none" stroke="rgba(16,19,31,.25)"/>
+      <text x="388" y="52" class="lbl">DOM · el.textContent</text>
+      <text x="388" y="78" class="mono" id="s1dom0">0 unread</text>
+      <text x="388" y="78" class="mono h" id="s1dom1">1 unread</text>
+      <!-- edges -->
+      <line x1="70" y1="220" x2="270" y2="220" stroke="rgba(16,19,31,.3)" stroke-width="1.5"/>
+      <line x1="70" y1="220" x2="270" y2="220" stroke="var(--cobalt)" stroke-width="2" id="s1e1" stroke-dasharray="200" stroke-dashoffset="200"/>
+      <line x1="290" y1="220" x2="488" y2="220" stroke="rgba(16,19,31,.3)" stroke-width="1.5"/>
+      <line x1="290" y1="220" x2="488" y2="220" stroke="var(--cobalt)" stroke-width="2" id="s1e2" stroke-dasharray="200" stroke-dashoffset="200"/>
+      <line x1="500" y1="208" x2="500" y2="100" stroke="rgba(16,19,31,.3)" stroke-width="1.5" stroke-dasharray="3 5"/>
+      <!-- nodes -->
+      <g id="s1sig"><circle cx="60" cy="220" r="11" fill="var(--cobalt)"/></g>
+      <circle cx="60" cy="220" r="11" fill="none" stroke="var(--cobalt)" stroke-width="2" id="s1pulse" opacity="0"/>
+      <text x="60" y="256" text-anchor="middle" class="lbl k">count</text>
+      <text x="60" y="274" text-anchor="middle" class="lbl">сигнал</text>
+      <circle cx="280" cy="220" r="11" fill="var(--bg)" stroke="var(--ink)" stroke-width="2" id="s1memo"/>
+      <text x="280" y="256" text-anchor="middle" class="lbl k">label</text>
+      <text x="280" y="274" text-anchor="middle" class="lbl">мемо</text>
+      <text x="280" y="194" text-anchor="middle" class="lbl c h" id="s1dirty">грязный</text>
+      <rect x="489" y="209" width="22" height="22" rx="4" fill="var(--ink)" id="s1eff"/>
+      <text x="500" y="256" text-anchor="middle" class="lbl k">эффект</text>
+      <text x="500" y="274" text-anchor="middle" class="lbl">мутация</text>
+      <text x="500" y="194" text-anchor="middle" class="lbl c h" id="s1queued">в очереди</text>
+      <!-- set() chip -->
+      <g id="s1chip" class="h"><rect x="10" y="140" width="118" height="30" rx="15" fill="var(--cobalt)"/><text x="69" y="159" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" font-weight="600" fill="#fff">setCount(1)</text></g>
+      <!-- frame tick sweep -->
+      <g id="s1sweep" class="h"><rect x="-2" y="120" width="3" height="200" fill="var(--cobalt)"/><text x="0" y="110" text-anchor="middle" class="lbl c">rAF</text></g>
+      <!-- bottom mini timeline -->
+      <line x1="0" y1="380" x2="572" y2="380" stroke="rgba(16,19,31,.2)"/>
+      <line x1="40" y1="366" x2="40" y2="394" stroke="var(--ink)" stroke-width="2"/>
+      <line x1="540" y1="366" x2="540" y2="394" stroke="var(--ink)" stroke-width="2"/>
+      <text x="40" y="412" text-anchor="middle" class="lbl">rAF</text>
+      <text x="540" y="412" text-anchor="middle" class="lbl">+16.7 ms</text>
+      <g id="s1dot" class="h"><circle cx="230" cy="380" r="6" fill="var(--cobalt)"/><text x="230" y="360" text-anchor="middle" class="lbl c">set()</text></g>
+      <path d="M230 380 C 330 380, 440 380, 540 380" stroke="var(--cobalt)" stroke-width="2" fill="none" stroke-dasharray="320" stroke-dashoffset="320" id="s1path"/>
+    </svg>
+  </div>
+</div>
+
+<!-- 02 ONE PASS -->
+<div class="scene" id="s2">
+  <div class="left">
+    <div class="kick h">02 · один проход на кадр</div>
+    <div class="t h">Три записи.<br>Один коммит.</div>
+    <div class="cap h">Записи копятся между тиками. На тике граф досчитывается один раз, и каждый DOM-биндинг применяется один раз, по порядку.</div>
+    <div class="code h"><span class="ln" id="s2l1"><span class="f">setCount</span>(1)</span><span class="ln" id="s2l2"><span class="f">setCount</span>(2)</span><span class="ln" id="s2l3"><span class="f">setCount</span>(3)</span><span class="ln"> </span><span class="ln"><span class="c">// граф: count → label, пересчитан один раз</span></span><span class="ln"><span class="c">// DOM:  el.textContent = "3 unread", один раз</span></span></div>
+  </div>
+  <div class="right">
+    <svg width="572" height="420" viewBox="0 0 572 420">
+      <rect x="372" y="20" width="190" height="64" rx="8" fill="none" stroke="rgba(16,19,31,.25)"/>
+      <text x="388" y="42" class="lbl">DOM · el.textContent</text>
+      <text x="388" y="68" class="mono" id="s2dom0">0 unread</text>
+      <text x="388" y="68" class="mono h" id="s2dom3">3 unread</text>
+      <text x="10" y="42" class="lbl">DOM-записей в этом кадре</text>
+      <text x="10" y="68" class="mono" id="s2w0">0</text>
+      <text x="10" y="68" class="mono h" id="s2w1">1</text>
+      <!-- timeline -->
+      <line x1="0" y1="300" x2="572" y2="300" stroke="rgba(16,19,31,.2)"/>
+      <line x1="40" y1="250" x2="40" y2="320" stroke="var(--ink)" stroke-width="2"/>
+      <line x1="500" y1="250" x2="500" y2="320" stroke="var(--ink)" stroke-width="2"/>
+      <text x="40" y="344" text-anchor="middle" class="lbl">rAF</text>
+      <text x="500" y="344" text-anchor="middle" class="lbl">+16.7 ms</text>
+      <g id="s2d1" class="h"><circle cx="160" cy="200" r="7" fill="var(--cobalt)"/><text x="160" y="180" text-anchor="middle" class="lbl c">set(1)</text></g>
+      <g id="s2d2" class="h"><circle cx="270" cy="170" r="7" fill="var(--cobalt)"/><text x="270" y="150" text-anchor="middle" class="lbl c">set(2)</text></g>
+      <g id="s2d3" class="h"><circle cx="380" cy="215" r="7" fill="var(--cobalt)"/><text x="380" y="195" text-anchor="middle" class="lbl c">set(3)</text></g>
+      <path d="M160 200 C 160 260, 500 240, 500 300" stroke="var(--cobalt)" stroke-width="1.5" fill="none" stroke-dasharray="420" stroke-dashoffset="420" id="s2p1"/>
+      <path d="M270 170 C 270 250, 500 230, 500 300" stroke="var(--cobalt)" stroke-width="1.5" fill="none" stroke-dasharray="420" stroke-dashoffset="420" id="s2p2"/>
+      <path d="M380 215 C 380 260, 500 250, 500 300" stroke="var(--cobalt)" stroke-width="1.5" fill="none" stroke-dasharray="420" stroke-dashoffset="420" id="s2p3"/>
+      <!-- phases after tick -->
+      <g id="s2ph" class="h">
+        <rect x="503" y="276" width="22" height="22" rx="3" fill="rgba(39,67,255,.15)" stroke="var(--cobalt)" stroke-width="1.5"/>
+        <rect x="528" y="276" width="40" height="22" rx="3" fill="var(--ink)"/>
+        <text x="503" y="266" class="lbl">measure · mutate</text>
+      </g>
+      <g id="s2sweep" class="h"><rect x="-2" y="130" width="3" height="200" fill="var(--cobalt)"/></g>
+      <g id="s2once" class="h"><text x="500" y="400" text-anchor="middle" class="lbl k">один проход · одна запись</text></g>
+    </svg>
+  </div>
+</div>
+
+<!-- 03 PHASES -->
+<div class="scene" id="s3">
+  <div class="left">
+    <div class="kick h">03 · measure → mutate</div>
+    <div class="t h">Сначала чтение.<br>Потом запись.</div>
+    <div class="cap h">Эффекты приходят в любом порядке. Планировщик выполняет все чтения layout до первой записи в DOM, поэтому layout считается <b>один раз за кадр</b>, без thrashing.</div>
+    <div class="code h"><span class="ln"><span class="f">createMeasureEffect</span>(</span><span class="ln">  () =&gt; messages(),                  <span class="c">// зависимости</span></span><span class="ln">  () =&gt; setHeight(list.scrollHeight) <span class="c">// чтение layout</span></span><span class="ln">)</span><span class="ln"><span class="f">createMutationEffect</span>(</span><span class="ln">  () =&gt; height(),</span><span class="ln">  (h) =&gt; spacer.style.height = h     <span class="c">// запись в DOM</span></span><span class="ln">)</span></div>
+  </div>
+  <div class="right">
+    <svg width="572" height="420" viewBox="0 0 572 420">
+      <text x="0" y="24" class="lbl k">один кадр · 16.7 мс</text>
+      <!-- frame bar -->
+      <rect x="0" y="40" width="572" height="56" rx="6" fill="none" stroke="rgba(16,19,31,.25)"/>
+      <rect x="4" y="44" width="190" height="48" rx="4" fill="rgba(39,67,255,.12)" stroke="var(--cobalt)" stroke-width="1.5" id="s3m"/>
+      <rect x="198" y="44" width="250" height="48" rx="4" fill="var(--ink)" id="s3w"/>
+      <rect x="452" y="44" width="52" height="48" rx="4" fill="rgba(39,67,255,.12)" stroke="var(--cobalt)" stroke-width="1.5"/>
+      <rect x="508" y="44" width="60" height="48" rx="4" fill="var(--ink)"/>
+      <text x="8" y="116" class="lbl c">measure</text>
+      <text x="198" y="116" class="lbl k">mutate</text>
+      <text x="452" y="116" class="lbl">forced-reflow</text>
+      <!-- arrivals -->
+      <g id="s3a1" class="h"><circle cx="60" cy="190" r="8" fill="none" stroke="var(--cobalt)" stroke-width="2"/><text x="78" y="194" class="lbl">чтение scrollHeight</text></g>
+      <g id="s3a2" class="h"><rect x="52" y="222" width="16" height="16" rx="3" fill="var(--ink)"/><text x="78" y="234" class="lbl">запись style.height</text></g>
+      <g id="s3a3" class="h"><circle cx="60" cy="270" r="8" fill="none" stroke="var(--cobalt)" stroke-width="2"/><text x="78" y="274" class="lbl">чтение getBoundingClientRect</text></g>
+      <g id="s3a4" class="h"><rect x="52" y="302" width="16" height="16" rx="3" fill="var(--ink)"/><text x="78" y="314" class="lbl">запись classList</text></g>
+      <text x="0" y="160" class="lbl">приходят в таком порядке ↓</text>
+      <!-- landed markers inside the bar -->
+      <circle cx="40" cy="68" r="7" fill="var(--bg)" stroke="var(--cobalt)" stroke-width="2" class="h" id="s3l1"/>
+      <circle cx="70" cy="68" r="7" fill="var(--bg)" stroke="var(--cobalt)" stroke-width="2" class="h" id="s3l3"/>
+      <rect x="226" y="60" width="16" height="16" rx="3" fill="var(--bg)" class="h" id="s3l2"/>
+      <rect x="256" y="60" width="16" height="16" rx="3" fill="var(--bg)" class="h" id="s3l4"/>
+      <!-- comparison -->
+      <g id="s3cmp" class="h">
+        <line x1="0" y1="350" x2="572" y2="350" stroke="rgba(16,19,31,.15)"/>
+        <text x="330" y="194" class="lbl">вперемешку</text>
+        <g transform="translate(330,206)"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--cobalt)" stroke-width="2"/><rect x="24" y="2" width="12" height="12" rx="2" fill="var(--ink)"/><circle cx="52" cy="8" r="6" fill="none" stroke="var(--cobalt)" stroke-width="2"/><rect x="68" y="2" width="12" height="12" rx="2" fill="var(--ink)"/></g>
+        <text x="430" y="218" class="lbl r">layout ×2</text>
+        <text x="330" y="264" class="lbl">frameact</text>
+        <g transform="translate(330,276)"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--cobalt)" stroke-width="2"/><circle cx="30" cy="8" r="6" fill="none" stroke="var(--cobalt)" stroke-width="2"/><rect x="46" y="2" width="12" height="12" rx="2" fill="var(--ink)"/><rect x="68" y="2" width="12" height="12" rx="2" fill="var(--ink)"/></g>
+        <text x="430" y="288" class="lbl c">layout ×1</text>
+      </g>
+    </svg>
+  </div>
+</div>
+
+
+<!-- 04 FORCED REFLOW -->
+<div class="scene" id="s3b">
+  <div class="left">
+    <div class="kick h">04 · forced reflow</div>
+    <div class="t h">Читать после записи?<br>Скажи явно.</div>
+    <div class="cap h">Forced reflow — <b>явный</b> слот измерения после mutate со своим слотом записи следом. Один лишний layout, осознанно, всё ещё до paint. Редкость by design.</div>
+    <div class="code h"><span class="ln"><span class="f">createMutationEffect</span>(() =&gt; older(),</span><span class="ln">  (m) =&gt; list.prepend(...m))       <span class="c">// 1 · запись</span></span><span class="ln"><span class="f">createEffect</span>(() =&gt; older(),</span><span class="ln">  () =&gt; setTop(anchor.offsetTop),  <span class="c">// 2 · чтение в кадре</span></span><span class="ln">  <span class="f">frameForcedReflow</span>)</span><span class="ln"><span class="f">createMutationEffect</span>(() =&gt; top(),</span><span class="ln">  (t) =&gt; list.scrollTop += t)      <span class="c">// 3 · запись после</span></span></div>
+  </div>
+  <div class="right">
+    <svg width="572" height="420" viewBox="0 0 572 420">
+      <defs><clipPath id="vp"><rect x="0" y="150" width="220" height="230"/></clipPath></defs>
+      <text x="0" y="24" class="lbl k">один кадр · 16.7 мс</text>
+      <rect x="0" y="40" width="572" height="56" rx="6" fill="none" stroke="rgba(16,19,31,.25)"/>
+      <rect x="4" y="44" width="150" height="48" rx="4" fill="rgba(39,67,255,.12)" stroke="var(--cobalt)" stroke-width="1.5"/>
+      <rect x="158" y="44" width="200" height="48" rx="4" fill="var(--ink)"/>
+      <rect x="362" y="44" width="100" height="48" rx="4" fill="rgba(39,67,255,.12)" stroke="var(--cobalt)" stroke-width="1.5"/>
+      <rect x="466" y="44" width="102" height="48" rx="4" fill="var(--ink)"/>
+      <text x="8" y="116" class="lbl c">measure</text><text x="158" y="116" class="lbl k">mutate</text><text x="362" y="116" class="lbl c">forced reflow</text><text x="466" y="116" class="lbl k">затем запись</text>
+      <rect x="250" y="60" width="16" height="16" rx="3" fill="var(--bg)" class="h" id="s3bl1"/>
+      <circle cx="412" cy="68" r="7" fill="var(--bg)" stroke="var(--cobalt)" stroke-width="2" class="h" id="s3bl2"/>
+      <rect x="509" y="60" width="16" height="16" rx="3" fill="var(--bg)" class="h" id="s3bl3"/>
+      <!-- message list viewport -->
+      <text x="0" y="142" class="lbl">список · viewport</text>
+      <rect x="0" y="150" width="220" height="230" rx="8" fill="none" stroke="rgba(16,19,31,.25)"/>
+      <g clip-path="url(#vp)">
+        <g id="s3bContent">
+          <g id="s3bNew" opacity="0">
+            <rect x="12" y="26" width="196" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="58" width="150" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="90" width="176" height="24" rx="4" fill="rgba(39,67,255,.18)"/><rect x="12" y="122" width="120" height="24" rx="4" fill="rgba(39,67,255,.18)"/>
+          </g>
+          <rect x="12" y="162" width="160" height="24" rx="4" fill="rgba(16,19,31,.12)"/>
+          <rect x="12" y="194" width="196" height="24" rx="4" fill="var(--ink)" id="s3bAnchor"/>
+          <rect x="12" y="226" width="140" height="24" rx="4" fill="rgba(16,19,31,.12)"/>
+          <rect x="12" y="258" width="180" height="24" rx="4" fill="rgba(16,19,31,.12)"/>
+          <rect x="12" y="290" width="120" height="24" rx="4" fill="rgba(16,19,31,.12)"/>
+          <rect x="12" y="322" width="170" height="24" rx="4" fill="rgba(16,19,31,.12)"/>
+        </g>
+      </g>
+      <text x="232" y="210" class="lbl k">якорь</text>
+      <line x1="226" y1="194" x2="226" y2="218" stroke="var(--ink)" stroke-width="2"/>
+      <!-- step labels -->
+      <g id="s3bs1" class="h"><text x="300" y="200" class="lbl k">1 · сверху добавили 4 старых сообщения</text><text x="300" y="218" class="lbl">якорь уехал вниз</text></g>
+      <g id="s3bs2" class="h"><text x="300" y="256" class="lbl c">2 · anchor.offsetTop → +128 px</text><text x="300" y="274" class="lbl">layout пересчитан один раз, в середине кадра</text></g>
+      <g id="s3bs3" class="h"><text x="300" y="312" class="lbl k">3 · scrollTop += 128</text><text x="300" y="330" class="lbl">якорь на месте · прыжка нет</text></g>
+    </svg>
+  </div>
+</div>
+
+<!-- 05 GATING -->
+<div class="scene" id="s4">
+  <div class="left">
+    <div class="kick h">05 · гейтинг тяжёлых анимаций</div>
+    <div class="t h">Сначала анимация.<br>Обновления потом.</div>
+    <div class="cap h">Пока идёт blocking-анимация, кадровая работа ждёт — <b>целыми кадрами, не половинами</b>. Когда она кончается, всё приземляется одним проходом.</div>
+    <div class="code h"><span class="ln">const end = <span class="f">beginHeavyAnimation</span>(50, true) <span class="c">// blocking</span></span><span class="ln"><span class="f">setMessages</span>(next)           <span class="c">// стор продолжает писать…</span></span><span class="ln"><span class="f">setScrollTop</span>(y)</span><span class="ln"><span class="f">setDraft</span>(text)</span><span class="ln">end()                                   <span class="c">// …а коммит здесь</span></span></div>
+  </div>
+  <div class="right">
+    <svg width="572" height="420" viewBox="0 0 572 420">
+      <!-- panel mock -->
+      <rect x="0" y="20" width="572" height="110" rx="8" fill="none" stroke="rgba(16,19,31,.2)"/>
+      <text x="12" y="44" class="lbl">viewport</text>
+      <g id="s4panel"><rect x="372" y="30" width="190" height="90" rx="6" fill="var(--amber)" opacity=".9"/><text x="467" y="80" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" font-weight="600" fill="#fff">панель · едет</text></g>
+      <!-- timeline: 6 ticks -->
+      <line x1="0" y1="300" x2="572" y2="300" stroke="rgba(16,19,31,.2)"/>
+      <g stroke="var(--ink)" stroke-width="2"><line x1="36" y1="262" x2="36" y2="318"/><line x1="136" y1="262" x2="136" y2="318"/><line x1="236" y1="262" x2="236" y2="318"/><line x1="336" y1="262" x2="336" y2="318"/><line x1="436" y1="262" x2="436" y2="318"/><line x1="536" y1="262" x2="536" y2="318"/></g>
+      <text x="36" y="342" text-anchor="middle" class="lbl">rAF</text>
+      <text x="536" y="342" text-anchor="middle" class="lbl">+83 ms</text>
+      <!-- frame 0 normal phases -->
+      <rect x="39" y="278" width="18" height="18" rx="3" fill="rgba(39,67,255,.15)" stroke="var(--cobalt)" stroke-width="1.5"/><rect x="60" y="278" width="40" height="18" rx="3" fill="var(--ink)"/>
+      <!-- gated band over frames 1-3 -->
+      <g id="s4gate" class="h">
+        <rect x="138" y="268" width="296" height="40" rx="4" fill="rgba(227,154,28,.14)" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="4 5"/>
+        <text x="286" y="380" text-anchor="middle" class="lbl a">тяжёлая анимация · кадровые очереди под гейтом</text>
+      </g>
+      <!-- held writes -->
+      <g id="s4w1" class="h"><circle cx="170" cy="200" r="7" fill="var(--cobalt)"/><text x="170" y="182" text-anchor="middle" class="lbl c">messages</text></g>
+      <g id="s4w2" class="h"><circle cx="260" cy="215" r="7" fill="var(--cobalt)"/><text x="260" y="197" text-anchor="middle" class="lbl c">scrollTop</text></g>
+      <g id="s4w3" class="h"><circle cx="370" cy="205" r="7" fill="var(--cobalt)"/><text x="370" y="187" text-anchor="middle" class="lbl c">draft</text></g>
+      <text x="270" y="245" text-anchor="middle" class="lbl h" id="s4held">ждут</text>
+      <path d="M170 200 C 170 300, 436 220, 436 300" stroke="var(--cobalt)" stroke-width="1.5" fill="none" stroke-dasharray="520" stroke-dashoffset="520" id="s4p1"/>
+      <path d="M260 215 C 260 300, 436 230, 436 300" stroke="var(--cobalt)" stroke-width="1.5" fill="none" stroke-dasharray="520" stroke-dashoffset="520" id="s4p2"/>
+      <path d="M370 205 C 370 280, 436 240, 436 300" stroke="var(--cobalt)" stroke-width="1.5" fill="none" stroke-dasharray="520" stroke-dashoffset="520" id="s4p3"/>
+      <g id="s4ph" class="h"><rect x="439" y="278" width="26" height="18" rx="3" fill="rgba(39,67,255,.15)" stroke="var(--cobalt)" stroke-width="1.5"/><rect x="468" y="278" width="62" height="18" rx="3" fill="var(--ink)"/><text x="286" y="380" text-anchor="middle" class="lbl k">анимация кончилась · записи отпущены вместе</text></g>
+      <g id="s4sweep" class="h"><rect x="-2" y="160" width="3" height="170" fill="var(--cobalt)"/></g>
+    </svg>
+  </div>
+</div>
+
+<!-- 06 STRICTERDOM -->
+<div class="scene" id="s5">
+  <div class="left">
+    <div class="kick h">06 · stricterdom</div>
+    <div class="t h">Нарушил фазу —<br>узнаешь кто.</div>
+    <div class="cap h">В dev под охраной сам DOM API. Запись во время <b>measure</b> ловится в точке вызова и атрибутируется эффекту, который её сделал.</div>
+    <div class="code h"><span class="ln"><span class="f">createMeasureEffect</span>(</span><span class="ln">  () =&gt; width(),</span><span class="ln" id="s5bad">  (w) =&gt; el.style.width = w + <span class="s">'px'</span>   <span class="c">// ← запись в measure</span></span><span class="ln">)</span></div>
+  </div>
+  <div class="right">
+    <svg width="572" height="420" viewBox="0 0 572 420">
+      <rect x="0" y="20" width="572" height="48" rx="6" fill="none" stroke="rgba(16,19,31,.25)"/>
+      <rect x="4" y="24" width="220" height="40" rx="4" fill="rgba(39,67,255,.12)" stroke="var(--cobalt)" stroke-width="1.5"/>
+      <rect x="228" y="24" width="340" height="40" rx="4" fill="var(--ink)"/>
+      <text x="8" y="86" class="lbl c">measure</text><text x="228" y="86" class="lbl k">mutate</text>
+      <g id="s5write" class="h"><rect x="106" y="34" width="20" height="20" rx="4" fill="var(--ink)" id="s5sq"/></g>
+      <g id="s5x" class="h"><circle cx="116" cy="44" r="16" fill="var(--red)"/><text x="116" y="49" text-anchor="middle" font-family="IBM Plex Mono" font-size="14" font-weight="600" fill="#fff">✕</text></g>
+      <text x="116" y="124" text-anchor="middle" class="lbl r h" id="s5hit">el.style.width во время measure</text>
+      <!-- console -->
+      <g id="s5con" class="h">
+        <rect x="0" y="160" width="572" height="190" rx="10" fill="var(--ink)"/>
+        <circle cx="20" cy="180" r="5" fill="#ff5f57"/><circle cx="38" cy="180" r="5" fill="#febc2e"/><circle cx="56" cy="180" r="5" fill="#28c840"/>
+        <text x="500" y="184" class="lbl" fill="#8a93ad" style="fill:#8a93ad">консоль</text>
+      </g>
+      <g font-family="IBM Plex Mono" font-size="12.5">
+        <text x="20" y="218" fill="#ff7b80" font-weight="600" class="h" id="s5c1">✕ stricterdom · мутация DOM во время фазы "measure"</text>
+        <text x="20" y="244" fill="#dfe4f7" class="h" id="s5c2">  el.style.width = "320px"</text>
+        <text x="20" y="270" fill="#dfe4f7" class="h" id="s5c3">  MessageList &gt; Row &gt; el.style.width [measure]</text>
+        <text x="20" y="296" fill="#8a93ad" class="h" id="s5c4">  в MessageList.tsx:41</text>
+        <text x="20" y="328" fill="#9fb0ff" class="h" id="s5c5">  → перенеси запись в createMutationEffect</text>
+      </g>
+    </svg>
+  </div>
+</div>
+
+<!-- OUTRO -->
+<div class="scene outro" id="outro">
+  <div class="center">
+    <div class="word">
+      <svg width="760" height="150" viewBox="0 0 760 150">
+        <defs><clipPath id="oc" clipPathUnits="userSpaceOnUse"><rect x="0" y="72" width="760" height="80"/></clipPath></defs>
+        <text class="outline" x="0" y="124" id="oOutline">frameact</text>
+        <text class="filled" x="0" y="124">frameact</text>
+      </svg>
+      <div class="tick" id="oTick"></div>
+    </div>
+    <div class="tag h" id="oTag">Мелкозернистые сигналы. <span>Один коммит на кадр.</span></div>
+  </div>
+</div>
+
+<!-- CREDITS -->
+<div class="scene credits" id="credits">
+  <div class="line" id="crLine"></div>
+  <div class="center">
+    <div class="photo"><img src="denis.jpg" alt="" id="crImg"><i class="tint" id="crTint"></i><svg viewBox="0 0 256 256"><rect x="1.5" y="1.5" width="253" height="253" id="crRect"/></svg></div>
+    <div class="by"><span class="small h" id="crSmall">сделано</span><span class="name h" id="crName">denisprohorchuk</span><span class="amp h" id="crAmp">и братишка claude</span></div>
+  </div>
+</div>
+
+<div class="progress"><i id="prog"></i></div>
+<div class="chapters h" id="chapters">
+  <span id="ch1"><i></i>01 сигналы</span><span id="ch2"><i></i>02 один проход</span><span id="ch3"><i></i>03 фазы</span><span id="ch4"><i></i>04 forced reflow</span><span id="ch5"><i></i>05 гейтинг</span><span id="ch6"><i></i>06 stricterdom</span>
+</div>
+</div>
+
+<script>
+const EASE='cubic-bezier(.2,.8,.2,1)', TOTAL=55.5;
+const A=[];
+const $=s=>typeof s==='string'?[...document.querySelectorAll(s)]:[s];
+function at(t,sel,kf,dur=.5,easing=EASE){for(const el of $(sel))A.push(el.animate(kf,{delay:t*1000,duration:dur*1000,easing,fill:'forwards'}));}
+const show=(t,s,d=.5)=>at(t,s,[{opacity:0,transform:'translateY(10px)'},{opacity:1,transform:'none'}],d);
+const hide=(t,s,d=.4)=>at(t,s,[{opacity:1},{opacity:0}],d);
+const pop=(t,s,d=.4)=>at(t,s,[{opacity:0,transform:'scale(.6)'},{opacity:1,transform:'scale(1)'}],d);
+const draw=(t,s,d=.6)=>at(t,s,[{strokeDashoffset:'var(--x,0)'},{strokeDashoffset:0}],d,'ease-in-out');
+function scene(id,t0,t1){show(t0,'#'+id,.5);hide(t1-.4,'#'+id,.4);}
+function stagger(t,sel,gap=.12,d=.5){$(sel).forEach((el,i)=>show(t+i*gap,el,d));}
+function swap(t,a,b){hide(t,a,.25);show(t,b,.25);}
+function sweep(t,id,dist,d=.7){at(t,id,[{opacity:1,transform:'translateX(0)'},{opacity:1,transform:`translateX(${dist}px)`,offset:.92},{opacity:0,transform:`translateX(${dist}px)`}],d,'cubic-bezier(.6,0,.3,1)');}
+function dash(t,id,len,d=.6){for(const el of $(id)){el.style.setProperty('--x',len);}at(t,id,[{strokeDashoffset:len},{strokeDashoffset:0}],d,'ease-in-out');}
+
+function build(){
+  // ---- chrome
+  at(0,'#prog',[{transform:'scaleX(0)'},{transform:'scaleX(1)'}],TOTAL-.5,'linear');
+  show(2.5,'#brand');show(2.5,'#chapters');
+  const chapterAt=(t,id)=>{at(t,'#'+id,[{color:'#6b7290'},{color:'#10131f'}],.3);at(t,'#'+id+' i',[{opacity:.4,background:'#6b7290'},{opacity:1,background:'#2743ff'}],.3);};
+  // ---- intro 0–2.5
+  show(0,'#intro',.01);
+  at(.1,'#introWord',[{opacity:0,transform:'translateY(16px)',letterSpacing:'-.02em'},{opacity:1,transform:'none',letterSpacing:'-.04em'}],.8);
+  show(.6,'#introSub');hide(2.1,'#intro',.4);
+
+  // ---- 01 signals 2.5–11
+  scene('s1',2.5,11);chapterAt(2.5,'ch1');
+  stagger(2.6,'#s1 .left > *',.1);
+  pop(4.3,'#s1chip');
+  at(4.4,'#s1pulse',[{opacity:1,transform:'scale(1)'},{opacity:0,transform:'scale(2.4)'}],.7,'ease-out');
+  dash(4.5,'#s1e1',200,.4);
+  at(4.9,'#s1memo',[{stroke:'#10131f'},{stroke:'#2743ff'}],.2);show(4.9,'#s1dirty',.3);
+  dash(5.0,'#s1e2',200,.4);
+  at(5.4,'#s1eff',[{fill:'#10131f'},{fill:'#2743ff'}],.2);show(5.4,'#s1queued',.3);
+  pop(5.4,'#s1dot');
+  // DOM still "0 unread" — emphasize wait, then the tick
+  dash(6.2,'#s1path',320,1.4);
+  sweep(7.6,'#s1sweep',540,.8);
+  at(8.0,'#s1memo',[{stroke:'#2743ff'},{stroke:'#10131f'}],.2);hide(8.0,'#s1dirty',.2);
+  at(8.3,'#s1eff',[{fill:'#2743ff'},{fill:'#10131f'}],.2);hide(8.3,'#s1queued',.2);
+  swap(8.35,'#s1dom0','#s1dom1');
+  at(8.35,'#s1dom1',[{fill:'#2743ff'},{fill:'#10131f'}],1.2);
+
+  // ---- 02 one pass 11–18.5
+  scene('s2',11,18.5);chapterAt(11,'ch2');
+  stagger(11.1,'#s2 .left > *',.1);
+  const hl=(t,id)=>at(t,id,[{background:'rgba(39,67,255,0)'},{background:'rgba(39,67,255,.14)'},{background:'rgba(39,67,255,0)'}],.6);
+  hl(12.6,'#s2l1');pop(12.6,'#s2d1');
+  hl(13.2,'#s2l2');pop(13.2,'#s2d2');
+  hl(13.8,'#s2l3');pop(13.8,'#s2d3');
+  dash(14.4,'#s2p1',420,.9);dash(14.5,'#s2p2',420,.9);dash(14.6,'#s2p3',420,.9);
+  sweep(15.3,'#s2sweep',500,.8);
+  show(15.9,'#s2ph',.3);
+  swap(15.95,'#s2dom0','#s2dom3');swap(15.95,'#s2w0','#s2w1');
+  at(15.95,'#s2dom3',[{fill:'#2743ff'},{fill:'#10131f'}],1.2);
+  show(16.5,'#s2once');
+
+  // ---- 03 phases 18.5–26.5
+  scene('s3',18.5,26.5);chapterAt(18.5,'ch3');
+  stagger(18.6,'#s3 .left > *',.1);
+  show(20.0,'#s3a1',.3);show(20.4,'#s3a2',.3);show(20.8,'#s3a3',.3);show(21.2,'#s3a4',.3);
+  // sort into phases
+  pop(21.9,'#s3l1');pop(22.1,'#s3l3');pop(22.5,'#s3l2');pop(22.7,'#s3l4');
+  at(21.9,'#s3a1',[{opacity:1},{opacity:.35}],.3);at(22.1,'#s3a3',[{opacity:1},{opacity:.35}],.3);
+  at(22.5,'#s3a2',[{opacity:1},{opacity:.35}],.3);at(22.7,'#s3a4',[{opacity:1},{opacity:.35}],.3);
+  show(23.6,'#s3cmp',.5);
+
+  // ---- 04 forced reflow 26.5–33.5
+  scene('s3b',26.5,33.5);chapterAt(26.5,'ch4');
+  stagger(26.6,'#s3b .left > *',.1);
+  // 1 · mutate: prepend, content pushed down
+  pop(28.0,'#s3bl1');show(28.0,'#s3bs1',.3);
+  at(28.1,'#s3bNew',[{opacity:0},{opacity:1}],.3);
+  at(28.1,'#s3bContent',[{transform:'translateY(0)'},{transform:'translateY(128px)'}],.6,'cubic-bezier(.3,0,.2,1)');
+  // 2 · forced reflow measure
+  pop(29.6,'#s3bl2');show(29.6,'#s3bs2',.3);
+  at(29.6,'#s3bAnchor',[{fill:'#10131f'},{fill:'#2743ff'},{fill:'#10131f'}],1.0);
+  // 3 · mutation after it: scrollTop corrected
+  pop(31.0,'#s3bl3');show(31.0,'#s3bs3',.3);
+  at(31.1,'#s3bContent',[{transform:'translateY(128px)'},{transform:'translateY(0)'}],.5,'cubic-bezier(.3,0,.2,1)');
+
+  // ---- 05 gating 33.5–41.5
+  scene('s4',33.5,41.5);chapterAt(33.5,'ch5');
+  stagger(33.6,'#s4 .left > *',.1);
+  show(35.0,'#s4gate',.3);
+  at(35.0,'#s4panel',[{transform:'translateX(200px)'},{transform:'translateX(0)'}],2.6,'cubic-bezier(.3,0,.2,1)');
+  pop(35.6,'#s4w1');pop(36.3,'#s4w2');pop(37.0,'#s4w3');show(36.6,'#s4held',.3);
+  hide(37.6,'#s4gate',.3);hide(37.6,'#s4held',.2);
+  dash(37.7,'#s4p1',520,.7);dash(37.8,'#s4p2',520,.7);dash(37.9,'#s4p3',520,.7);
+  sweep(38.4,'#s4sweep',436,.7);
+  show(38.9,'#s4ph',.3);
+
+  // ---- 05 stricterdom 34.5–41
+  scene('s5',41.5,48.0);chapterAt(41.5,'ch6');
+  stagger(41.6,'#s5 .left > *',.1);
+  at(43.0,'#s5write',[{opacity:0,transform:'translateY(-30px)'},{opacity:1,transform:'none'}],.4,'cubic-bezier(.3,0,.7,1)');
+  at(43.2,'#s5bad',[{background:'rgba(229,72,77,0)'},{background:'rgba(229,72,77,.14)'}],.3);
+  pop(43.45,'#s5x',.3);show(43.6,'#s5hit',.3);
+  show(44.2,'#s5con',.4);
+  show(44.6,'#s5c1',.25);show(44.9,'#s5c2',.25);show(45.2,'#s5c3',.25);show(45.5,'#s5c4',.25);show(46.1,'#s5c5',.3);
+
+  // ---- outro 41–44
+  scene('outro',48.0,51.6);
+  at(48.2,'#oTick',[{transform:'scaleX(0)'},{transform:'scaleX(1)'}],1.0,'cubic-bezier(.6,0,.3,1)');
+  at(48.2,'#oc rect',[{transform:'scaleX(0)'},{transform:'scaleX(1)'}],1.0,'cubic-bezier(.6,0,.3,1)');
+  show(49.0,'#oTag',.5);
+  // ---- credits 51.6–55.5
+  scene('credits',51.6,55.5);
+  at(51.7,'#crLine',[{transform:'scaleX(0)'},{transform:'scaleX(1)'}],.9,'cubic-bezier(.6,0,.3,1)');
+  at(51.8,'#crRect',[{strokeDashoffset:1024},{strokeDashoffset:0}],1.0,'ease-in-out');
+  at(52.2,'#crImg',[{clipPath:'inset(100% 0 0 0)'},{clipPath:'inset(0 0 0 0)'}],.7,'cubic-bezier(.6,0,.3,1)');
+  at(52.2,'#crTint',[{clipPath:'inset(100% 0 0 0)'},{clipPath:'inset(0 0 0 0)'}],.7,'cubic-bezier(.6,0,.3,1)');
+  show(52.8,'#crSmall',.4);show(53.0,'#crName',.5);show(53.3,'#crAmp',.5);
+  hide(55.0,'.stage',.5);
+}
+document.fonts.ready.then(()=>{build();window.__built=true;
+  // loop when played in a browser
+  if(!location.hash.includes('nolock')){setInterval(()=>{if(A[0].currentTime>=TOTAL*1000){A.forEach(a=>{a.currentTime=0;a.play();});}},200);}
+});
+</script>
+</body>
+</html>

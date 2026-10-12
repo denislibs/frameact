@@ -24,12 +24,12 @@ body{background:var(--bg);color:var(--ink);font-family:"IBM Plex Mono",monospace
 
 /* scene layout */
 .scene{position:absolute;inset:0;opacity:0}
-.left{position:absolute;left:88px;top:104px;width:480px}
+.left{position:absolute;left:88px;top:104px;width:512px}
 .kick{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--cobalt);margin-bottom:14px}
 .t{font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:34px;line-height:1.05;letter-spacing:-.02em;margin-bottom:18px}
 .cap{font-size:15px;line-height:1.6;color:var(--mute);margin-bottom:22px;min-height:48px}
 .cap b{color:var(--ink);font-weight:500}
-.code{font-size:13px;line-height:1.6;background:var(--panel);border-left:3px solid var(--cobalt);padding:14px 18px;border-radius:0 8px 8px 0;white-space:pre}
+.code{font-size:12.5px;line-height:1.6;background:var(--panel);border-left:3px solid var(--cobalt);padding:14px 18px;border-radius:0 8px 8px 0;white-space:pre}
 .code .c{color:var(--mute)}.code .f{color:var(--cobalt)}.code .s{color:#1f7a4d}
 .code .ln{display:block;margin:0 -18px;padding:0 18px}
 .right{position:absolute;left:620px;top:120px;width:572px;height:420px}
@@ -55,6 +55,17 @@ svg *{transform-box:fill-box;transform-origin:center}
 .outro .tick{position:absolute;left:0;right:0;top:71px;height:3px;background:var(--cobalt);transform:scaleX(0);transform-origin:0 50%}
 .outro .tag{margin-top:26px;font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:28px;letter-spacing:-.02em}
 .outro .tag span{color:var(--cobalt)}
+/* credits */
+.credits .photo{position:relative;width:240px;height:240px;isolation:isolate;background:var(--bg)}
+.credits .photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:grayscale(1) contrast(1.08) brightness(1.04);clip-path:inset(100% 0 0 0)}
+.credits .photo .tint{position:absolute;inset:0;background:var(--cobalt);mix-blend-mode:multiply;opacity:.22;clip-path:inset(100% 0 0 0)}
+.credits .photo svg{position:absolute;inset:-8px;width:256px;height:256px;overflow:visible}
+.credits .photo rect{fill:none;stroke:var(--cobalt);stroke-width:3;stroke-dasharray:1024;stroke-dashoffset:1024}
+.credits .line{position:absolute;left:0;right:0;top:50%;height:3px;background:var(--cobalt);transform:scaleX(0);transform-origin:50% 50%}
+.credits .by{margin-top:34px;display:flex;flex-direction:column;align-items:center;gap:6px}
+.credits .small{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+.credits .name{font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:40px;letter-spacing:-.03em;line-height:1.05}
+.credits .amp{font-family:Archivo,sans-serif;font-stretch:125%;font-weight:900;font-size:22px;letter-spacing:-.02em;color:var(--cobalt)}
 </style>
 </head>
 <body>
@@ -167,7 +178,7 @@ svg *{transform-box:fill-box;transform-origin:center}
     <div class="kick h">03 · measure → mutate</div>
     <div class="t h">Reads first.<br>Writes second.</div>
     <div class="cap h">Effects arrive in any order. The scheduler runs every layout read before the first DOM write, so layout is computed <b>once per frame</b>, never thrashed.</div>
-    <div class="code h"><span class="ln"><span class="f">createMeasureEffect</span>(</span><span class="ln">  () =&gt; list.scrollHeight,       <span class="c">// read layout</span></span><span class="ln">  (h) =&gt; setHeight(h)</span><span class="ln">)</span><span class="ln"><span class="f">createMutationEffect</span>(</span><span class="ln">  () =&gt; height(),</span><span class="ln">  (h) =&gt; spacer.style.height = h <span class="c">// write DOM</span></span><span class="ln">)</span></div>
+    <div class="code h"><span class="ln"><span class="f">createMeasureEffect</span>(</span><span class="ln">  () =&gt; messages(),                  <span class="c">// deps</span></span><span class="ln">  () =&gt; setHeight(list.scrollHeight) <span class="c">// read layout</span></span><span class="ln">)</span><span class="ln"><span class="f">createMutationEffect</span>(</span><span class="ln">  () =&gt; height(),</span><span class="ln">  (h) =&gt; spacer.style.height = h     <span class="c">// write DOM</span></span><span class="ln">)</span></div>
   </div>
   <div class="right">
     <svg width="572" height="420" viewBox="0 0 572 420">
@@ -213,7 +224,7 @@ svg *{transform-box:fill-box;transform-origin:center}
     <div class="kick h">04 · forced reflow</div>
     <div class="t h">Read after write?<br>Say so.</div>
     <div class="cap h">A forced reflow is an <b>explicit</b> measurement slot after mutate, with its own write slot after it. One extra layout, on purpose, still before paint. Rare by design.</div>
-    <div class="code h"><span class="ln"><span class="f">requestMutation</span>(() =&gt; {</span><span class="ln">  list.prepend(...older)            <span class="c">// write</span></span><span class="ln">  <span class="f">requestForcedReflow</span>(() =&gt; {</span><span class="ln">    const top = anchor.offsetTop    <span class="c">// read, mid-frame</span></span><span class="ln">    return () =&gt; list.scrollTop += top <span class="c">// write after</span></span><span class="ln">  })</span><span class="ln">})</span></div>
+    <div class="code h"><span class="ln"><span class="f">createMutationEffect</span>(() =&gt; older(),</span><span class="ln">  (m) =&gt; list.prepend(...m))       <span class="c">// 1 · write</span></span><span class="ln"><span class="f">createEffect</span>(() =&gt; older(),</span><span class="ln">  () =&gt; setTop(anchor.offsetTop),  <span class="c">// 2 · read mid-frame</span></span><span class="ln">  <span class="f">frameForcedReflow</span>)</span><span class="ln"><span class="f">createMutationEffect</span>(() =&gt; top(),</span><span class="ln">  (t) =&gt; list.scrollTop += t)      <span class="c">// 3 · write after</span></span></div>
   </div>
   <div class="right">
     <svg width="572" height="420" viewBox="0 0 572 420">
@@ -260,7 +271,7 @@ svg *{transform-box:fill-box;transform-origin:center}
     <div class="kick h">05 · heavy-animation gating</div>
     <div class="t h">Animation first.<br>Updates land after.</div>
     <div class="cap h">While a blocking animation runs, frame work is held back — <b>whole frames, never half</b>. When it ends, everything lands in one pass.</div>
-    <div class="code h"><span class="ln"><span class="f">beginHeavyAnimation</span>()        <span class="c">// panel slides in, 50 ms</span></span><span class="ln"><span class="f">setMessages</span>(next)           <span class="c">// store keeps flowing…</span></span><span class="ln"><span class="f">setScrollTop</span>(y)</span><span class="ln"><span class="f">setDraft</span>(text)</span><span class="ln"><span class="f">endHeavyAnimation</span>()          <span class="c">// …and commits here</span></span></div>
+    <div class="code h"><span class="ln">const end = <span class="f">beginHeavyAnimation</span>(50, true) <span class="c">// blocking</span></span><span class="ln"><span class="f">setMessages</span>(next)           <span class="c">// store keeps flowing…</span></span><span class="ln"><span class="f">setScrollTop</span>(y)</span><span class="ln"><span class="f">setDraft</span>(text)</span><span class="ln">end()                                   <span class="c">// …and commits here</span></span></div>
   </div>
   <div class="right">
     <svg width="572" height="420" viewBox="0 0 572 420">
@@ -300,7 +311,7 @@ svg *{transform-box:fill-box;transform-origin:center}
     <div class="kick h">06 · stricterdom</div>
     <div class="t h">Break a phase,<br>get named.</div>
     <div class="cap h">In dev, the DOM API itself is guarded. A write during <b>measure</b> is caught at the call site and attributed to the effect that did it.</div>
-    <div class="code h"><span class="ln"><span class="f">createMeasureEffect</span>(</span><span class="ln">  () =&gt; el.getBoundingClientRect(),</span><span class="ln" id="s5bad">  (r) =&gt; el.style.width = r.width + <span class="s">'px'</span> <span class="c">// ← write in measure</span></span><span class="ln">)</span></div>
+    <div class="code h"><span class="ln"><span class="f">createMeasureEffect</span>(</span><span class="ln">  () =&gt; width(),</span><span class="ln" id="s5bad">  (w) =&gt; el.style.width = w + <span class="s">'px'</span>   <span class="c">// ← write in measure</span></span><span class="ln">)</span></div>
   </div>
   <div class="right">
     <svg width="572" height="420" viewBox="0 0 572 420">
@@ -320,7 +331,7 @@ svg *{transform-box:fill-box;transform-origin:center}
       <g font-family="IBM Plex Mono" font-size="12.5">
         <text x="20" y="218" fill="#ff7b80" font-weight="600" class="h" id="s5c1">✕ stricterdom · DOM mutation during "measure" phase</text>
         <text x="20" y="244" fill="#dfe4f7" class="h" id="s5c2">  el.style.width = "320px"</text>
-        <text x="20" y="270" fill="#dfe4f7" class="h" id="s5c3">  in &lt;MessageList&gt; › createMeasureEffect("width")</text>
+        <text x="20" y="270" fill="#dfe4f7" class="h" id="s5c3">  MessageList &gt; Row &gt; el.style.width [measure]</text>
         <text x="20" y="296" fill="#8a93ad" class="h" id="s5c4">  at MessageList.tsx:41</text>
         <text x="20" y="328" fill="#9fb0ff" class="h" id="s5c5">  → move the write into createMutationEffect</text>
       </g>
@@ -343,6 +354,15 @@ svg *{transform-box:fill-box;transform-origin:center}
   </div>
 </div>
 
+<!-- CREDITS -->
+<div class="scene credits" id="credits">
+  <div class="line" id="crLine"></div>
+  <div class="center">
+    <div class="photo"><img src="denis.jpg" alt="" id="crImg"><i class="tint" id="crTint"></i><svg viewBox="0 0 256 256"><rect x="1.5" y="1.5" width="253" height="253" id="crRect"/></svg></div>
+    <div class="by"><span class="small h" id="crSmall">made by</span><span class="name h" id="crName">denisprohorchuk</span><span class="amp h" id="crAmp">&amp; bro claude</span></div>
+  </div>
+</div>
+
 <div class="progress"><i id="prog"></i></div>
 <div class="chapters h" id="chapters">
   <span id="ch1"><i></i>01 signals</span><span id="ch2"><i></i>02 one pass</span><span id="ch3"><i></i>03 phases</span><span id="ch4"><i></i>04 forced reflow</span><span id="ch5"><i></i>05 gating</span><span id="ch6"><i></i>06 stricterdom</span>
@@ -350,7 +370,7 @@ svg *{transform-box:fill-box;transform-origin:center}
 </div>
 
 <script>
-const EASE='cubic-bezier(.2,.8,.2,1)', TOTAL=51;
+const EASE='cubic-bezier(.2,.8,.2,1)', TOTAL=55.5;
 const A=[];
 const $=s=>typeof s==='string'?[...document.querySelectorAll(s)]:[s];
 function at(t,sel,kf,dur=.5,easing=EASE){for(const el of $(sel))A.push(el.animate(kf,{delay:t*1000,duration:dur*1000,easing,fill:'forwards'}));}
@@ -451,11 +471,18 @@ function build(){
   show(44.6,'#s5c1',.25);show(44.9,'#s5c2',.25);show(45.2,'#s5c3',.25);show(45.5,'#s5c4',.25);show(46.1,'#s5c5',.3);
 
   // ---- outro 41–44
-  scene('outro',48.0,51.0);
+  scene('outro',48.0,51.6);
   at(48.2,'#oTick',[{transform:'scaleX(0)'},{transform:'scaleX(1)'}],1.0,'cubic-bezier(.6,0,.3,1)');
   at(48.2,'#oc rect',[{transform:'scaleX(0)'},{transform:'scaleX(1)'}],1.0,'cubic-bezier(.6,0,.3,1)');
   show(49.0,'#oTag',.5);
-  hide(50.5,'.stage',.5);
+  // ---- credits 51.6–55.5
+  scene('credits',51.6,55.5);
+  at(51.7,'#crLine',[{transform:'scaleX(0)'},{transform:'scaleX(1)'}],.9,'cubic-bezier(.6,0,.3,1)');
+  at(51.8,'#crRect',[{strokeDashoffset:1024},{strokeDashoffset:0}],1.0,'ease-in-out');
+  at(52.2,'#crImg',[{clipPath:'inset(100% 0 0 0)'},{clipPath:'inset(0 0 0 0)'}],.7,'cubic-bezier(.6,0,.3,1)');
+  at(52.2,'#crTint',[{clipPath:'inset(100% 0 0 0)'},{clipPath:'inset(0 0 0 0)'}],.7,'cubic-bezier(.6,0,.3,1)');
+  show(52.8,'#crSmall',.4);show(53.0,'#crName',.5);show(53.3,'#crAmp',.5);
+  hide(55.0,'.stage',.5);
 }
 document.fonts.ready.then(()=>{build();window.__built=true;
   // loop when played in a browser
