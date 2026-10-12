@@ -173,6 +173,12 @@ function snapshot(b: ValueBinding): void {
  * key may have moved the caret without an input event, and a programmatic write must not jump back
  * to the last keystroke. The expiry task is queued after the event's check, so it runs after it;
  * while a deferred check is still waiting (re-armed, see runDeferred), the snapshot waits with it.
+ *
+ * Lifetime, exactly: the snapshot lives until the end of the frame of the event, plus as long as a
+ * re-armed deferred check keeps expiry waiting. A delivery that arrives after that (a timer, a
+ * third-party callback writing the signal later) finds no snapshot and does not restore the caret:
+ * the browser places it (at the end of the new value). A handler that writes the signal in the event
+ * itself, or in a microtask after it, is covered.
  */
 function armExpiry(b: ValueBinding): void {
   if (b.expiring) return;
