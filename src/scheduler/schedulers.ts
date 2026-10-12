@@ -43,27 +43,35 @@ export function throttle<F extends AnyToVoidFunction>(fn: F, ms: number, shouldR
 }
 
 /**
- * teact's `debounce`: `shouldRunFirst` calls `fn` at once on the leading edge, `shouldRunLast` once
- * more `ms` after the last call; a call during the wait restarts it. InfiniteScroll's load-more
- * uses `debounce(fn, 1000, true, false)`: fire now, then ignore repeats for a second.
+ * Original frameact implementation (written from the behaviour description, not from any source).
+ *
+ * `debounce(fn, ms, shouldRunFirst, shouldRunLast)`: a wrapper whose calls open a wait of `ms`;
+ * every call during the wait restarts it with the latest arguments.
+ * - `shouldRunFirst` (default true): the call that OPENS a wait runs `fn` at once (leading edge).
+ * - `shouldRunLast` (default true): when the wait ends, `fn` runs once more with the last arguments
+ *   (trailing edge) — unless the only call of the wait was the leading one that already ran.
+ * `debounce(fn, 1000, true, false)` is "fire now, then ignore repeats for a second" (InfiniteScroll's
+ * load-more); `debounce(fn, 300, false)` is the classic "run once the input has been quiet for 300 ms".
  */
 export function debounce<F extends AnyToVoidFunction>(fn: F, ms: number, shouldRunFirst = true, shouldRunLast = true) {
-  let waitingTimeout: ReturnType<typeof setTimeout> | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let pendingArgs: Parameters<F> | undefined; // set when a trailing call is owed
 
   return (...args: Parameters<F>) => {
-    if (waitingTimeout) {
-      clearTimeout(waitingTimeout);
-      waitingTimeout = undefined;
-    } else if (shouldRunFirst) {
-      fn(...args);
+    if (timeout === undefined) {
+      // Opening a wait: the leading call runs now; the trailing call is owed only without it.
+      if (shouldRunFirst) fn(...args);
+      else pendingArgs = args;
+    } else {
+      // Inside a wait: restart it; the trailing call (if any) uses these, the latest, arguments.
+      clearTimeout(timeout);
+      pendingArgs = args;
     }
-
-    waitingTimeout = setTimeout(() => {
-      if (shouldRunLast) {
-        fn(...args);
-      }
-
-      waitingTimeout = undefined;
+    timeout = setTimeout(() => {
+      timeout = undefined;
+      const trailing = pendingArgs;
+      pendingArgs = undefined;
+      if (shouldRunLast && trailing !== undefined) fn(...trailing);
     }, ms);
   };
 }
