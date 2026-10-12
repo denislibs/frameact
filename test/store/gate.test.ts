@@ -301,3 +301,52 @@ it('R1: an animation that ends from a timer (outside any frame phase) still rele
   await settle();
   expect(order).toEqual(['measure:1', 'mutate:1']);
 });
+
+it('P4: the gate walks a scope chain once per scope per drain, not once per effect (and still notices a scope that ended mid-drain)', async () => {
+  const COUNT = 30;
+  const [state, setState] = createStore({ v: Array.from({ length: COUNT }, () => 0) });
+  const a = createHeavyAnimationScope(null);
+  const b = createHeavyAnimationScope(a);
+  const c = createHeavyAnimationScope(b);
+  const d = createHeavyAnimationScope(c);
+  const other = createHeavyAnimationScope(null); // an unrelated scope animates: every store-caused run consults the gate
+  const runs: number[] = [];
+  inScope(d, () => {
+    for (let i = 0; i < COUNT; i++) createMutationEffect(() => state.v[i], (v) => { runs.push(v); });
+  });
+  await settle();
+  runs.length = 0;
+  const end = other.begin(Infinity);
+  const spies = [a, b, c, d].map((s) => vi.spyOn(s.isAnimating, 'peek'));
+  try {
+    for (let i = 0; i < COUNT; i++) setState('v', i, 1);
+    await settle();
+    expect(runs.length).toBe(COUNT); // none parked: the animating scope is not in their chain
+    const peeks = spies.reduce((n, s) => n + s.mock.calls.length, 0);
+    expect(peeks).toBeLessThanOrEqual(8); // ~one pass over the 4-scope chain, not 4 x 30
+  } finally {
+    end();
+    spies.forEach((s) => s.mockRestore());
+  }
+});
+
+it('P4: a parked set whose scope chain contains the animating scope is still found through the cache', async () => {
+  const [state, setState] = createStore({ v: [0, 0, 0] });
+  const outer = createHeavyAnimationScope(null);
+  const inner = createHeavyAnimationScope(outer);
+  const log: number[] = [];
+  inScope(inner, () => {
+    for (let i = 0; i < 3; i++) createMutationEffect(() => state.v[i], (v) => { log.push(v); });
+  });
+  await settle();
+  log.length = 0;
+  const end = outer.begin(Infinity);
+  setState('v', 0, 1);
+  setState('v', 1, 1);
+  setState('v', 2, 1);
+  await settle();
+  expect(log).toEqual([]);
+  end();
+  await settle();
+  expect(log).toEqual([1, 1, 1]);
+});

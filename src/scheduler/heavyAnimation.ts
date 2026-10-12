@@ -29,6 +29,10 @@ export interface HeavyAnimationScope {
   _parked: unknown[];
   /** @internal */
   _releaseArmed: boolean;
+  /** @internal store-gate cache: the drain epoch of `gateResult` (0: none) */
+  gateEpoch: number;
+  /** @internal store-gate cache: the first animating scope of this scope's chain as sampled in `gateEpoch` */
+  gateResult: HeavyAnimationScope | null;
 }
 
 type AnimationListener = (animating: boolean) => void;
@@ -80,10 +84,25 @@ export function closeGateSample(prev: number) {
 /** @internal First scope in the chain that animates as sampled by the current drain (live outside a drain). */
 export function firstAnimatingScopeSampled(scope: HeavyAnimationScope): HeavyAnimationScope | null {
   if (animatingScopes === 0) return null;
-  for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) {
-    if (s.isAnimating.peek() && (sampleEpoch === 0 || beganAt.get(s)! < sampleEpoch)) return s;
+  const epoch = sampleEpoch;
+  if (epoch !== 0 && scope.gateEpoch === epoch) {
+    // Decided earlier in this drain (one chain walk per scope per drain, not per effect). `null` is stable
+    // (a scope that begins mid-drain began after the epoch); a scope found animating may have ended since.
+    const cached = scope.gateResult;
+    if (cached === null || cached.isAnimating.peek()) return cached;
   }
-  return null;
+  let result: HeavyAnimationScope | null = null;
+  for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) {
+    if (s.isAnimating.peek() && (epoch === 0 || beganAt.get(s)! < epoch)) {
+      result = s;
+      break;
+    }
+  }
+  if (epoch !== 0) {
+    scope.gateEpoch = epoch;
+    scope.gateResult = result;
+  }
+  return result;
 }
 
 /** onHeavyAnimation listeners, kept per scope (not exposed on the scope object). */
@@ -154,6 +173,8 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
     isBlockingAnimating,
     _parked: [],
     _releaseArmed: false,
+    gateEpoch: 0,
+    gateResult: null,
     begin(duration = AUTO_END_TIMEOUT, isBlocking = false) {
       counter++;
       if (isBlocking) counterBlocking++;
