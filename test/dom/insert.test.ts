@@ -1,6 +1,6 @@
 import { createMemo, createRoot, createSignal, mapArray } from '../../src/index';
-import { insert, insertExpression } from '../../src/dom/insert';
-import { SLOT } from '../../src/dom/reconcile';
+import { HOST_KEY, insert, insertExpression } from '../../src/dom/insert';
+import { reconcileArrays, SLOT } from '../../src/dom/reconcile';
 import { render } from '../../src/dom/render';
 import { container, useDomHarness } from '../helpers/dom';
 
@@ -143,12 +143,15 @@ describe('arrays and function values', () => {
   it('array items that are not nodes (row-mapper functions, plain objects) render as nothing, with a dev warning', () => {
     const el = container();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const b = document.createElement('b');
-    insert(el, ['a', (item: unknown) => item, { not: 'a node' }, b]);
-    expect(el.innerHTML).toBe('a<b></b>');
-    expect(el.childNodes.length).toBe(4); // 'a', two empty placeholders, <b>
-    expect(warn).toHaveBeenCalledTimes(2);
-    warn.mockRestore();
+    try {
+      const b = document.createElement('b');
+      insert(el, ['a', (item: unknown) => item, { not: 'a node' }, b]);
+      expect(el.innerHTML).toBe('a<b></b>');
+      expect(el.childNodes.length).toBe(4); // 'a', two empty placeholders, <b>
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('switching between a node, text and an array', async () => {
@@ -327,5 +330,203 @@ describe('top-level parameterized function (a row mapper is a value, not an acce
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('nested arrays', () => {
+  it('flattens nested arrays in order and updates them', async () => {
+    const el = container();
+    const [a, b, c] = ['a', 'b', 'c'].map((t) => {
+      const n = document.createElement(t);
+      return n;
+    });
+    const [tail, setTail] = createSignal<unknown>(c);
+    createRoot(() => insert(el, () => [[a, [b]], tail()]));
+    expect(el.innerHTML).toBe('<a></a><b></b><c></c>');
+    setTail(['x', [null, 'y']]);
+    await frame();
+    expect(el.innerHTML).toBe('<a></a><b></b>xy');
+    expect(el.firstChild).toBe(a);
+  });
+
+  it('accessors inside nested arrays resolve through their own effect', async () => {
+    const el = container();
+    const [s, set] = createSignal('1');
+    createRoot(() => insert(el, ['<', [s, ['>']]]));
+    expect(el.textContent).toBe('<1>');
+    set('2');
+    await frame();
+    expect(el.textContent).toBe('<2>');
+  });
+});
+
+describe('reconcileArrays branches via keyed rows', () => {
+  it('arbitrary permutation (map fallback) keeps the nodes and the order', async () => {
+    const ul = container();
+    const [list, setList] = createSignal([1, 2, 3, 4, 5]);
+    createRoot(() => insert(ul, rowsFor(list)));
+    const nodes = new Map(Array.from(ul.children).map((n) => [n.textContent, n]));
+    setList([5, 3, 1, 4, 2]);
+    await frame();
+    expect(Array.from(ul.children).map((n) => n.textContent)).toEqual(['5', '3', '1', '4', '2']);
+    for (const n of ul.children) expect(n).toBe(nodes.get(n.textContent));
+  });
+
+  it('long reverse and mixed insert/remove', async () => {
+    const ul = container();
+    const [list, setList] = createSignal([1, 2, 3, 4, 5, 6, 7, 8]);
+    createRoot(() => insert(ul, rowsFor(list)));
+    const nodes = new Map(Array.from(ul.children).map((n) => [n.textContent, n]));
+    setList([8, 7, 6, 5, 4, 3, 2, 1]);
+    await frame();
+    expect(Array.from(ul.children).map((n) => n.textContent).join('')).toBe('87654321');
+    for (const n of ul.children) expect(n).toBe(nodes.get(n.textContent));
+    setList([9, 7, 5, 10, 3, 1]);
+    await frame();
+    expect(Array.from(ul.children).map((n) => n.textContent).join(',')).toBe('9,7,5,10,3,1');
+    expect(ul.children[1]).toBe(nodes.get('7'));
+  });
+
+  it('randomized transitions land the exact order, stay inside the marker, and leave neighbours alone', () => {
+    let seed = 7;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let iter = 0; iter < 400; iter++) {
+      const marker = iter % 2 === 0 ? document.createTextNode('') : undefined;
+      const el = container();
+      el.append(document.createElement('hr'));
+      if (marker) el.append(marker, document.createElement('br'));
+      const pool = Array.from({ length: 10 }, (_, i) => {
+        const s = document.createElement('s');
+        s.id = `n${i}`;
+        return s;
+      });
+      const pick = () => {
+        const list = pool.filter(() => rnd() < 0.6);
+        for (let i = list.length - 1; i > 0; i--) {
+          const j = Math.floor(rnd() * (i + 1));
+          [list[i], list[j]] = [list[j]!, list[i]!];
+        }
+        return list;
+      };
+      const a = pick();
+      const b = pick();
+      if (!a.length || !b.length) continue;
+      for (const n of a) {
+        el.insertBefore(n, marker ?? null);
+        (n as any)[SLOT] = marker ?? null;
+      }
+      reconcileArrays(el, a, b, marker);
+      expect(Array.from(el.children).filter((c) => c.tagName === 'S')).toEqual(b);
+      if (marker) expect(b.at(-1)!.nextSibling).toBe(marker);
+      expect(el.firstChild!.nodeName).toBe('HR');
+    }
+  });
+});
+
+describe('several slots in one parent', () => {
+  it('each slot updates only its own nodes between its marker neighbours', async () => {
+    const el = container();
+    const m1 = document.createTextNode('');
+    const m2 = document.createTextNode('');
+    el.append('[', m1, '|', m2, ']');
+    const [l1, setL1] = createSignal([1, 2]);
+    const [l2, setL2] = createSignal([3]);
+    createRoot(() => {
+      insert(el, rowsFor(l1), m1);
+      insert(el, rowsFor(l2), m2);
+    });
+    expect(el.innerHTML).toBe('[<li>1</li><li>2</li>|<li>3</li>]');
+    setL1([2, 1, 4]);
+    setL2([5, 3]);
+    await frame();
+    expect(el.innerHTML).toBe('[<li>2</li><li>1</li><li>4</li>|<li>5</li><li>3</li>]');
+    setL1([]);
+    await frame();
+    expect(el.innerHTML).toBe('[|<li>5</li><li>3</li>]');
+  });
+});
+
+describe('functions in multi mode with a marker', () => {
+  it('a conditional list gets its own effect and stays before the marker', async () => {
+    const el = container();
+    const marker = document.createTextNode('');
+    el.append('[', marker, ']');
+    const [cond, setCond] = createSignal(true);
+    const [list, setList] = createSignal([1, 2]);
+    const rows = rowsFor(list);
+    const outer = vi.fn(() => (cond() ? rows : 'none'));
+    createRoot(() => insert(el, outer, marker));
+    expect(el.innerHTML).toBe('[<li>1</li><li>2</li>]');
+    setList([1, 2, 3]);
+    await frame();
+    expect(el.innerHTML).toBe('[<li>1</li><li>2</li><li>3</li>]');
+    expect(outer).toHaveBeenCalledTimes(1);
+    setCond(false);
+    await frame();
+    expect(el.textContent).toBe('[none]');
+    setCond(true);
+    await frame();
+    expect(el.innerHTML).toBe('[<li>1</li><li>2</li><li>3</li>]');
+  });
+
+  it('a fragment (array) holding an accessor', async () => {
+    const el = container();
+    const marker = document.createTextNode('');
+    el.append(marker);
+    const [s, set] = createSignal('a');
+    createRoot(() => insert(el, () => ['x', s], marker));
+    expect(el.textContent).toBe('xa');
+    set('b');
+    await frame();
+    expect(el.textContent).toBe('xb');
+  });
+});
+
+describe('options', () => {
+  it('host: top-level inserted nodes get a _$host getter (static and reactive), arrays included', async () => {
+    const el = container();
+    const logicalParent = document.createElement('section');
+    const a = document.createElement('a');
+    const b = document.createElement('b');
+    insert(el, a, undefined, undefined, { host: () => logicalParent });
+    expect((a as any)[HOST_KEY]).toBe(logicalParent);
+    const [s, set] = createSignal<Node[]>([b]);
+    createRoot(() => insert(el, () => s(), null, undefined, { host: () => logicalParent }));
+    expect((b as any)[HOST_KEY]).toBe(logicalParent);
+    const c = document.createElement('i');
+    set([b, c]);
+    await frame();
+    expect((c as any)[HOST_KEY]).toBe(logicalParent);
+  });
+
+  it('name: accepted for reactive inserts, behaviour unchanged', async () => {
+    const el = container();
+    const [s, set] = createSignal('a');
+    createRoot(() => insert(el, s, undefined, undefined, { name: 'div.children' }));
+    set('b');
+    await frame();
+    expect(el.innerHTML).toBe('b');
+  });
+});
+
+describe('falsy primitives in root mode', () => {
+  it('0 and NaN render as text and are replaced like any text', async () => {
+    const el = container();
+    insert(el, 0);
+    expect(el.innerHTML).toBe('0');
+    const el2 = container();
+    const span = document.createElement('span');
+    const [v, set] = createSignal<unknown>(0);
+    createRoot(() => insert(el2, v));
+    expect(el2.innerHTML).toBe('0');
+    set(Number.NaN);
+    await frame();
+    expect(el2.innerHTML).toBe('NaN');
+    set(span);
+    await frame();
+    expect(el2.innerHTML).toBe('<span></span>');
+    set(0);
+    await frame();
+    expect(el2.innerHTML).toBe('0');
   });
 });

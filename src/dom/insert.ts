@@ -149,7 +149,11 @@ export function insert(
   );
 }
 
-/** Apply half: write `value` into the slot described by `current`, return the new `current`. */
+/**
+ * Apply half: write `value` into the slot described by `current`, return the new `current`.
+ * Note: when `value` is an array it is mutated in place (primitives and non-renderables are replaced
+ * by text nodes). `insert` always passes a fresh copy (see `flatten`); direct callers must too.
+ */
 export function insertExpression(parent: MountableElement, value: any, current: any, marker?: Node | null): any {
   if (value === current) return value;
   const t = typeof value;
