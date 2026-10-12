@@ -618,3 +618,38 @@ describe('spread onX and on:x use separate listener slots', () => {
     expect(log).toHaveLength(2);
   });
 });
+
+describe('is-mode on customized built-ins: native names keep the policy (URL component setters)', () => {
+  beforeEach(expectDevErrors);
+
+  it.each(['a', 'area'])('<%s is>: href with a custom scheme + protocol=javascript never yields a javascript: URL', (tag) => {
+    const el = document.createElement(tag);
+    createRoot(() => spread(el, { is: 'x-link', href: 'x:alert(1)', protocol: 'javascript' }, true));
+    expect(el.getAttribute('href') ?? '').not.toMatch(/^javascript:/i);
+    expect((el as HTMLAnchorElement).protocol).not.toBe('javascript:');
+  });
+
+  it.each(['protocol', 'host', 'hostname', 'pathname', 'search', 'hash', 'port', 'username', 'password', 'origin'])(
+    '<a is>: %s is never written as a property',
+    (name) => {
+      const a = document.createElement('a');
+      const writes: unknown[] = [];
+      Object.defineProperty(a, name, { configurable: true, set: (v) => void writes.push(v), get: () => '' });
+      createRoot(() => spread(a, { is: 'x-link', [name]: 'javascript' }, true));
+      expect(writes).toEqual([]);
+    },
+  );
+
+  it('a name on the native prototype goes the attribute path; a non-native name stays a property', () => {
+    const b = document.createElement('button');
+    const writes: unknown[] = [];
+    Object.defineProperty(Object.getPrototypeOf(b), 't9Native', { configurable: true, set: (v) => void writes.push(v), get: () => '' });
+    try {
+      createRoot(() => spread(b, { is: 'x-b', t9Native: 'v', myOwn: 5 }, true));
+      expect(writes).toEqual([]);
+      expect((b as any).myOwn).toBe(5);
+    } finally {
+      delete (Object.getPrototypeOf(b) as any).t9Native;
+    }
+  });
+});

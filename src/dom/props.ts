@@ -244,12 +244,28 @@ function setProp(node: Element, name: string, value: unknown): void {
   (node as unknown as Record<string, unknown>)[name] = value;
 }
 
+const HYPERLINK_TAGS = new Set(['a', 'area']);
+const URL_SETTERS = new Set(['protocol', 'host', 'hostname', 'pathname', 'search', 'hash', 'port', 'username', 'password', 'origin']);
+const nativePrototypes = new Map<string, object>();
+
+/** The prototype of a freshly made element of the same tag: what the browser itself defines on it. */
+function nativePrototype(node: Element): object {
+  const key = `${node.namespaceURI}|${node.localName}`;
+  let proto = nativePrototypes.get(key);
+  if (!proto) {
+    proto = Object.getPrototypeOf(node.ownerDocument.createElementNS(node.namespaceURI, node.localName)) as object;
+    nativePrototypes.set(key, proto);
+  }
+  return proto;
+}
+
 /**
  * `is` (or a dashed tag) makes unknown props properties: `some-prop` → `someProp`, camelCase as written.
  * The policy is applied to the FINAL property name, after that conversion. Only an autonomous custom
  * element (`my-el`) owns its setters; on a built-in element (`<a is=…>`, `<button is=…>`) a policed
  * name (URL, handler, `srcdoc`, including `form-action` → `formAction`) is written as an attribute
- * through `setAttribute`, whose policy then applies. `outerHTML` is never written, and `innerHTML`
+ * through `setAttribute`, whose policy then applies; so is any name the native element already has
+ * (`protocol`, …), and URL-component setters are refused on hyperlinks. `outerHTML` is never written, and `innerHTML`
  * only by its exact name (the known-property path), never through the dash conversion.
  */
 function assignCustomProp(node: Element, prop: string, value: unknown): void {
@@ -259,8 +275,17 @@ function assignCustomProp(node: Element, prop: string, value: unknown): void {
     return;
   }
   if (!node.nodeName.includes('-')) {
-    if (isPolicedName(name)) return setAttribute(node, name, value);
-    if (isPolicedName(prop)) return setAttribute(node, prop, value);
+    // A customized built-in: URL-component setters rewrite `href` behind the policy's back
+    // (`href="x:…"` + `protocol="javascript"`), so they are refused outright on hyperlinks...
+    if (HYPERLINK_TAGS.has(node.localName) && URL_SETTERS.has(name)) {
+      if (DEV) console.error(`[frameact] ${prop}= is a URL setter and is not written on <${node.localName} is>; set href instead.`);
+      return;
+    }
+    // ...and any name the native element already has (reflecting or not) takes the normal path, the
+    // attribute with its policy. Only names the built-in does not know are custom properties.
+    if (isPolicedName(name) || isPolicedName(prop) || name in nativePrototype(node)) {
+      return setAttribute(node, isPolicedName(name) || !isPolicedName(prop) ? name : prop, value);
+    }
   }
   setProp(node, name, value);
 }
