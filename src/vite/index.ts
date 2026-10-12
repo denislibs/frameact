@@ -1,3 +1,7 @@
+// Ambient types for the untyped Babel packages travel with the plugin source (an `import` cannot pull in
+// an ambient `declare module` file).
+// oxlint-disable-next-line typescript/triple-slash-reference
+/// <reference path="./modules.d.ts" />
 import { transformAsync } from '@babel/core';
 import typescript from '@babel/preset-typescript';
 import solid from '@solidjs/babel-plugin';
@@ -29,20 +33,68 @@ export interface FrameactPluginOptions {
   dev?: boolean;
   /** Files to compile (default `/\.[jt]sx$/`). */
   include?: RegExp;
-  /** Files to skip (default `/node_modules/`). */
+  /**
+   * Files to skip (default `/node_modules/`). A custom `exclude` REPLACES the default: pass
+   * `/node_modules|legacy/` to keep skipping dependencies. Virtual modules (ids starting with `\0`) are
+   * always skipped.
+   */
   exclude?: RegExp;
 }
 
 /**
- * `<input value={…}>` is written as a property by the compiler — only `use:value` controls it (spec §3.3).
- * The scan walks the opening tag up to the first `>`, stepping over `=>`, so an arrow function in an
- * earlier attribute (`onInput={e => …}`) does not end it. Known false negative: a bare `>` in an earlier
- * attribute expression (`disabled={n() > 1} value={v()}`) ends the scan early and the lint stays silent.
- * A source lint, not a parser; the runtime cannot see this misuse at all.
+ * Dev source lints. A scan over the JSX source, not a parser; the runtime cannot see these misuses.
+ *
+ * 1. `<input value={…}>` / `checked={…}` is written as a property by the compiler — only `use:value`
+ *    controls it (spec §3.3). The scan walks the opening tag up to the first `>`, stepping over `=>`, so
+ *    an arrow function in an earlier attribute (`onInput={e => …}`) does not end it. Literal values
+ *    (`value={"x"}`, `checked={true}`, numbers, `null`) are skipped: the compiler inlines them into the
+ *    template. Known false negative: a bare `>` in an earlier attribute expression
+ *    (`disabled={n() > 1} value={v()}`) ends the scan early and the lint stays silent. Known false
+ *    positive: a constant identifier (`value={LABEL}`) is not distinguished from a signal read.
+ * 2. A static string event attribute on an intrinsic element (`<div onclick="…">`): the compiler inlines
+ *    it into the template HTML, so the runtime's "no string handlers" check never sees it.
  */
-const CONTROLLED_PROP = /<(input|textarea|select)\b(?:=>|[^>])*?\s(value|checked)=\{/g;
+const CONTROLLED_PROP =
+  /<(input|textarea|select)\b(?:=>|[^>])*?\s(value|checked)=\{(?!\s*(?:"[^"]*"|'[^']*'|`[^`$]*`|-?\d[\d.]*|true|false|null|undefined)\s*\})/g;
+const STRING_HANDLER = /<[a-z][\w-]*\b(?:=>|[^>])*?\s(on[A-Za-z]+)=["']/g;
 
-/** Vite plugin: compile JSX/TSX with the Solid 2.0 compiler targeting `frameact/dom`. */
+interface Lint {
+  index: number;
+  message: string;
+}
+
+function lintSource(code: string): Lint[] {
+  const found: Lint[] = [];
+  for (const match of code.matchAll(CONTROLLED_PROP)) {
+    found.push({
+      index: match.index,
+      message: `<${match[1]} ${match[2]}={…}> is not controlled in frameact (the compiler writes the property directly). Use use:${match[2]}={accessor}.`,
+    });
+  }
+  for (const match of code.matchAll(STRING_HANDLER)) {
+    found.push({
+      index: match.index,
+      message: `${match[1]}="…" is a static string attribute: the compiler inlines it into the template HTML, bypassing the runtime's check. Use onClick={fn}-style handlers.`,
+    });
+  }
+  return found;
+}
+
+/** Rollup position (1-based line, 0-based column) of a character index. */
+function position(code: string, index: number) {
+  let line = 1;
+  let last = -1;
+  for (let at = code.indexOf('\n'); at !== -1 && at < index; at = code.indexOf('\n', at + 1)) {
+    line++;
+    last = at;
+  }
+  return { line, column: index - last - 1 };
+}
+
+/**
+ * Vite plugin: compile JSX/TSX with the Solid 2.0 compiler targeting `frameact/dom`. Client-side DOM
+ * only: SSR is not supported in v1, and Vite's `ssr` transform flag is ignored (output is always DOM).
+ */
 export default function frameact(options: FrameactPluginOptions = {}): Plugin {
   const include = options.include ?? /\.[jt]sx$/;
   const exclude = options.exclude ?? /node_modules/;
@@ -54,14 +106,11 @@ export default function frameact(options: FrameactPluginOptions = {}): Plugin {
       dev = options.dev ?? !config.isProduction;
     },
     async transform(code, id) {
+      if (id.startsWith('\0')) return null;
       const file = id.split('?')[0];
       if (!include.test(file) || exclude.test(file)) return null;
       if (dev) {
-        for (const match of code.matchAll(CONTROLLED_PROP)) {
-          this.warn(
-            `<${match[1]} ${match[2]}={…}> is not controlled in frameact (the compiler writes the property directly). Use use:${match[2]}={accessor}.`,
-          );
-        }
+        for (const lint of lintSource(code)) this.warn(lint.message, position(code, lint.index));
       }
       const result = await transformAsync(code, {
         filename: file,

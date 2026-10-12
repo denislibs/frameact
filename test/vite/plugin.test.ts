@@ -1,20 +1,24 @@
 import frameact, { compilerOptions } from '../../src/vite/index';
 
-async function compile(code: string, id: string, dev = true) {
-  const plugin = frameact({ dev });
+type Pos = { line: number; column: number } | number | undefined;
+
+async function compile(code: string, id: string, dev = true, options: Parameters<typeof frameact>[0] = {}) {
+  const plugin = frameact({ dev, ...options });
   const warnings: string[] = [];
+  const positions: Pos[] = [];
   const ctx = {
-    warn: (message: string | { message: string }) => {
+    warn: (message: string | { message: string }, pos?: Pos) => {
       warnings.push(typeof message === 'string' ? message : message.message);
+      positions.push(pos);
     },
   };
   const transform = plugin.transform as unknown as (
     this: typeof ctx,
     code: string,
     id: string,
-  ) => Promise<{ code: string } | null>;
+  ) => Promise<{ code: string; map?: unknown } | null>;
   const result = await transform.call(ctx, code, id);
-  return { code: result?.code ?? '', warnings };
+  return { code: result?.code ?? '', map: result?.map, warnings, positions };
 }
 
 const source = [
@@ -69,4 +73,69 @@ it('compilerOptions pins the compiler contract', () => {
     sourceNames: true,
     requireImportSource: false,
   });
+});
+
+it('lint warnings carry the line and column of the offending tag', async () => {
+  const code = 'const a = 1;\nconst b = (\n  <input value={s()} />\n);';
+  const { positions } = await compile(code, '/app/x.jsx');
+  expect(positions).toEqual([{ line: 3, column: 2 }]);
+});
+
+it('lint scan: literal value=/checked= are skipped; a constant identifier is a documented false positive; a bare > is a documented false negative', async () => {
+  const literals = await compile(
+    `const a = [<input value={"x"} />, <input value={'y'} />, <input value={3} />, <input checked={true} />, <input checked={false} />, <input value={null} />];`,
+    '/app/x.jsx',
+  );
+  expect(literals.warnings).toEqual([]);
+  // false positive: the compiler inlines a constant, but the lint cannot tell it from a signal read
+  const constant = await compile('const L = "x"; const a = <input value={L} />;', '/app/x.jsx');
+  expect(constant.warnings.length).toBe(1);
+  // false negative: a bare `>` in an earlier attribute expression ends the opening-tag scan early
+  const bare = await compile('const a = <input disabled={n() > 1} value={v()} />;', '/app/x.jsx');
+  expect(bare.warnings).toEqual([]);
+});
+
+it('warns in dev about static string on* attributes (inlined into the template, bypassing the runtime check)', async () => {
+  const code = 'const a = <div onclick="alert(1)" />; const b = <p onClick=\'x\'>t</p>; const ok = <div onClick={f} />; const c = <Button onClick="x" />;';
+  const dev = await compile(code, '/app/x.jsx');
+  expect(dev.warnings.length).toBe(2);
+  expect(dev.warnings[0]).toContain('onclick="…"');
+  expect(dev.warnings[1]).toContain('onClick="…"');
+  expect((await compile(code, '/app/x.jsx', false)).warnings).toEqual([]);
+});
+
+it('skips virtual modules; a custom exclude replaces the node_modules default', async () => {
+  expect((await compile('const a = <b/>;', '\0virtual:x.tsx')).code).toBe('');
+  const own = { exclude: /legacy/ };
+  expect((await compile('const a = <b/>;', '/app/legacy/a.jsx', true, own)).code).toBe('');
+  expect((await compile('const a = <b/>;', '/app/node_modules/x/a.jsx', true, own)).code).toContain('_$template');
+});
+
+it('returns a source map', async () => {
+  const { map } = await compile(source, '/app/App.tsx');
+  expect(map).toBeTruthy();
+  expect((map as { mappings: string }).mappings.length).toBeGreaterThan(0);
+});
+
+async function compileResolved(options: { dev?: boolean }, isProduction: boolean) {
+  const plugin = frameact(options);
+  (plugin.configResolved as unknown as (config: { isProduction: boolean }) => void)({ isProduction });
+  const warnings: string[] = [];
+  const transform = plugin.transform as unknown as (
+    this: { warn(m: string): void },
+    c: string,
+    i: string,
+  ) => Promise<{ code: string }>;
+  const result = await transform.call(
+    { warn: (message) => warnings.push(message) },
+    source + '\nconst i = <input value={s()} />;',
+    '/app/App.tsx',
+  );
+  return { named: result.code.includes('name:'), warned: warnings.length };
+}
+
+it('derives dev from the resolved config when the option is omitted; the option wins', async () => {
+  expect(await compileResolved({}, true)).toEqual({ named: false, warned: 0 });
+  expect(await compileResolved({}, false)).toEqual({ named: true, warned: 1 });
+  expect(await compileResolved({ dev: true }, true)).toEqual({ named: true, warned: 1 });
 });
