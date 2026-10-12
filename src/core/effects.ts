@@ -309,12 +309,29 @@ function releaseBailed(node: EffectNode) {
   node._bailed = null;
   for (const child of bailed) {
     if (child._state === STATE_DISPOSED) continue;
-    // One throwing custom scheduler must not lose the remaining children.
-    try {
-      child._schedule(child._run, child);
-    } catch (error) {
-      logEffectError(child, error);
+    // One throwing custom scheduler must not lose the remaining children, nor freeze its own.
+    bookRun(child);
+  }
+}
+
+/**
+ * Book the effect's run with its Schedule. A throwing custom Schedule (built-in ones never throw)
+ * is this effect's error: reported, never thrown to the caller — a notify() walk (that would cut it
+ * short, and from a memo's result write surface as that memo's compute error), the compute that
+ * creates the effect, the release of bailed children, the loop guard's macrotask. The node must not
+ * stay dirty with no run booked (only the CLEAN → dirty edge schedules: it would be frozen), so it
+ * goes back to CLEAN with F_THREW: its next change re-runs its compute even if the deps it saw look
+ * unchanged by then (and applies, if it never did).
+ */
+function bookRun(node: EffectNode) {
+  try {
+    node._schedule(node._run, node);
+  } catch (error) {
+    if (node._state !== STATE_DISPOSED) {
+      node._state = STATE_CLEAN;
+      node._flags |= F_THREW;
     }
+    logEffectError(node, error);
   }
 }
 
@@ -336,32 +353,11 @@ setEffectScheduler((raw) => {
       );
       node._selfDirty = 0;
       // The node is DIRTY already (notify set it): dropping the run would freeze it forever.
-      setTimeout(() => {
-        try {
-          node._schedule(node._run, node);
-        } catch (error) {
-          logEffectError(node, error);
-        }
-      }, 0);
+      setTimeout(() => bookRun(node), 0);
       return;
     }
   }
-  try {
-    node._schedule(node._run, node);
-  } catch (error) {
-    // A throwing custom Schedule (built-in ones never throw). It is this effect's error: reported,
-    // never thrown into the notify() walk — that would cut the walk short (the remaining
-    // subscribers would miss the write) and, from a memo's result write, surface as that memo's
-    // compute error. notify() marked the node dirty before calling us: with no run booked it would
-    // stay dirty and never be scheduled again (only the CLEAN → dirty edge schedules), so it goes
-    // back to CLEAN, with F_THREW: its next change re-runs its compute even if the deps it saw
-    // look unchanged by then.
-    if (node._state !== STATE_DISPOSED) {
-      node._state = STATE_CLEAN;
-      node._flags |= F_THREW;
-    }
-    logEffectError(node, error);
-  }
+  bookRun(node);
 });
 
 /** How an apply-cleanup runs when its effect is disposed. Task 9 replaces this to defer DOM cleanups to the mutate phase. */

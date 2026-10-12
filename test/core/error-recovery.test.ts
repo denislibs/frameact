@@ -438,3 +438,68 @@ it('re-review Minor 1 (N2): a held error replaced by a different error is a chan
   $s.set(3);
   expect($msg()).toBe('err3');
 });
+
+/** A schedule over `base` that throws once when armed. */
+function armedSchedule(base: Schedule) {
+  const ctl = { armed: false };
+  const schedule: Schedule = (run, node) => {
+    if (ctl.armed) {
+      ctl.armed = false;
+      throw new Error('scheduler');
+    }
+    base(run, node);
+  };
+  return { ctl, schedule };
+}
+
+describe('re-review Minor 2-3: every call of a custom Schedule follows the f545539 rule', () => {
+  it('N4b: a bailed child whose scheduler throws when it is released is not frozen', () => {
+    const { schedule, flush } = queue();
+    const { ctl, schedule: childSchedule } = armedSchedule(schedule);
+    const $a = signal(0);
+    const $s = signal(0);
+    const $m = computed(() => $s() * 0); // recomputes to the same value: the parent resolves CLEAN
+    const childSeen: number[] = [];
+    root(() =>
+      createEffect(() => {
+        createEffect(() => $a(), (v) => { childSeen.push(v); }, childSchedule);
+        return $m();
+      }, () => {}, schedule),
+    );
+    flush();
+    $a.set(1); // the child is booked first …
+    $s.set(1); // … the parent goes CHECK: the child bails onto it
+    ctl.armed = true; // re-scheduling the child on release throws
+    flush();
+    expect(errorSpy).toHaveBeenCalled();
+    $a.set(2);
+    flush();
+    expect(childSeen.at(-1)).toBe(2);
+  });
+
+  it('the self-dirty guard deferred re-schedule throwing does not freeze the effect', async () => {
+    let fail = false;
+    const runs: number[] = [];
+    const $n = signal(0);
+    const schedule: Schedule = (run) => {
+      if (fail) {
+        fail = false;
+        throw new Error('scheduler');
+      }
+      run();
+    };
+    root(() =>
+      createEffect(() => $n(), (v) => {
+        runs.push(v);
+        if (v < 150) $n.set(v + 1); // re-dirties itself from its apply: trips the guard at 100
+      }, schedule),
+    );
+    fail = true; // the deferred (setTimeout) re-schedule throws
+    await new Promise((r) => setTimeout(r, 5));
+    expect(errorSpy).toHaveBeenCalled();
+    const before = runs.length;
+    $n.set(1000);
+    expect(runs.length).toBeGreaterThan(before);
+    expect(runs.at(-1)).toBe(1000);
+  });
+});
