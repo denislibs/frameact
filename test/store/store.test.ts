@@ -127,7 +127,7 @@ describe('lazy leaf signals', () => {
     expect([...state.list]).toEqual([1, 3]);
   });
 
-  it('leaf signals of deleted keys are dropped: re-reading a re-added key creates a fresh leaf (a churning dictionary does not accumulate leaves)', () => {
+  it('the leaf of a deleted key stays while it has a reader (and is reused by a re-added key); it leaves the table with its last reader (a churning dictionary does not accumulate leaves)', () => {
     const [state, setState] = createStore({ byId: {} as Record<string, number> });
     setState('byId', 'k', 1);
     const log = createRoot(() => track(() => state.byId.k));
@@ -137,9 +137,9 @@ describe('lazy leaf signals', () => {
     expect(log).toEqual([1, undefined]);
     setState('byId', 'k', 2);
     createRoot(() => track(() => state.byId.k));
-    expect(storeStats.leafSignals - n).toBe(1); // a fresh leaf for `k`: the deleted key's leaf was dropped from the table
+    expect(storeStats.leafSignals - n).toBe(0); // the leaf of `k` is reused (its first reader never let go of it)
     flushSync();
-    expect(log).toEqual([1, undefined, 2]); // the old reader re-linked to the fresh leaf when it re-ran
+    expect(log).toEqual([1, undefined, 2]);
   });
 
   it('the root accepts merge/produce (and reconcile) only', () => {

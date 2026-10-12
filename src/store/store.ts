@@ -385,8 +385,8 @@ export function adopt(v: object): object {
 
 /**
  * Write `raw[key] = value` — or, when `value` is `undefined` and `deleteOnUndefined` holds, delete the
- * key — and notify what exists: the leaf (dropped from the table after a deletion: its readers are dirty
- * and re-link a fresh leaf if they still read the key), the array `length` (on truncation also the
+ * key — and notify what exists: the leaf (kept after a deletion, now reading `undefined`; it leaves the
+ * table with its last reader, see dropLeaf), the array `length` (on truncation also the
  * removed indexes) and the shape signal (arrays: any index/length write; objects: a key added or
  * removed). An object never read through a proxy has no node: nothing to notify.
  * Writing into a frozen object: a DEV `TypeError` with a clear message; in production the strict-mode
@@ -412,8 +412,7 @@ export function setProperty(raw: any, key: PropertyKey, value: unknown, deleteOn
   if (sigs !== null) {
     const s = sigs[key];
     if (s !== undefined) {
-      notifyLeaf(s, value);
-      if (del) dropLeaf(node, key, s);
+      notifyLeaf(s, value); // (a deleted key's leaf stays while it has a reader: it reads `undefined` now)
     }
     if (isArr) {
       const len = raw.length;

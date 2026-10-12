@@ -127,3 +127,31 @@ it('a local-signal reader next to a store leaf is unaffected', () => {
   d();
   expect(leafKeys(state)).toEqual([]);
 });
+
+// N6: deleting a key whose reader runs on a synchronous Schedule: the reader re-runs INSIDE notifyLeaf and
+// re-links to the leaf — the delete must not drop that leaf afterwards (it would never hear about the key again).
+describe.each([['sync', (r: () => void) => r()], ['tickEnd', undefined]] as const)('delete then re-add, reader on %s', (name, sched) => {
+  it('keeps hearing about the key', () => {
+    const [s, set] = createStore<{ a?: number }>({ a: 1 });
+    const log: unknown[] = [];
+    createRoot(() => createEffect(() => s.a, (v) => { log.push(v); }, sched as any));
+    flushSync();
+    set('a', undefined);
+    set('a', 7);
+    flushSync();
+    set('a', 8);
+    flushSync();
+    expect(log).toEqual([1, ...(name === 'sync' ? [undefined] : []), 7, 8]);
+  });
+});
+
+it('N6: after a delete the leaf of the key is released with its last reader', () => {
+  const [state, setState] = createStore<{ by: Record<string, number> }>({ by: { k: 1 } });
+  const dispose = mount(() => state.by.k);
+  expect(leafKeys(state.by)).toEqual(['k']);
+  setState('by', 'k', undefined);
+  flushSync();
+  expect(leafKeys(state.by)).toEqual(['k']);
+  dispose();
+  expect(leafKeys(state.by)).toEqual([]);
+});
