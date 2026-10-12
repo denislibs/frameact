@@ -1,6 +1,7 @@
 import { createHeavyAnimationScope, createRoot, createSignal, provideHeavyAnimationScope } from '../../src/index';
 import { setAttribute } from '../../src/dom/attributes';
 import { effect } from '../../src/dom/component';
+import { forceControlledValue } from '../../src/dom';
 import { delegateEvents, EVENT_KEY } from '../../src/dom/events';
 import { container, useDomHarness } from '../helpers/dom';
 
@@ -833,5 +834,114 @@ describe('M9: coverage', () => {
     expect(input.value).toBe('abか');
     await frame();
     expect(input.value).toBe('ab');
+  });
+});
+
+describe('forceControlledValue: explicit write-through (Android "Send -> clear")', () => {
+  it('is exported from frameact/dom', async () => {
+    expect(forceControlledValue).toBe((await import('../../src/dom/controlled')).forceControlledValue);
+  });
+
+  it('mid-composition: clears the field at once, cancels the composition, a late compositionend does not resurrect the text, typing restarts from empty', async () => {
+    const input = textInput();
+    const { text, setText } = controlled(input, acceptAll, '');
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    expect(text()).toBe('hello');
+    setText(''); // Send
+    forceControlledValue(input);
+    expect(input.value).toBe(''); // synchronously, the composition did not defer it
+    expect(document.activeElement).toBe(input); // blur + focus: the keyboard stays up
+    await frame();
+    expect(input.value).toBe('');
+    // the cancelled composition's compositionend arrives late; the browser may even re-insert its text
+    input.value = 'hello';
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    await frame();
+    expect(input.value).toBe('');
+    expect(text()).toBe('');
+    // the user keeps typing: only the new characters, in a fresh composition
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'h');
+    expect(input.value).toBe('h');
+    expect(text()).toBe('h');
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    await frame();
+    expect(input.value).toBe('h');
+    expect(text()).toBe('h');
+  });
+
+  it('mid-composition: composing input that continues without a new compositionstart is still only the new characters, and later programmatic writes apply', async () => {
+    const input = textInput();
+    const { text, setText } = controlled(input, acceptAll, '');
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    setText('');
+    forceControlledValue(input);
+    compose(input, 'h'); // 'helloh' in the reviewer's P9 scenario
+    expect(input.value).toBe('h');
+    expect(text()).toBe('h');
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    setText('zz');
+    await frame();
+    expect(input.value).toBe('zz');
+  });
+
+  it('drops a deferred programmatic write: nothing is applied behind the explicit value', async () => {
+    const input = textInput();
+    const { setText } = controlled(input, acceptAll, '');
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    setText('old'); // deferred during the composition
+    await frame();
+    forceControlledValue(input, 'new');
+    setText('new');
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    await frame();
+    expect(input.value).toBe('new');
+  });
+
+  it('no composition: a plain synchronous write, caret at the end', async () => {
+    const input = textInput();
+    const { setText } = controlled(input, () => () => {}, 'ab');
+    input.setSelectionRange(0, 0);
+    setText('abcdef');
+    forceControlledValue(input);
+    expect(input.value).toBe('abcdef');
+    expect(input.selectionStart).toBe(6);
+    expect(input.selectionEnd).toBe(6);
+    await frame();
+    expect(input.value).toBe('abcdef');
+  });
+
+  it('plain form: the explicit value is written at once and recorded as delivered; the compiler effect delivering it later changes nothing', async () => {
+    const input = textInput();
+    const [text, setText] = createSignal('');
+    createRoot(() => effect(() => text(), (v) => { setAttribute(input, 'use:value', v); }));
+    (input as any)[EVENT_KEY + 'input'] = (e: Event) => setText((e.currentTarget as HTMLInputElement).value);
+    delegateEvents(['input']);
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    await frame();
+    setText('');
+    forceControlledValue(input, ''); // the effect has not delivered '' yet
+    expect(input.value).toBe('');
+    const writes = vi.spyOn(HTMLInputElement.prototype, 'value', 'set');
+    await frame();
+    expect(writes).not.toHaveBeenCalled(); // delivery equals the DOM: no re-apply
+    writes.mockRestore();
+    type(input, 'w');
+    await frame();
+    expect(input.value).toBe('w');
+    expect(text()).toBe('w');
+  });
+
+  it('an element without a use:value binding: just sets el.value (DEV warning)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const input = textInput();
+    forceControlledValue(input, 'q');
+    expect(input.value).toBe('q');
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

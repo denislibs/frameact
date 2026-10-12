@@ -48,6 +48,8 @@ interface ValueBinding extends Binding<TextControl> {
   readonly expire: () => void;
   /** A programmatic write arrived during composition: compositionend applies the newest value. */
   deferredWrite: boolean;
+  /** forceControlledValue cancelled a composition: its late compositionend is only checked, never trusted. */
+  cancelled: boolean;
 }
 
 type CheckedBinding = Binding<HTMLInputElement>;
@@ -267,6 +269,7 @@ const valueKind: Kind<ValueBinding> = {
     b.expiring = false;
     (b as { expire: () => void }).expire = () => expire(b);
     b.deferredWrite = false;
+    b.cancelled = false;
     return b;
   },
   write: writeValue,
@@ -322,13 +325,23 @@ function onSelectionChange(e: Event): void {
 
 function onCompositionStart(e: Event): void {
   const b = lookup(valueKind, targetOf(e));
-  if (b) b.composing = true;
+  if (b) {
+    b.composing = true;
+    b.cancelled = false; // a new composition: the cancelled one is over
+  }
 }
 
 function onCompositionEnd(e: Event): void {
   const b = lookup(valueKind, targetOf(e));
   if (!b) return;
   b.composing = false;
+  if (b.cancelled) {
+    // The end of a composition forceControlledValue cancelled: its text must not come back. No
+    // snapshot, no deferred write; the check restores the authoritative value if the engine re-inserted it.
+    b.cancelled = false;
+    deferCheck(b);
+    return;
+  }
   snapshot(b);
   armExpiry(b);
   if (b.deferredWrite) {
@@ -492,3 +505,44 @@ function checkedDirective(el: Element, value: unknown): void {
 
 defineBuiltinDirective('value', valueDirective);
 defineBuiltinDirective('checked', checkedDirective);
+
+/**
+ * Explicit write-through for a control bound with `use:value`: writes `value` into the DOM at once,
+ * whatever the IME is doing. For "Send -> clear the field" on Android, where every word is a
+ * composition and a programmatic write would otherwise wait for `compositionend` (and lose to the
+ * user's next letters). Call it after the signal already holds the value (in the plain form, where the
+ * compiler's effect has not delivered yet, pass `value`).
+ *
+ * `value` omitted: the binding's current authoritative value (the live accessor, or the last
+ * delivered plain value). The value is recorded as delivered, so no rollback or re-apply follows; a
+ * deferred programmatic write and the composition state are dropped. A focused field in the middle of a
+ * composition is blurred and focused again (`preventScroll`) to cancel the composition; the caret goes
+ * to the end of the new value. The cancelled composition's late `compositionend` cannot bring its text
+ * back. An element without a `use:value` binding just gets `el.value = value` (and a DEV warning).
+ */
+export function forceControlledValue(el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value?: unknown): void {
+  const b = lookup(valueKind, el);
+  if (!b) {
+    if (DEV) console.warn('[frameact] forceControlledValue: the element has no use:value binding; writing el.value directly.', el);
+    if (value !== undefined) el.value = toText(value);
+    return;
+  }
+  const next = toText(value === undefined ? current(b) : value);
+  const wasComposing = b.composing;
+  const focused = isFocused(el);
+  b.composing = false;
+  b.deferredWrite = false;
+  b.cancelled = wasComposing;
+  b.delivered = value === undefined ? b.delivered : value;
+  b.hasSelection = false;
+  if (wasComposing && focused) el.blur(); // ends the composition: the engine commits or drops its text first
+  el.value = next;
+  if (wasComposing && focused) el.focus({ preventScroll: true });
+  if (isFocused(el) && 'setSelectionRange' in el) {
+    try {
+      el.setSelectionRange(next.length, next.length);
+    } catch {
+      // input types without a selection API
+    }
+  }
+}
