@@ -16,7 +16,7 @@ import { runWithOwner, untrack } from '../index';
 import { isUnsafeAttribute, setAttribute, setBoolAttribute } from './attributes';
 import { className, classList } from './classes';
 import { Aliases, ChildProperties, DelegatedEvents, getPropAlias, Properties, SVG_NS } from './constants';
-import { addEvent, delegateEvents, setListener } from './events';
+import { addEvent, delegateEvents, setListener, tupleListener } from './events';
 import { insert, insertExpression, normalize } from './insert';
 import { style } from './styles';
 
@@ -216,35 +216,6 @@ function setProp(node: Element, name: string, value: unknown): void {
   (node as unknown as Record<string, unknown>)[name] = value;
 }
 
-// Non-delegated `onX` listeners a spread attached, per element and event: replaced or removed on change.
-const spreadListeners = new WeakMap<Element, Map<string, EventListener | EventListenerObject>>();
-
-function setSpreadListener(node: Element, event: string, handler: unknown): void {
-  let map = spreadListeners.get(node);
-  const prev = map?.get(event);
-  if (prev) {
-    node.removeEventListener(event, prev);
-    map!.delete(event);
-  }
-  let listener: EventListener | EventListenerObject | undefined;
-  if (typeof handler === 'function') listener = handler as EventListener;
-  else if (Array.isArray(handler)) {
-    const [fn, data] = handler as [unknown, unknown];
-    if (typeof fn === 'function') listener = (e: Event) => (fn as (data: unknown, e: Event) => void).call(node, data, e);
-  } else if (typeof handler === 'object' && handler !== null && typeof (handler as EventListenerObject).handleEvent === 'function') {
-    listener = handler as EventListenerObject;
-  }
-  if (!listener) {
-    if (handler != null && handler !== false && DEV) {
-      console.error(`[frameact] onX=: the handler for "${event}" must be a function, a [fn, data] tuple or an object with handleEvent; got`, handler);
-    }
-    return;
-  }
-  if (!map) spreadListeners.set(node, (map = new Map()));
-  map.set(event, listener);
-  node.addEventListener(event, listener);
-}
-
 /**
  * `is` (or a dashed tag) makes unknown props properties: `some-prop` → `someProp`, camelCase as written.
  * The policy is applied to the FINAL property name, after that conversion. Only an autonomous custom
@@ -309,9 +280,15 @@ function assignProp(
     if (c > 64 && c < 91) {
       const event = prop.slice(2).toLowerCase();
       if (DelegatedEvents.has(event)) {
+        // A refused value (a string, say) must not leave the previous handler behind.
+        if (typeof value !== 'function') addEvent(node, event, null, true);
         addEvent(node, event, value, true);
         delegateEvents([event], node.ownerDocument);
-      } else setSpreadListener(node, event, value);
+      } else {
+        // setListener owns the bookkeeping (options of a handleEvent object, capture on removal). It
+        // shares its per-element slot with `on:<event>`: use one of the two for an event.
+        setListener(node, event, Array.isArray(value) ? (tupleListener(node, value) ?? value) : value, false);
+      }
       return value;
     }
   }

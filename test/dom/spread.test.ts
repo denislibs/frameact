@@ -391,3 +391,49 @@ describe('style and directives through a spread', () => {
     expect(errors).toHaveBeenCalledWith(expect.stringContaining('unknown directive use:nope'));
   });
 });
+
+describe('events through a spread', () => {
+  it('a handleEvent object keeps its options: once fires once, capture is removed with capture', async () => {
+    const el = container();
+    const onceCalls: string[] = [];
+    const captured: string[] = [];
+    const [props, setProps] = createSignal<Record<string, unknown>>({
+      onCustomone: { once: true, handleEvent: () => onceCalls.push('once') },
+      onCustomcap: { capture: true, handleEvent: () => captured.push('cap') },
+    });
+    createRoot(() => spread(el, () => props(), true));
+    el.dispatchEvent(new Event('customone'));
+    el.dispatchEvent(new Event('customone'));
+    expect(onceCalls).toEqual(['once']);
+    el.dispatchEvent(new Event('customcap'));
+    expect(captured).toEqual(['cap']);
+    setProps({});
+    await frame();
+    el.dispatchEvent(new Event('customcap'));
+    expect(captured).toEqual(['cap']);
+  });
+
+  it('a delegated handler that is replaced by a refused value stops firing', async () => {
+    expectDevErrors();
+    const el = container();
+    const clicks: number[] = [];
+    const [props, setProps] = createSignal<Record<string, unknown>>({ onClick: () => clicks.push(1) });
+    createRoot(() => spread(el, () => props(), true));
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    setProps({ onClick: 'alert(1)' });
+    await frame();
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(clicks).toEqual([1]);
+  });
+
+  it('a delegated onClick that disappears from the bag stops firing', async () => {
+    const el = container();
+    const clicks: number[] = [];
+    const [props, setProps] = createSignal<Record<string, unknown>>({ onClick: () => clicks.push(1) });
+    createRoot(() => spread(el, () => props(), true));
+    setProps({});
+    await frame();
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(clicks).toEqual([]);
+  });
+});
