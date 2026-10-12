@@ -118,9 +118,16 @@ function lookup<B extends Binding<any>>(kind: Kind<B>, el: unknown): B | undefin
 function runDeferred(b: Binding<any>): void {
   b.pending = false;
   if (lookup(b.kind, b.el) !== b) return; // released or replaced since the check was queued
-  // A dirty, queued or gating-parked compiler effect still has a delivery to make, and that
-  // delivery is authoritative (for an accepted input it equals the DOM, so nothing is written).
+  // A dirty, queued or gating-parked compiler effect may still have a delivery to make, and that
+  // delivery is authoritative (for an accepted input it equals the DOM, so nothing is written). It
+  // may also turn clean WITHOUT a delivery (its compute returned the same value), so the check is
+  // not dropped: it is re-queued (from a mutate task, that is the next frame) until the effect is
+  // clean, then it compares.
   if (b.live || b.effect === null || isEffectClean(b.effect)) check(b);
+  else {
+    b.pending = true;
+    requestMutation(b.runDeferred);
+  }
 }
 
 /**

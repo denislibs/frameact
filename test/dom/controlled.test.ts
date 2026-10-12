@@ -370,3 +370,22 @@ describe('M3: disposing the binding releases the element', () => {
     expect(input.value).toBe('zz');
   });
 });
+
+it('M1: a skipped deferred check is re-armed: the effect turning clean without a delivery (same compute result) still gets the rejected keystroke rolled back', async () => {
+  const input = textInput();
+  // use:value={props.draft().text}; the handler rejects the text but touches another draft field
+  const [draft, setDraft] = createSignal({ text: 'ab', touched: 0 }, { equals: false });
+  const scope = gatedPlainInput(input, () => draft().text);
+  (input as any)[EVENT_KEY + 'input'] = () => setDraft((d) => ({ text: d.text, touched: d.touched + 1 }));
+  delegateEvents(['input']);
+  const end = scope.begin(Infinity, true);
+  type(input, 'ab1');
+  await frame(); // the compiler effect is dirty and parked: the check waits
+  expect(input.value).toBe('ab1');
+  end();
+  await frame(); // released: recomputes 'ab' (unchanged), so no delivery
+  await frame();
+  expect(input.value).toBe('ab');
+  await frame();
+  expect(pending()).toBe(0); // the re-armed check stopped once it ran
+});
