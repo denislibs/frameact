@@ -2,6 +2,7 @@ import { createRoot, createSignal, requestMutation } from '../../src/index';
 import { createComponent } from '../../src/dom/component';
 import { insert } from '../../src/dom/insert';
 import { For } from '../../src/dom/list';
+import { createStore, produce } from 'frameact/store';
 import { createScrollAnchor } from '../../src/kit/scrollAnchor';
 import { container, useDomHarness } from '../helpers/dom';
 import { fakeLayout, resetLayout } from '../helpers/layout';
@@ -55,5 +56,29 @@ describe('items written in the mutate phase', () => {
     setItems([...ids(-10, 0), ...items()]); // an ordinary change, from outside the frame: snapshot in time, restored
     await frame();
     expect(root.scrollTop).toBe(600);
+  });
+});
+
+describe('a store array is followed by its shape version, not by copies of its items', () => {
+  it('a list change reads no item of the array (one O(1) subscription instead of O(n) copies per effect)', async () => {
+    const root = container();
+    fakeLayout(root);
+    for (const id of ids(0, 50)) root.append(row(id));
+    const raw = ids(0, 50).map((id) => ({ id }));
+    let reads = 0;
+    raw.forEach((item, i) => {
+      Object.defineProperty(raw, i, { configurable: true, enumerable: true, get: () => { reads++; return item; }, set: () => {} });
+    });
+    const [state, setState] = createStore({ items: raw });
+    createRoot(() => createScrollAnchor({ container: () => root, items: () => state.items }));
+    await frame();
+    reads = 0;
+    setState('items', produce((list: { id: number }[]) => { list.push({ id: 50 }); }));
+    root.append(row(50));
+    await frame();
+    root.scrollTop = 80;
+    setState('items', produce((list: { id: number }[]) => { list.push({ id: 51 }); }));
+    await frame();
+    expect(reads).toBe(0);
   });
 });

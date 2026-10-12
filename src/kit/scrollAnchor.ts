@@ -11,7 +11,7 @@
 // phase order (the store-gate release goes through a measure task — audit R1): create the anchor under
 // the same heavy-animation scope as the list it anchors, so that they park and release together.
 import { createEffect, createMeasureEffect, createMemo, createMutationEffect, createSignal, frameForcedReflow, untrack, type Accessor } from '../index';
-import { TRACK } from '../core/symbols';
+import { SHAPE, TRACK } from '../core/symbols';
 
 /**
  * What a list change is detected by: a store array (model B: `produce`/`reconcile` rewrite it in
@@ -24,6 +24,33 @@ export function trackItems(value: unknown): unknown {
     if (shape !== undefined) return shape;
   }
   return value;
+}
+
+/**
+ * Subscribe to a list's changes without reading its items: a store array through its shape version
+ * (`Symbol.for('frameact.shape')`: one link, a number, no copy — `trackItems` builds a fresh O(n) array
+ * on every read), anything else by its own identity (the value itself). The result is only for
+ * subscribing: a store array's version can repeat across two different arrays, so detect "changed"
+ * with `createItemsVersion`, not by comparing results.
+ */
+export function trackShape(value: unknown): unknown {
+  if (value !== null && typeof value === 'object') {
+    const version = (value as { [SHAPE]?: unknown })[SHAPE];
+    if (version !== undefined) return version;
+  }
+  return value;
+}
+
+/**
+ * A memo that yields a new number for every change of the list `items()` returns (a new value, or a
+ * shape change of a store array in place), in O(1) per change. Effects over it run once per change.
+ */
+export function createItemsVersion(items: Accessor<unknown>): Accessor<number> {
+  let version = 0;
+  return createMemo(() => {
+    trackShape(items());
+    return ++version;
+  });
 }
 
 export interface ScrollAnchorOptions {
@@ -73,11 +100,7 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
   }
 
   // One number per change of the list (identity, or shape of a store array), shared by the effects below.
-  let changes = 0;
-  const tracked = createMemo(() => {
-    trackItems(items());
-    return ++changes;
-  });
+  const tracked = createItemsVersion(items);
   // The change the last snapshot was taken for. A restore is only valid against a snapshot of ITS change:
   // when the items are written in the mutate phase (an `onStop` run from a mutation task, a store write
   // from a mutation apply) the measure effect cannot run in that frame (it moves to the next), and
