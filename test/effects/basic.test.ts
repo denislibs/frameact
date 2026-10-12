@@ -170,3 +170,37 @@ it('M2: two tickEnd effects dirtying each other are reported and yield to macrot
   dispose();
   err.mockRestore();
 });
+
+describe('effect compute dispatch (perf: computeNode goes straight to update() when DIRTY)', () => {
+  it('prev is passed to the compute itself: undefined on the first run, then the last value', async () => {
+    const $a = signal(1);
+    const prevs: unknown[] = [];
+    root(() => createEffect((prev) => { prevs.push(prev); return $a() * 10; }, () => {}));
+    $a.set(2);
+    await flushMicrotasks();
+    $a.set(3);
+    await flushMicrotasks();
+    expect(prevs).toEqual([undefined, 10, 20]);
+  });
+
+  it('an effect on a signal recomputes once per change; behind a memo that resolves unchanged it does not recompute', async () => {
+    const $a = signal(1);
+    const parity = computed(() => $a() % 2);
+    const onSignal = vi.fn(() => $a());
+    const onMemo = vi.fn(() => parity());
+    root(() => {
+      createEffect(onSignal, () => {});
+      createEffect(onMemo, () => {});
+    });
+    expect(onSignal).toHaveBeenCalledTimes(1);
+    expect(onMemo).toHaveBeenCalledTimes(1);
+    $a.set(3); // same parity: the memo-backed effect is CHECK, verifies, stays
+    await flushMicrotasks();
+    expect(onSignal).toHaveBeenCalledTimes(2);
+    expect(onMemo).toHaveBeenCalledTimes(1);
+    $a.set(4); // parity changes
+    await flushMicrotasks();
+    expect(onSignal).toHaveBeenCalledTimes(3);
+    expect(onMemo).toHaveBeenCalledTimes(2);
+  });
+});

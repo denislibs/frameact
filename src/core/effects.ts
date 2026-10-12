@@ -19,6 +19,7 @@ import {
   setEffectScheduler,
   setInEffectApply,
   STATE_CLEAN,
+  STATE_DIRTY,
   STATE_DISPOSED,
   update,
   updateCheck,
@@ -228,14 +229,9 @@ export function createEffect<T>(
   options?: EffectOptions,
 ): void {
   if (DEV) assertApplyOwner();
-  const node: EffectNode<T> = new (Effect as any)(
-    function (this: EffectNode<T>) {
-      return compute(this._flags & F_INIT ? this._value : undefined);
-    },
-    apply,
-    schedule,
-    options,
-  );
+  // The compute is stored as is: update() calls an effect's compute with `prev` (the last value, or
+  // undefined before the first successful run) — no wrapper closure per effect, one call less per run.
+  const node: EffectNode<T> = new (Effect as any)(compute, apply, schedule, options);
 
   // First compute: synchronous, tracked, under the owner that created the effect.
   if (!computeNode(node)) return;
@@ -295,8 +291,10 @@ function computeNode(node: EffectNode): boolean {
   try {
     const init = node._flags & F_INIT;
     if (node._state === STATE_CLEAN && init) return true;
-    if (init) updateCheck(node);
-    else update(node);
+    // DIRTY (a signal it reads changed) or not yet initialised: straight to update(); CHECK (a memo it
+    // reads may have changed): verify the deps first. (What updateCheck() does, minus a call.)
+    if (!init || node._state === STATE_DIRTY) update(node);
+    else updateCheck(node);
     return node._state !== STATE_DISPOSED && (node._flags & F_INIT) !== 0;
   } catch (error) {
     // update() already offered the error to onError handlers and re-threw: just report.

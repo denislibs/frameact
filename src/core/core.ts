@@ -931,12 +931,6 @@ function hasDirtyDep(node: Computation): boolean {
   return false;
 }
 
-function cleanup(node: Computation) {
-  if (node._lastChild !== null) dispose.call(node, false);
-  if (node._disposal) emptyDisposal(node);
-  node._handlers = node[SCOPE] ? node[SCOPE]._handlers : null;
-}
-
 export function update(node: Computation) {
   // Re-entry: a synchronous effect, woken by a write this compute made (or by this node's own
   // result write), reads the node before its update() has finished. It gets the current value;
@@ -958,7 +952,12 @@ export function update(node: Computation) {
     prevCycle = currentCycle;
 
   try {
-    cleanup(node);
+    // cleanup: owned children and onCleanup() callbacks of the previous run go first; the error
+    // handlers are the owner's again (onError() in the compute prepends to them).
+    if (node._lastChild !== null) dispose.call(node, false);
+    if (node._disposal !== null) emptyDisposal(node);
+    const owner = node[SCOPE];
+    node._handlers = owner !== null ? owner._handlers : null;
     // A cleanup disposed the node itself (e.g. a child's cleanup disposing its owner): no compute.
     if (node._state === STATE_DISPOSED) return;
 
@@ -968,7 +967,10 @@ export function update(node: Computation) {
     currentObserver = node;
     currentStartEpoch = writeEpoch;
     currentCycle = ++cycle;
-    const result = node._compute!.call(node);
+    // An effect's compute takes `prev` (its last value; undefined before the first successful run).
+    const result = node._effect
+      ? (node._compute as (prev: unknown) => unknown).call(node, node._flags & F_INIT ? node._value : undefined)
+      : node._compute!.call(node);
     currentScope = prevScope;
     currentObserver = prevObserver;
     currentStartEpoch = prevStartEpoch;
