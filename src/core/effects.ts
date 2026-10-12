@@ -93,6 +93,16 @@ const SELF_DIRTY_LIMIT = 100;
 /** The effect whose apply/compute is currently running (dev attribution for stricterdom). */
 export let currentEffect: EffectNode | null = null;
 
+/** @internal for dom directives: the effect whose compute/apply is running right now, or null. */
+export function getRunningEffect(): EffectNode | null {
+  return currentEffect;
+}
+
+/** @internal for dom directives: true when the effect is CLEAN: not dirty, not queued and not parked by gating (those all leave it dirty). */
+export function isEffectClean(node: EffectNode): boolean {
+  return node._state === STATE_CLEAN;
+}
+
 /** Max tickEnd runs of one effect within one flushTickEnd drain before it is treated as a loop. */
 const TICK_LIMIT = 100;
 
