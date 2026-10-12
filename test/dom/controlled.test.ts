@@ -608,3 +608,26 @@ describe('I4: a programmatic write during composition is deferred to composition
     expect(input.value).toBe('hello w');
   });
 });
+
+describe('M2: focusout ends a composition whose compositionend never came', () => {
+  it('later programmatic writes are applied again', async () => {
+    const input = textInput();
+    const { setText } = controlled(input, () => () => {});
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    input.blur(); // removed/hidden mid-composition: no compositionend
+    setText('zz');
+    await frame();
+    expect(input.value).toBe('zz');
+  });
+
+  it('a write deferred during the composition is applied at focusout', async () => {
+    const input = textInput();
+    const { setText } = controlled(input, () => () => {});
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    setText('zz');
+    await frame();
+    expect(input.value).toBe('ab');
+    input.blur();
+    expect(input.value).toBe('zz');
+  });
+});

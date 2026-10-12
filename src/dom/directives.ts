@@ -338,7 +338,15 @@ function onCompositionEnd(e: Event): void {
 
 function onFocusOut(e: Event): void {
   const b = lookup(valueKind, e.target);
-  if (b) b.hasSelection = false;
+  if (!b) return;
+  b.hasSelection = false;
+  // A composition cannot outlive the focus; compositionend may never come (the element was hidden
+  // or removed mid-composition), which would otherwise block every later write.
+  b.composing = false;
+  if (b.deferredWrite) {
+    b.deferredWrite = false;
+    writeValue(b, current(b));
+  }
 }
 
 /**
