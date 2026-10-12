@@ -969,7 +969,7 @@ export function update(node: Computation) {
     currentCycle = ++cycle;
     // An effect's compute takes `prev` (its last value; undefined before the first successful run).
     const result = node._effect
-      ? (node._compute as (prev: unknown) => unknown).call(node, node._flags & F_INIT ? node._value : undefined)
+      ? (node._compute as (prev: unknown) => unknown)(node._flags & F_INIT ? node._value : undefined)
       : node._compute!.call(node);
     currentScope = prevScope;
     currentObserver = prevObserver;

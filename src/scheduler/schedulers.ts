@@ -189,6 +189,8 @@ export function flushTickEnd() {
     if (--tickDrainDepth === 0) {
       if (tickNext === tickLen) {
         tickNext = tickLen = 0;
+        // Don't keep a burst-sized backing store alive (the array only ever grows otherwise).
+        if (tickQueue.length > 4096) tickQueue.length = 0;
       } else if (!tickBooked) {
         // Callbacks queued after the escaped batch was taken: re-book the microtask that onTickEnd
         // skipped while we were draining, or the queue would stall.

@@ -17,7 +17,10 @@ export function setPhase(next: Phase) {
   phaseListeners.forEach((listener) => listener(next));
 }
 
-/** stricterdom (plan 4) subscribes here. */
+/**
+ * Called on every phase switch of a frame pass or a non-empty `flushSync()` (stricterdom subscribes
+ * here). An empty `flushSync()` returns early and switches no phases, so listeners see nothing for it.
+ */
 export function onPhaseChange(listener: (phase: Phase) => void) {
   phaseListeners.add(listener);
   return () => {
