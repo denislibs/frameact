@@ -13,7 +13,7 @@
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import { createMemo, runWithOwner, untrack } from '../index';
-import { isUnsafeAttribute, setAttribute, setBoolAttribute, setProperty } from './attributes';
+import { isUnsafeAttribute, setAttribute, setBoolAttribute, setProp, setProperty } from './attributes';
 import { className, classList } from './classes';
 import { Aliases, ChildProperties, DelegatedEvents, getPropAlias, Properties, SVG_NS } from './constants';
 import { addEvent, delegateEvents, setListener, tupleListener } from './events';
@@ -234,15 +234,6 @@ function toPropertyName(name: string): string {
 /** Is `name` an attribute whose value `setAttribute` polices (a URL, an event handler, `srcdoc`)? */
 function isPolicedName(name: string): boolean {
   return isUnsafeAttribute(name, 'javascript:0');
-}
-
-/** `el[name] = value` for names that come from an untrusted bag: never the prototype. */
-function setProp(node: Element, name: string, value: unknown): void {
-  if (name === '__proto__') {
-    if (DEV) console.error('[frameact] a property named __proto__ is not written onto an element.');
-    return;
-  }
-  (node as unknown as Record<string, unknown>)[name] = value;
 }
 
 const HYPERLINK_TAGS = new Set(['a', 'area']);

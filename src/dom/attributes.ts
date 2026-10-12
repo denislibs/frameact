@@ -146,6 +146,20 @@ function report(name: string, value: unknown, reason: Refusal): void {
   }
 }
 
+const PROTOTYPE_SLOTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * `el[name] = value` for names that come from `prop:<name>` or an untrusted bag: never the
+ * prototype (`__proto__`) nor the constructor/prototype slots. A refused write is logged in DEV.
+ */
+export function setProp(node: Element, name: string, value: unknown): void {
+  if (PROTOTYPE_SLOTS.has(name)) {
+    if (DEV) console.error(`[frameact] a property named ${name} is not written onto an element.`);
+    return;
+  }
+  (node as unknown as Record<string, unknown>)[name] = value;
+}
+
 /** Compiler primitive. */
 export function setAttribute(node: Element, name: string, value: unknown): void {
   if (name.indexOf(':') > -1) {
@@ -156,8 +170,7 @@ export function setAttribute(node: Element, name: string, value: unknown): void 
     if (name.startsWith('oncapture:')) return setListener(node, name.slice(10), value, true);
     if (name.startsWith('bool:')) return setBoolAttribute(node, name.slice(5), value);
     if (name.startsWith('prop:')) {
-      (node as unknown as Record<string, unknown>)[name.slice(5)] = value;
-      return;
+      return setProp(node, name.slice(5), value);
     }
     if (name.startsWith('attr:')) name = name.slice(5);
     else {

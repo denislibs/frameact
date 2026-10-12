@@ -235,3 +235,25 @@ describe('<script src> refuses data: (any MIME)', () => {
     expect(img.hasAttribute('src')).toBe(true);
   });
 });
+
+describe('prop:<name> never writes the prototype slots', () => {
+  it.each(['__proto__', 'constructor', 'prototype'])('prop:%s is refused with a diagnostic', (name) => {
+    const div = document.createElement('div');
+    const proto = Object.getPrototypeOf(div);
+    const ctor = div.constructor;
+    const hostile = { polluted: 'yes' };
+    setAttribute(div, `prop:${name}`, hostile);
+    expect(Object.getPrototypeOf(div)).toBe(proto);
+    expect(div.constructor).toBe(ctor);
+    expect(Object.hasOwn(div, 'prototype')).toBe(false);
+    expect((div as unknown as { polluted?: string }).polluted).toBeUndefined();
+    expect(errors).toHaveBeenCalledTimes(1);
+  });
+
+  it('an ordinary prop: write still goes through', () => {
+    const input = document.createElement('input');
+    setAttribute(input, 'prop:value', 'ok');
+    expect(input.value).toBe('ok');
+    expect(errors).not.toHaveBeenCalled();
+  });
+});
