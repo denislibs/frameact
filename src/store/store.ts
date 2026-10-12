@@ -45,9 +45,23 @@ const nodes = new WeakMap<object, StoreNode>();
 export function isWrappable(v: unknown): v is object {
   if (v === null || typeof v !== 'object') return false;
   if (Object.isFrozen(v)) return false;
-  if (Array.isArray(v)) return true;
+  if (Array.isArray(v)) return v !== Array.prototype;
   const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
+  if (proto === null) return v !== Object.prototype;
+  if (proto !== Object.prototype) return false;
+  // a builtin prototype object (`Map.prototype`, `Date.prototype`…) is an ordinary object whose own
+  // `constructor` points back at it: never data, and writing into it pollutes every instance
+  if (Object.hasOwn(v, 'constructor')) {
+    const c = Object.getOwnPropertyDescriptor(v, 'constructor')!.value;
+    if (typeof c === 'function' && c.prototype === v) return false;
+  }
+  return true;
+}
+
+/** The key that would reach `Object.prototype` / change a prototype: data never gets to use it. */
+const PROTO_KEY = '__proto__';
+function dropProto(where: string): void {
+  if (DEV) console.error(`[frameact/store] the key "__proto__" was ignored (${where}): it can never be stored`);
 }
 
 function readOnly(): never {
@@ -91,15 +105,19 @@ class StoreNode {
       if (key === $RAW) return target;
       if (key === $TRACK) return Array.isArray(target) ? trackedItems(this) : undefined;
     }
-    if (getObserver() !== null && typeof key !== 'symbol' && (typeof value !== 'function' || Object.hasOwn(target, key))) {
-      trackKey(this, key, value);
+    const isObj = typeof value === 'object' && value !== null;
+    if (isObj && key === PROTO_KEY) return undefined; // never hand out Object.prototype / Array.prototype
+    if (getObserver() !== null && typeof key !== 'symbol') {
+      if (typeof value !== 'function') trackKey(this, key, value);
+      else if (Object.hasOwn(target, key)) trackKey(this, key, value);
+      else if (!Array.isArray(target)) trackSelf(this); // an inherited member (`constructor`, `toString`…) a key of that name may shadow: the shape fires when it appears
     }
-    if (typeof value === 'object' && value !== null) return wrap(value);
+    if (isObj) return wrap(value);
     return value;
   }
 
   has(target: any, key: PropertyKey): boolean {
-    if (getObserver() !== null && typeof key !== 'symbol') trackKey(this, key, target[key]);
+    if (getObserver() !== null && typeof key !== 'symbol') trackKey(this, key, Object.hasOwn(target, key) ? target[key] : undefined);
     return key in target;
   }
 
@@ -126,6 +144,12 @@ class StoreNode {
     return readOnly();
   }
   defineProperty(): boolean {
+    return readOnly();
+  }
+  setPrototypeOf(): boolean {
+    return readOnly();
+  }
+  preventExtensions(): boolean {
     return readOnly();
   }
 }
@@ -205,20 +229,40 @@ function notifyLeaf(s: Computation, value: unknown) {
 /**
  * Raw-tree invariant: no proxy inside. A new object written into the store (a spread copy of a store
  * object carries the proxies of its nested objects; `merge({ y: state.a.b })` carries one directly) is
- * unwrapped deeply — O(its new part): the walk stops at objects already in the tree (raw by the
- * invariant) and at values. A cyclic NEW object graph is not supported (infinite recursion).
+ * unwrapped deeply and stripped of its own `__proto__` keys (JSON.parse creates them; a later spread
+ * would turn one into a prototype change). The walk covers the NEW value: it stops at store proxies
+ * (their raw object is in the tree already), at objects that were ever read through a proxy and at
+ * values — but an object of the tree that was never read has no node, so the walk goes through it too
+ * (like Solid's deep unwrap). Iterative, with a visited set: a cyclic or very deep new graph is safe.
  */
 function adopt(v: object): object {
   const r = (v as any)[$RAW];
   if (r !== undefined) return r; // a store proxy or a produce draft
   if (nodes.has(v) || !isWrappable(v)) return v;
-  const o = v as Record<string, unknown>;
-  const keys = Object.keys(o);
-  for (let i = 0; i < keys.length; i++) {
-    const c = o[keys[i]];
-    if (c !== null && typeof c === 'object') {
-      const a = adopt(c);
-      if (a !== c) o[keys[i]] = a;
+  let seen: Set<object> | null = null; // (allocated by the first nested object only)
+  let stack: object[] = [v];
+  while (stack.length !== 0) {
+    const o = stack.pop() as Record<string, unknown>;
+    const keys = Object.keys(o);
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (k === PROTO_KEY) {
+        delete o[k];
+        dropProto('new data');
+        continue;
+      }
+      const c = o[k];
+      if (c === null || typeof c !== 'object') continue;
+      const raw = (c as any)[$RAW];
+      if (raw !== undefined) {
+        o[k] = raw;
+        continue;
+      }
+      if (nodes.has(c) || !isWrappable(c)) continue;
+      if (seen === null) seen = new Set([v]);
+      if (seen.has(c)) continue;
+      seen.add(c);
+      stack.push(c);
     }
   }
   return v;
@@ -234,9 +278,10 @@ function adopt(v: object): object {
  * assignment throws the native one.
  */
 export function setProperty(raw: any, key: PropertyKey, value: unknown, deleteOnUndefined = true): void {
+  if (key === PROTO_KEY) return dropProto('setState');
   if (value !== null && typeof value === 'object') value = adopt(value);
-  const prev = raw[key];
-  const had = prev !== undefined || Object.hasOwn(raw, key);
+  const had = Object.hasOwn(raw, key); // (own only: `constructor` / `toString` are valid dictionary keys)
+  const prev = had ? raw[key] : undefined;
   const del = value === undefined && deleteOnUndefined;
   if (del ? !had : prev === value && (had || value !== undefined)) return;
   if (DEV && Object.isFrozen(raw)) {
@@ -294,81 +339,146 @@ export function merge<P extends object>(partial: P): Merger<P> {
       throw new TypeError('[frameact/store] merge(): the value at the path is not a plain object');
     }
     const keys = Object.keys(next);
-    for (let i = 0; i < keys.length; i++) setProperty(prev, keys[i], next[keys[i]]);
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i] === PROTO_KEY) dropProto('merge');
+      else setProperty(prev, keys[i], next[keys[i]]);
+    }
     return prev;
   }) as unknown as Merger<P>;
 }
 
 type PathPart = PropertyKey | readonly PropertyKey[] | ((item: any, index: number) => boolean);
 
+/** `list[3] = x` on a 1-item list would leave holes (For renders them as undefined rows): append with produce. */
+function checkIndex(parent: any, key: PropertyKey): void {
+  if (!Array.isArray(parent) || key === 'length') return;
+  const n = typeof key === 'number' ? key : typeof key === 'string' && String(+key) === key ? +key : -1;
+  if (n > parent.length) {
+    throw new TypeError(`[frameact/store] setState(…, ${n}, …): the index is beyond the length (${parent.length}) and would leave holes — use produce(a => a.push(x))`);
+  }
+}
+
+/** A hole is never what is wanted (For renders an undefined item, JSON turns it into null). */
+function checkHole(parent: any, key: PropertyKey): never {
+  throw new TypeError(`[frameact/store] setState(…, ${String(key)}, undefined): use produce(a => a.splice(i, 1)) to remove an item`);
+}
+
 /** Apply the last argument of setState at `parent[key]`: a value replaces, `undefined` deletes a key, an updater runs first. */
 function applyAt(parent: any, key: PropertyKey, value: unknown): void {
+  checkIndex(parent, key);
   if (typeof value === 'function') {
-    const prev = parent[key];
+    const prev = Object.hasOwn(parent, key) ? parent[key] : undefined;
     value = (value as (prev: unknown) => unknown)(prev);
     if (value === prev) return; // merge / produce / reconcile mutated in place
   }
-  if (value === undefined && Array.isArray(parent)) {
-    // A hole is never what is wanted (For renders an undefined item, JSON turns it into null).
-    throw new TypeError(`[frameact/store] setState(…, ${String(key)}, undefined): use produce(a => a.splice(i, 1)) to remove an item`);
-  }
+  if (value === undefined && Array.isArray(parent)) checkHole(parent, key);
   setProperty(parent, key, unwrap(value));
 }
 
-function fanOut(current: any, part: PathPart, apply: (key: PropertyKey) => void): boolean {
-  if (Array.isArray(part)) {
-    for (let j = 0; j < part.length; j++) apply(part[j]);
-    return true;
-  }
+/** The keys a path part selects, or `null` for a plain key. */
+function fanKeys(current: any, part: PathPart): readonly PropertyKey[] | null {
+  if (Array.isArray(part)) return part;
   if (typeof part === 'function') {
     if (!Array.isArray(current)) throw new TypeError('[frameact/store] a filter function in a path selects items of an array');
-    for (let j = 0; j < current.length; j++) if (part(current[j], j)) apply(j);
-    return true;
+    const out: number[] = [];
+    for (let j = 0; j < current.length; j++) if (part(current[j], j)) out.push(j);
+    return out;
   }
-  return false;
+  return null;
 }
 
-/** Walk `path` (the setState arguments) from `current`; iterative over plain keys, recursive only where a part fans out. */
-function updatePath(current: any, path: unknown[], i: number): void {
+/** The child object at an OWN key (an inherited `__proto__`, `constructor`… is never descended into). */
+function descend(current: any, key: PropertyKey): any {
+  const child = Object.hasOwn(current, key) ? current[key] : undefined;
+  if (child === null || typeof child !== 'object' || child === Object.prototype || child === Array.prototype) {
+    throw new TypeError(`[frameact/store] setState: nothing to descend into at "${String(key)}" (${String(child)})`);
+  }
+  return child;
+}
+
+/**
+ * Walk `path` (the setState arguments) from `current`; iterative over plain keys, recursive only where a
+ * part fans out. `dry`: validate only (the descent and the static checks of the last part) — a path
+ * with a fan-out is walked dry first, so that a missing child or a bad index applies nothing.
+ */
+function updatePath(current: any, path: unknown[], i: number, dry: boolean): void {
   const last = path.length - 1; // the value
   for (; i < last - 1; i++) {
     const part = path[i] as PathPart;
-    if (fanOut(current, part, (key) => updatePath(current[key], path, i + 1))) return;
-    current = current[part as PropertyKey];
-    if (current === null || typeof current !== 'object') {
-      throw new TypeError(`[frameact/store] setState: nothing to descend into at "${String(part)}" (${String(current)})`);
+    const keys = fanKeys(current, part);
+    if (keys !== null) {
+      for (let j = 0; j < keys.length; j++) updatePath(descend(current, keys[j]), path, i + 1, dry);
+      return;
     }
+    current = descend(current, part as PropertyKey);
   }
   const value = path[last];
   if (i === last) {
     // The root: its object cannot be replaced (the proxy is bound to it): merge / produce / reconcile only.
-    if (typeof value !== 'function' || (value as (prev: unknown) => unknown)(current) !== current) {
+    if (typeof value !== 'function' || (!dry && (value as (prev: unknown) => unknown)(current) !== current)) {
       throw new TypeError('[frameact/store] setState(value): the root cannot be replaced — use merge(), produce() or reconcile()');
     }
     return;
   }
   const part = path[last - 1] as PathPart;
-  if (fanOut(current, part, (key) => applyAt(current, key, value))) return;
-  applyAt(current, part as PropertyKey, value);
+  const keys = fanKeys(current, part);
+  if (keys !== null) {
+    for (let j = 0; j < keys.length; j++) {
+      if (dry) {
+        checkIndex(current, keys[j]);
+        if (value === undefined && Array.isArray(current)) checkHole(current, keys[j]);
+      } else applyAt(current, keys[j], value);
+    }
+  } else if (dry) {
+    checkIndex(current, part as PropertyKey);
+    if (value === undefined && Array.isArray(current)) checkHole(current, part as PropertyKey);
+  } else applyAt(current, part as PropertyKey, value);
+}
+
+function setPath(root: any, path: unknown[]): void {
+  let fan = false;
+  for (let i = 0; i < path.length - 1; i++) {
+    const p = path[i];
+    if (typeof p === 'function' || Array.isArray(p)) fan = true;
+  }
+  if (fan) updatePath(root, path, 0, true);
+  updatePath(root, path, 0, false);
 }
 
 // ---- produce ------------------------------------------------------------------------------------
 
+/** > 0 while a produce callback runs: a draft kept past it (a closure, an await) cannot write. */
+let draftDepth = 0;
+function staleDraft(): boolean {
+  if (DEV) throw new TypeError('[frameact/store] a produce() draft was written after produce() returned (a draft leaked past its callback): write through setState');
+  return true; // production: dropped, like a write to a detached object
+}
 const drafts = new WeakMap<object, any>();
 const draftHandler: ProxyHandler<any> = {
   get(target, key) {
     if (key === $RAW) return target;
     const v = target[key];
-    return isWrappable(v) ? draftOf(v) : v;
+    if (typeof v === 'object' && v !== null) return key === PROTO_KEY ? undefined : isWrappable(v) ? draftOf(v) : v;
+    return v;
   },
   set(target, key, value) {
+    if (draftDepth === 0) return staleDraft();
+    if (key === PROTO_KEY) {
+      dropProto('produce');
+      return true;
+    }
     setProperty(target, key, unwrap(value), false); // JS semantics: `draft[k] = undefined` stores undefined
     return true;
   },
   deleteProperty(target, key) {
+    if (draftDepth === 0) return staleDraft();
+    if (key === PROTO_KEY) return true;
     setProperty(target, key, undefined); // `delete draft[k]`: the key goes (an array gets a hole)
     return true;
   },
+  defineProperty: readOnly,
+  setPrototypeOf: readOnly,
+  preventExtensions: readOnly,
 };
 function draftOf(raw: object): any {
   let d = drafts.get(raw);
@@ -380,13 +490,24 @@ function draftOf(raw: object): any {
  * Draft mutation: `setState('chats', id, produce(c => { c.title = t; c.unread++ }))`. Every
  * assignment is a leaf write (only that leaf notifies); nothing is copied, identities are kept.
  * Arrays keep JS semantics inside: `splice` shifts, `delete draft[i]` leaves a hole, `draft[i] =
- * undefined` stores the value. A frozen value cannot be drafted (DEV `TypeError`): replace it.
+ * undefined` stores the value. The draft is valid inside the callback only (a write after it returns
+ * throws in DEV, is dropped in production). The value at the path must be a plain object or array: a
+ * frozen value, a class instance or a primitive cannot be drafted (`TypeError`) — replace it instead.
  */
 export function produce<T>(fn: (draft: T) => void): (prev: unknown) => T {
   return (prev) => {
-    if (isWrappable(prev)) fn(draftOf(prev) as T);
-    else if (DEV && prev !== null && typeof prev === 'object' && Object.isFrozen(prev)) {
-      throw new TypeError('[frameact/store] produce(): the value at the path is frozen (an immutable value) — replace it instead');
+    if (!isWrappable(prev)) {
+      throw new TypeError(
+        prev !== null && typeof prev === 'object' && Object.isFrozen(prev)
+          ? '[frameact/store] produce(): the value at the path is frozen (an immutable value) — replace it instead'
+          : '[frameact/store] produce(): the value at the path is not a plain object or array',
+      );
+    }
+    draftDepth++;
+    try {
+      fn(draftOf(prev) as T);
+    } finally {
+      draftDepth--;
     }
     return prev as unknown as T;
   };
@@ -459,9 +580,10 @@ export interface SetStoreFunction<T> {
  */
 export function createStore<T extends object>(initial: T): [Store<T>, SetStoreFunction<T>] {
   const raw = unwrap(initial);
+  adopt(raw); // (a proxy of another store inside `initial` would break the no-proxy invariant; own `__proto__` keys go)
   if (Object.isFrozen(raw)) throw new TypeError('[frameact/store] createStore: the root object is frozen; the store owns and mutates its state');
   const node = nodes.get(raw) ?? new StoreNode(raw);
-  const setState = ((...args: unknown[]) => updatePath(raw, args, 0)) as SetStoreFunction<T>;
+  const setState = ((...args: unknown[]) => setPath(raw, args)) as SetStoreFunction<T>;
   return [node.proxy as Store<T>, setState];
 }
 

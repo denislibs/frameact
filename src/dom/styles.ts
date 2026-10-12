@@ -60,7 +60,7 @@ export function style(node: Element, value: unknown, prev?: unknown): void {
   if (!value) {
     if (typeof applied === 'string' || typeof prev === 'string') nodeStyle.cssText = '';
     if (applied !== undefined) {
-      if (typeof applied === 'object') for (const name in applied) nodeStyle.removeProperty(name);
+      if (typeof applied === 'object') for (const name of Object.keys(applied)) nodeStyle.removeProperty(name);
       appliedStyles.delete(node);
     }
     return;
@@ -76,9 +76,9 @@ export function style(node: Element, value: unknown, prev?: unknown): void {
   const next: Record<string, unknown> = {};
   const obj = value as Record<string, unknown>;
   if (previous) {
-    for (const name in previous) if (!(name in obj) || obj[name] == null) nodeStyle.removeProperty(name);
+    for (const name of Object.keys(previous)) if (!Object.hasOwn(obj, name) || obj[name] == null) nodeStyle.removeProperty(name);
   }
-  for (const name in obj) {
+  for (const name of Object.keys(obj)) {
     const v = obj[name];
     if (v == null) continue;
     if (!previous || previous[name] !== v) writeProperty(nodeStyle, name, v);
@@ -97,7 +97,7 @@ export function setStyleProperty(node: Element, name: string, value: unknown): v
 /** Imperative styles (teact API): camelCase properties are assigned, `--custom` ones set; null removes. */
 export function setExtraStyles(el: Element, styles: Record<string, string | number | null | undefined>): void {
   const nodeStyle = (el as Styled).style;
-  for (const name in styles) {
+  for (const name of Object.keys(styles)) {
     const v = styles[name];
     if (name.startsWith('--')) {
       if (v == null) nodeStyle.removeProperty(name);

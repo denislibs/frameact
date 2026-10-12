@@ -18,7 +18,7 @@ export type Mutable<T> = T extends (...args: any[]) => any
 
 /** `parent[prop]` ← `next`: a changed primitive, a type change or a different key replaces; same-shaped objects recurse. */
 function applyState(next: any, parent: any, prop: PropertyKey, key: string | null): void {
-  const prev = parent[prop];
+  const prev = parent[prop]; // (callers pass own keys of `parent`)
   if (next === prev) return;
   if (
     !isWrappable(next) ||
@@ -37,20 +37,26 @@ function reconcileInto(prev: any, next: any, key: string | null): void {
     reconcileArray(prev, next, key);
     return;
   }
-  let prevCount = 0; // prev's keys BEFORE the loop (an explicit `undefined` in next deletes during it)
-  for (const k in prev) if (k !== undefined) prevCount++;
+  // OWN keys only, on both sides: an inherited (polluted) key is never data, and a `__proto__` own key of
+  // JSON-parsed input never reaches `prev['__proto__']` (Object.prototype)
+  const nextKeys = Object.keys(next);
+  const prevCount = Object.keys(prev).length; // prev's keys BEFORE the loop (an explicit `undefined` in next deletes during it)
   let present = 0; // keys of `next` that `prev` has too
-  for (const k in next) {
+  for (let i = 0; i < nextKeys.length; i++) {
+    const k = nextKeys[i];
+    if (k === '__proto__') continue; // (adopt strips it from new data; here it is merged data)
     const nv = next[k];
-    const pv = prev[k];
-    if (pv !== undefined || Object.hasOwn(prev, k)) present++;
+    const has = Object.hasOwn(prev, k);
+    if (has) present++;
+    const pv = has ? prev[k] : undefined;
     if (nv === pv) continue; // (the common case: an unchanged primitive)
     if (typeof nv === 'object' && nv !== null && typeof pv === 'object' && pv !== null) applyState(nv, prev, k, key);
     else setProperty(prev, k, nv); // (an `undefined` value deletes the key)
   }
   // deletions only when `prev` has keys `next` lacks: prevCount === present ⇔ every key of prev is in next
   if (prevCount !== present) {
-    for (const k in prev) if (!Object.hasOwn(next, k)) setProperty(prev, k, undefined);
+    const prevKeys = Object.keys(prev);
+    for (let i = 0; i < prevKeys.length; i++) if (!Object.hasOwn(next, prevKeys[i])) setProperty(prev, prevKeys[i], undefined);
   }
 }
 
