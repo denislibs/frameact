@@ -44,6 +44,48 @@ export function isAnyScopeBlocking(): boolean {
   return blockingScopes !== 0;
 }
 
+/** Number of scopes currently animating (blocking or not). */
+let animatingScopes = 0;
+
+/** @internal The store gate's zero-cost exit: true while any scope animates. */
+export function isAnyScopeAnimating(): boolean {
+  return animatingScopes !== 0;
+}
+
+/*
+ * Store-gate sampling (frame.ts drains): one decision per drain, by animation-begin epoch. Opening a
+ * drain takes a new epoch; a scope counts as animating for that drain only if it animates NOW and
+ * began BEFORE the drain opened. So an applier that begins an animation mid-drain does not split the
+ * frame it is part of; a scope that ended mid-drain no longer counts and the chain is checked further
+ * up (a nested scope that ended does not hide an outer one that still animates). Outside a drain the
+ * chain is read live. A nested drain (flushSync from an applier) takes its own epoch and the outer
+ * drain's is restored after it.
+ */
+let epochCounter = 0;
+let sampleEpoch = 0; // 0: no drain open (live)
+const beganAt = new WeakMap<HeavyAnimationScope, number>();
+
+/** @internal Open a drain's sample; returns the previous epoch for closeGateSample. */
+export function openGateSample(): number {
+  const prev = sampleEpoch;
+  sampleEpoch = ++epochCounter;
+  return prev;
+}
+
+/** @internal */
+export function closeGateSample(prev: number) {
+  sampleEpoch = prev;
+}
+
+/** @internal First scope in the chain that animates as sampled by the current drain (live outside a drain). */
+export function firstAnimatingScopeSampled(scope: HeavyAnimationScope): HeavyAnimationScope | null {
+  if (animatingScopes === 0) return null;
+  for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) {
+    if (s.isAnimating.peek() && (sampleEpoch === 0 || beganAt.get(s)! < sampleEpoch)) return s;
+  }
+  return null;
+}
+
 /** onHeavyAnimation listeners, kept per scope (not exposed on the scope object). */
 const scopeListeners = new WeakMap<HeavyAnimationScope, Set<AnimationListener>>();
 
@@ -116,6 +158,10 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
       counter++;
       if (isBlocking) counterBlocking++;
       const animatingChanged = counter === 1 ? setAnimating(true) : null;
+      if (counter === 1) {
+        animatingScopes++;
+        beganAt.set(scope, epochCounter); // the drain epoch this animation began in (store-gate sampling)
+      }
       const blockingChanged = isBlocking && counterBlocking === 1 ? setBlocking(true) : null;
       if (isBlocking && counterBlocking === 1) blockingScopes++;
 
@@ -133,6 +179,7 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
         counter--;
         if (isBlocking) counterBlocking--;
         const animatingEnded = counter === 0 ? setAnimating(false) : null;
+        if (counter === 0) animatingScopes--;
         const blockingEnded = isBlocking && counterBlocking === 0 ? setBlocking(false) : null;
         if (isBlocking && counterBlocking === 0) blockingScopes--;
         notify(animatingEnded, blockingEnded, false);

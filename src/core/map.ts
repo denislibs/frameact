@@ -3,6 +3,7 @@
 
 import { DEV } from '../env';
 import { compute, createComputation, createScope, dispose, disposeChildren, handleError, read, scoped, write } from './core';
+import { TRACK } from './symbols';
 import type { Computation, Maybe, ReadSignal, Scope } from './types';
 
 export * from './selector';
@@ -606,6 +607,17 @@ export function mapArray<Item, Mapped>(
   options: MapArrayOptions<Item> = {},
 ): ReadSignal<Mapped[]> {
   const keyed = options.keyed ?? true;
+  // A store array (spec §3.5 req. 10): `list()[TRACK]` subscribes the map to the array's shape only
+  // (one link, fired by any index/length write) and returns a plain array of item proxies, iterated
+  // untracked. Item content changes reach the rows through their own leaf reads, never the map.
+  // A plain array has no such key: the symbol read is a miss.
+  const source = list;
+  list = (() => {
+    const l = source();
+    if (l == null) return l;
+    const items = (l as any)[TRACK];
+    return items !== undefined ? items : l;
+  }) as typeof list;
   if (keyed === true) return computedKeyedMap(list, mapFn, options);
   if (keyed === false) return computedMap(list, mapFn, options);
   return computedKeyedMapBy(list, keyed, mapFn, options);

@@ -5,6 +5,7 @@ import {
   isDomWritingSchedule,
   isDrainGuardedSchedule,
   markDrainGuarded,
+  markStoreGated,
   markWritesDom,
   NOT_APPLIED,
   setApplyCleanupDisposer,
@@ -13,7 +14,7 @@ import {
   type Schedule,
 } from './effects';
 import { getPhase, requestForcedReflow, requestMeasure, requestMutation } from '../scheduler/fasterdom';
-import { firstAnimatingScope, isAnyScopeBlocking, onFullyIdle, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
+import { closeGateSample, firstAnimatingScope, isAnyScopeBlocking, onFullyIdle, openGateSample, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
 import { computed, signal } from './signals';
 
 export type FramePhase = 'measure' | 'mutate' | 'reflow';
@@ -113,6 +114,7 @@ export function drain(phase: FramePhase) {
   const gating = isAnyScopeBlocking();
   let blockCache: Map<HeavyAnimationScope, HeavyAnimationScope | null> | null = null;
   let overflow: QueueItem[] | null = null;
+  const prevSample = openGateSample(); // the store gate decides once per drain (heavyAnimation.ts)
   try {
     for (let i = 0; i < queue.length; i++) {
       const item = queue[i];
@@ -153,6 +155,7 @@ export function drain(phase: FramePhase) {
       }
     }
   } finally {
+    closeGateSample(prevSample);
     queues[phase] = [];
     armed[phase] = false;
   }
@@ -167,6 +170,10 @@ markWritesDom(frameMutation);
 markDrainGuarded(frameMeasure);
 markDrainGuarded(frameMutation);
 markDrainGuarded(frameForcedReflow);
+// The store gate parks store-caused runs of frame effects (spec §3.5 req. 6); tickEnd/idle never.
+markStoreGated(frameMeasure);
+markStoreGated(frameMutation);
+markStoreGated(frameForcedReflow);
 
 /** Reads layout. First apply is scheduled (after attach), never synchronous. */
 export function createMeasureEffect<T>(
@@ -321,6 +328,7 @@ export function gateOnHeavyAnimation(schedule: Schedule, options: { blocking?: b
   };
   if (isDomWritingSchedule(schedule)) markWritesDom(gated);
   if (isDrainGuardedSchedule(schedule)) markDrainGuarded(gated);
+  markStoreGated(gated); // an explicit opt-in into waiting for animations: store-caused runs park here too
   return gated;
 }
 

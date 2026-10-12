@@ -4,6 +4,10 @@ import {
   callUnowned,
   computationPrototype,
   F_INIT,
+  F_LIVE,
+  F_LIVE_PIN,
+  F_PARKED,
+  F_STORE,
   F_THREW,
   handleError,
   initComputationNode,
@@ -46,6 +50,8 @@ export interface EffectNode<T = any> extends Computation<T> {
   _drainEpoch: number;
   /** @internal frame drain loop guard: runs within `_drainEpoch` */
   _drainRuns: number;
+  /** @internal its schedule is a frame queue or a gateOnHeavyAnimation wrapper: store-caused runs wait for heavy animations (store gate) */
+  _storeGated: boolean;
 }
 
 export interface EffectOptions {
@@ -86,6 +92,17 @@ export function markDrainGuarded(schedule: Schedule) {
 /** @internal */
 export function isDrainGuardedSchedule(schedule: Schedule) {
   return drainGuardedSchedules.has(schedule);
+}
+
+const storeGatedSchedules = new WeakSet<Schedule>();
+
+/**
+ * @internal Marks a schedule whose effects the store gate may park (spec §3.5 req. 6): the frame
+ * queues and gateOnHeavyAnimation wrappers (frame.ts). tickEnd and idle effects are never parked —
+ * logic does not wait for animations, and idle waits for them on its own.
+ */
+export function markStoreGated(schedule: Schedule) {
+  storeGatedSchedules.add(schedule);
 }
 
 const SELF_DIRTY_LIMIT = 100;
@@ -202,6 +219,7 @@ function Effect(
   this._tickRuns = 0;
   this._drainEpoch = 0;
   this._drainRuns = 0;
+  this._storeGated = storeGatedSchedules.has(schedule);
 }
 Effect.prototype = computationPrototype;
 
@@ -229,8 +247,43 @@ function computeNode(node: EffectNode): boolean {
   }
 }
 
+/**
+ * The store gate (installed by src/store/gate.ts when `frameact/store` is imported). Called for a run
+ * of a store-gated effect that is dirty because of store writes only and not live; returns true when it
+ * parked the effect (left dirty, no run booked). Without a store nothing carries F_STORE.
+ */
+let storeGate: ((node: EffectNode) => boolean) | null = null;
+export function setStoreGate(fn: (node: EffectNode) => boolean) {
+  storeGate = fn;
+}
+
+/** @internal store gate: mark the effect parked (it stays dirty with no run booked). */
+export function parkEffect(node: EffectNode) {
+  node._flags |= F_PARKED;
+}
+
+/**
+ * @internal store gate: book the run of a parked effect again (release). False when it was unparked
+ * (ran) or disposed meanwhile. F_STORE stays: if another scope in the chain still animates, the run
+ * parks there again.
+ */
+export function rebookParked(node: EffectNode): boolean {
+  if (node._state === STATE_DISPOSED || !(node._flags & F_PARKED)) return false;
+  node._flags &= ~F_PARKED;
+  bookRun(node);
+  return true;
+}
+
+/** @internal the heavy-animation scope snapped when the effect was created. */
+export function effectScopeOf(node: EffectNode): HeavyAnimationScope {
+  return node._scope;
+}
+
 function runEffect(node: EffectNode) {
   if (node._state === STATE_DISPOSED) return;
+  // Store gate (spec §3.5): decided when the run executes — once per drain, the gate samples the
+  // scopes — not when the write happens. A parked effect stays dirty; a plain walk unparks it.
+  if (node._flags & F_STORE && node._storeGated && !(node._flags & (F_LIVE | F_LIVE_PIN)) && storeGate !== null && storeGate(node)) return;
 
   // Ancestor rule (spec §3.2): never run an ancestor effect's compute from here. Check the WHOLE
   // owner chain for effects first; bail onto the nearest non-CLEAN one — its own run disposes us
@@ -252,6 +305,17 @@ function runEffect(node: EffectNode) {
         if (p._effect) {
           if (p._state !== STATE_CLEAN) {
             ((p as EffectNode)._bailed ??= []).push(node);
+            // An ancestor parked by the store gate would hold this (plain) run until the animation ends.
+            // Run the ancestor now, as a plain run (its store change lands early, in one piece with
+            // ours), and this run after it (released from its _bailed).
+            if (p._flags & F_PARKED) {
+              p._flags &= ~(F_PARKED | F_STORE);
+              bookRun(p as EffectNode);
+            } else if (p._flags & F_STORE) {
+              // Booked but not run yet (this run was queued before it): its run must not park — this
+              // plain run waits on it (ancestor rule), so the ancestor runs now, as a plain run.
+              p._flags &= ~F_STORE;
+            }
             bailed = true; // the finally below must not run: this run did not happen
             return;
           }
