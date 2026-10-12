@@ -295,3 +295,37 @@ describe('render: pre-existing children', () => {
     expect(el.innerHTML).toBe('');
   });
 });
+
+describe('top-level parameterized function (a row mapper is a value, not an accessor)', () => {
+  it.each([
+    ['root mode', undefined],
+    ['multi mode', null],
+  ])('%s: warns and renders as nothing, clearing old content', (_name, marker) => {
+    const el = container();
+    el.innerHTML = 'old';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      insert(el, (item: unknown) => item, marker, marker === undefined ? 'old' : undefined);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(el.textContent).toBe(marker === undefined ? '' : 'old');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('reactive: a signal switching to a row mapper clears the slot with a warning', async () => {
+    const el = container();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const [v, set] = createSignal<unknown>('a');
+      createRoot(() => insert(el, v));
+      expect(el.innerHTML).toBe('a');
+      set(() => (item: unknown) => item); // a function argument is an updater
+      await frame();
+      expect(el.innerHTML).toBe('');
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

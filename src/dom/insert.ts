@@ -84,7 +84,9 @@ function flattenArray(children: any[], results: any[], skipNonRendered: boolean,
 /** Compute-half value shape: primitives stay raw (text nodes are materialised in the apply, reusing positional ones). */
 export function normalize(value: any, multi: boolean, doNotUnwrap: boolean): any {
   value = flatten(value, true, doNotUnwrap);
-  if (doNotUnwrap && typeof value === 'function') return value;
+  // Only a zero-parameter function is an accessor that gets its own effect. A function with parameters
+  // (a row mapper) is a value: it falls through to insertExpression, which renders it as nothing.
+  if (doNotUnwrap && typeof value === 'function' && !value.length) return value;
   if (multi && !Array.isArray(value)) value = [value != null ? value : ''];
   return value;
 }
@@ -104,9 +106,9 @@ export function insert(
   const multi = marker !== undefined;
   const host = options?.host;
   if (multi && !initial) initial = [];
-  if (typeof accessor !== 'function') {
+  if (typeof accessor !== 'function' || (accessor as (...args: unknown[]) => unknown).length) {
     const value = normalize(accessor, multi, true);
-    if (typeof value !== 'function') {
+    if (typeof value !== 'function' || value.length) {
       const inserted = insertExpression(parent, value, initial, marker);
       if (host) tagHost(inserted, host);
       return;
@@ -172,6 +174,11 @@ export function insertExpression(parent: MountableElement, value: any, current: 
   }
   if (value == null || t === 'boolean') return cleanChildren(parent, current, marker);
   if (t === 'function') {
+    if (value.length) {
+      // Same as an array item: a row mapper is not renderable. Renders as nothing, old content cleared.
+      if (DEV) console.warn('[frameact] Unrecognized child value. Rendered as nothing', value);
+      return cleanChildren(parent, current, marker);
+    }
     if (DEV) console.error('[frameact] insertExpression: unexpected function value (normalize first)', value);
     return current;
   }
