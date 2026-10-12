@@ -166,6 +166,20 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
 <For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
 ```
 
+## Кит
+
+`frameact/kit` — тонкий UI-слой, который нужен клиенту класса Telegram Web A до основных экранов, на тех
+же контрактах классов, что у telegram-tt (стили приносит клиент): `<Transition>` (слайды по ключу,
+предыдущий слайд живёт до конца анимации, политики cleanup, scope heavy-animation на поддерево,
+`animationend` читается в событии и применяется в mutate-фазе), `createShowTransition` /
+`<ShowTransition>` / `createMediaTransition`, `<InfiniteScroll>` и `createScrollAnchor` (якорь снимается в
+measure-фазе, список обновляется в mutate, позиция восстанавливается в forced-reflow — один кадр, в том
+числе после релиза из-под heavy-animation). Примитивы под ним лежат в ядре: `onMount`, `onDestroy`,
+`previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation` (`frameact`), `lazy`, `splitProps`
+(`frameact/dom`), `debounce` / `fastRaf` / `throttleWithTickEnd` (`frameact/scheduler`). Vite-плагин
+предупреждает о деструктуризации пропсов, а `setExtraStyles` переживает строковый `style=`, как в teact.
+Гайд портирования (англ.): [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
+
 ## Вдохновение и благодарности
 
 - **[teact](https://github.com/Ajaxy/teact)** Александра Зинчука — отсюда дисциплина кадра, fasterdom,
@@ -198,6 +212,7 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
 | 3 · store | стор-дерево сигналов: подписки на листья, запись по пути на месте, `reconcile`, парковка по причине на время анимаций, типизированные экшены | ✅ готово |
 | 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта | ⏳ |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact на сценариях мессенджера (Chromium + WebKit, CPU ×4) | ⏳ |
+| 6 · kit | кит готовности клиента: `Transition`, `ShowTransition`, `InfiniteScroll` + якорь скролла, `onMount`/`onDestroy`, `lazy`, `splitProps`, lint деструктуризации пропсов, гайд портирования | ✅ готово |
 
 Дизайн: [`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md) ·
 планы: [`docs/superpowers/plans/`](docs/superpowers/plans/).

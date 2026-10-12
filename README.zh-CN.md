@@ -148,6 +148,18 @@ setState('messages', chatId, reconcile(chunk)); // 来自服务端的不可变�
 <For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
 ```
 
+## Kit
+
+`frameact/kit` 是 Telegram Web A 级客户端在主要界面之前所需的薄 UI 层，沿用 telegram-tt 的 class 约定
+（样式由客户端提供）：`<Transition>`（按 key 的滑块，上一张滑块在动画期间保留，清理策略，每个子树一个
+heavy-animation scope，`animationend` 在事件中读取、在 mutate 阶段应用）、`createShowTransition` /
+`<ShowTransition>` / `createMediaTransition`、`<InfiniteScroll>` 与 `createScrollAnchor`（锚点在 measure
+阶段快照，列表在 mutate 阶段更新，滚动位置在 forced-reflow 阶段恢复——同一帧内完成，从 heavy-animation
+释放时亦然）。其依赖的原语位于核心：`onMount`、`onDestroy`、`previous` / `currentOrPrev` / `frozenWhile`、
+`watchHeavyAnimation`（`frameact`），`lazy`、`splitProps`（`frameact/dom`），`debounce` / `fastRaf` /
+`throttleWithTickEnd`（`frameact/scheduler`）。Vite 插件会对解构 props 发出警告，`setExtraStyles` 在字符串
+`style=` 写入后仍然保留，与 teact 一致。迁移指南（英文）：[`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md)。
+
 ## 灵感与致谢
 
 - **[teact](https://github.com/Ajaxy/teact)**（作者 Alexander Zinchuk）—— 帧调度纪律、fasterdom、stricterdom
@@ -177,6 +189,7 @@ solidjs/solid，以 `SOURCE` 文件代替逐文件头部声明。
 | 3 · store | signal 树 store：叶子级订阅、就地路径写入、`reconcile`、动画期间按原因停靠、带类型的 action | ✅ 完成 |
 | 4 · stricterdom | 开发模式阶段检查，定位到具体 effect | ⏳ |
 | 5 · benchmark | 在即时通讯场景下对比 teact、Solid 2.0 与 frameact（Chromium + WebKit，CPU ×4） | ⏳ |
+| 6 · kit | 客户端就绪套件：`Transition`、`ShowTransition`、`InfiniteScroll` + 滚动锚定、`onMount`/`onDestroy`、`lazy`、`splitProps`、props 解构 lint、迁移指南 | ✅ 完成 |
 
 设计文档：[`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md)
 （俄文）· 计划：[`docs/superpowers/plans/`](docs/superpowers/plans/)。
