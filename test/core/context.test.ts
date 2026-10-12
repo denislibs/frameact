@@ -37,32 +37,35 @@ it('Provider provides to its children only (siblings unaffected), honours undefi
   const Ctx = createContext<string | undefined>('default');
   root(() => {
     let inside: unknown;
+    let afterNested: unknown;
     let nested: unknown;
     let undef: unknown;
-    Ctx.Provider({
+    (Ctx.Provider({
       value: 'a',
       get children() {
         inside = useContext(Ctx);
-        Ctx.Provider({
+        (Ctx.Provider({
           value: 'b',
           get children() {
             nested = useContext(Ctx);
             return null;
           },
-        });
+        }) as () => unknown)();
+        afterNested = useContext(Ctx);
         return null;
       },
-    });
+    }) as () => unknown)();
     const sibling = useContext(Ctx);
-    Ctx.Provider({
+    (Ctx.Provider({
       value: undefined,
       get children() {
         undef = useContext(Ctx);
         return null;
       },
-    });
+    }) as () => unknown)();
     expect(inside).toBe('a');
     expect(nested).toBe('b');
+    expect(afterNested).toBe('a');
     expect(sibling).toBe('default');
     expect(undef).toBeUndefined();
   });
@@ -79,10 +82,55 @@ it('Provider returns the resolved children; what they create is disposed with th
         return 'child';
       },
     });
-    expect(out).toBe('child');
+    expect((out as () => unknown)()).toBe('child');
     return d;
   });
   expect(log).toEqual([]);
   dispose();
   expect(log).toEqual(['disposed']);
+});
+
+it('Provider children are tracked: a ternary child switches branches', () => {
+  const Ctx = createContext('d');
+  const $flag = signal(true);
+  root(() => {
+    const out = Ctx.Provider({
+      value: 'v',
+      get children() {
+        return $flag() ? 'A' : 'B';
+      },
+    }) as () => unknown;
+    expect(out()).toBe('A');
+    $flag.set(false);
+    expect(out()).toBe('B');
+  });
+});
+
+it('Provider: a function child (and one inside an array) runs under the provider and sees its value', () => {
+  const Ctx = createContext('default');
+  root(() => {
+    const out = Ctx.Provider({
+      value: 'provided',
+      get children() {
+        return [() => useContext(Ctx), 'x'];
+      },
+    }) as () => unknown;
+    expect(out()).toEqual(['provided', 'x']);
+    const single = Ctx.Provider({
+      value: 'p2',
+      get children() {
+        return () => useContext(Ctx);
+      },
+    }) as () => unknown;
+    expect(single()).toBe('p2');
+  });
+});
+
+it('Provider warns in DEV when called without an owner', () => {
+  const Ctx = createContext(0);
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  Ctx.Provider({ value: 1 });
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(String(warn.mock.calls[0]![0])).toContain('Provider');
+  warn.mockRestore();
 });

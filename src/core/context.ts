@@ -1,10 +1,27 @@
+import { DEV } from '../env';
 import { compute, createScope, getScope, setContext } from './core';
+import { computed } from './signals';
 
 export interface Context<T> {
   readonly id: symbol;
   readonly defaultValue: T;
-  /** `<Ctx.Provider value>`: provides `value` to everything created in `children` (a child scope of the current owner). */
+  /**
+   * `<Ctx.Provider value>`: provides `value` to everything created in `children`, which are resolved
+   * inside the provider's own child scope of the current owner. Returns an accessor of the resolved
+   * children (accessor children are called there, so they see `value`; a reactive `children` getter
+   * stays reactive). `value` is read once, as a snapshot (like Solid 1.x): pass an accessor as the
+   * value for reactivity. It must be called under an owner (DEV warns otherwise).
+   */
   readonly Provider: (props: { value: T; children?: unknown }) => unknown;
+}
+
+/** Call zero-arity accessor children (and ones inside an array) so they run under the provider's scope. */
+function resolveChildren(value: unknown): unknown {
+  while (typeof value === 'function' && !value.length) value = value();
+  if (Array.isArray(value) && value.some((v) => typeof v === 'function' && !v.length)) {
+    return value.map(resolveChildren);
+  }
+  return value;
 }
 
 export function createContext<T>(defaultValue: T, name = 'context'): Context<T> {
@@ -13,12 +30,16 @@ export function createContext<T>(defaultValue: T, name = 'context'): Context<T> 
     id,
     defaultValue,
     Provider(props) {
+      if (DEV && getScope() === null) {
+        console.warn('[frameact] Context.Provider called without an owner (or inside an effect apply): what its children create is never disposed. Render it inside a component or root.');
+      }
       const scope = createScope();
       return compute(
         scope,
         () => {
           setContext(id, props.value);
-          return props.children;
+          const raw = computed(() => props.children);
+          return computed(() => resolveChildren(raw()));
         },
         null,
       );
