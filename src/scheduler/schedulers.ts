@@ -120,19 +120,42 @@ export function fastRaf(callback: NoneToVoidFunction, withTimeoutFallback = fals
   }
 }
 
-let onTickEndCallbacks: NoneToVoidFunction[] | undefined;
+/**
+ * The tickEnd queue (frameact, perf): ONE array reused for the life of the module —
+ * `tickQueue[tickNext .. tickLen)` are the callbacks no drain has taken yet. A drain takes everything
+ * pending as a batch (`tickNext = tickLen`), runs it in order, clearing each slot, and takes what was
+ * queued meanwhile as the next batch; once nothing is left the indices reset to 0 and the backing
+ * store is kept, so neither scheduling nor draining allocates. (Before: a fresh array per empty →
+ * non-empty transition, and a Promise per transition — on a write/flushSync() loop that was two
+ * allocations per write.) A re-entrant drain (a callback calling flushSync()) takes only what was
+ * queued after the running batch was taken: the rest of that batch stays with its own loop.
+ */
+const tickQueue: (NoneToVoidFunction | undefined)[] = [];
+let tickNext = 0;
+let tickLen = 0;
+/**
+ * True while the end-of-tick microtask is booked and has not run yet. It is booked once per tick,
+ * not once per empty → non-empty transition: a flushSync() in between drains the queue but leaves
+ * the microtask booked, and the next onTickEnd() before it fires reuses it (it drains whatever is
+ * pending by then; usually nothing).
+ */
+let tickBooked = false;
 /** Nesting depth of flushTickEnd(): > 0 while a drain is running (a callback may call flushSync()). */
 let tickDrainDepth = 0;
 /** Bumped once at the start of every outermost flushTickEnd() drain that has work to do. */
 let tickDrainEpoch = 0;
 
+function flushTickEndMicrotask() {
+  tickBooked = false;
+  flushTickEnd();
+}
+
 export function onTickEnd(callback: NoneToVoidFunction) {
-  if (!onTickEndCallbacks) {
-    onTickEndCallbacks = [callback];
-    // While draining, the running drain picks the new callback up: no extra microtask.
-    if (tickDrainDepth === 0) Promise.resolve().then(flushTickEnd);
-  } else {
-    onTickEndCallbacks.push(callback);
+  tickQueue[tickLen++] = callback;
+  // While draining, the running drain picks the new callback up: no extra microtask.
+  if (!tickBooked && tickDrainDepth === 0) {
+    tickBooked = true;
+    Promise.resolve().then(flushTickEndMicrotask);
   }
 }
 
@@ -140,28 +163,45 @@ export function onTickEnd(callback: NoneToVoidFunction) {
  * Run pending onTickEnd callbacks until none are left: callbacks queued while flushing run in this
  * same flush, so a cascade (effect → write → effect ...) completes in one drain. Used by the
  * microtask itself and by flushSync(). A re-entrant call (a callback calling flushSync()) drains
- * the pending callbacks too, within the same drain epoch.
+ * the callbacks queued since the running batch was taken, within the same drain epoch.
  */
 export function flushTickEnd() {
-  if (!onTickEndCallbacks) return;
+  if (tickNext === tickLen) return;
   if (tickDrainDepth === 0) tickDrainEpoch++;
   tickDrainDepth++;
+  let i = 0;
+  let end = 0;
   try {
-    while (onTickEndCallbacks) {
-      const currentCallbacks = onTickEndCallbacks;
-      onTickEndCallbacks = undefined;
-      for (let i = 0; i < currentCallbacks.length; i++) safeExec(currentCallbacks[i]);
+    while (tickNext < tickLen) {
+      i = tickNext;
+      end = tickLen;
+      tickNext = end; // (callbacks queued from here on belong to the next batch)
+      while (i < end) {
+        const callback = tickQueue[i]!;
+        tickQueue[i++] = undefined; // (let the callback go: the slot is reused later)
+        safeExec(callback);
+      }
     }
   } finally {
-    // Only reached with work left if something escaped safeExec (e.g. a throwing console.error):
-    // re-book the microtask that onTickEnd skipped while we were draining, or the queue would stall.
-    if (--tickDrainDepth === 0 && onTickEndCallbacks) Promise.resolve().then(flushTickEnd);
+    // Only with a batch left over if something escaped safeExec (e.g. a throwing console.error):
+    // like before, the rest of that batch is dropped — but not retained.
+    if (i < end) tickQueue.fill(undefined, i, end);
+    if (--tickDrainDepth === 0) {
+      if (tickNext === tickLen) {
+        tickNext = tickLen = 0;
+      } else if (!tickBooked) {
+        // Callbacks queued after the escaped batch was taken: re-book the microtask that onTickEnd
+        // skipped while we were draining, or the queue would stall.
+        tickBooked = true;
+        Promise.resolve().then(flushTickEndMicrotask);
+      }
+    }
   }
 }
 
 /** @internal core flushSync() loops until nothing is pending. */
 export function hasPendingTickEnd() {
-  return onTickEndCallbacks !== undefined;
+  return tickNext !== tickLen;
 }
 
 /** @internal The epoch of the current (or, outside a drain, the last) flushTickEnd() drain. */

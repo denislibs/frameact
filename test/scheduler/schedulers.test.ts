@@ -122,3 +122,49 @@ describe('throttleWith', () => {
     expect(fn).toHaveBeenCalledWith(3);
   });
 });
+
+describe('onTickEnd queue (perf: one reused array, one microtask per tick)', () => {
+  it('a queue drained by flushTickEnd is refilled and drained again by the same tick\'s microtask', async () => {
+    await flushMicrotasks(); // start with no microtask booked
+    const spy = vi.spyOn(Promise, 'resolve');
+    const calls: string[] = [];
+    onTickEnd(() => calls.push('a'));
+    flushTickEnd(); // synchronous drain (what flushSync() does) — the microtask stays booked
+    onTickEnd(() => calls.push('b')); // same tick: reuses the booked microtask
+    onTickEnd(() => calls.push('c'));
+    expect(calls).toEqual(['a']);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    await flushMicrotasks();
+    expect(calls).toEqual(['a', 'b', 'c']);
+    // The next tick books again.
+    onTickEnd(() => calls.push('d'));
+    await flushMicrotasks();
+    expect(calls).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('1000 schedule/drain rounds in one tick keep FIFO order and run each callback once', async () => {
+    const seen: number[] = [];
+    for (let i = 0; i < 1000; i++) {
+      onTickEnd(() => seen.push(i));
+      if (i % 3 === 0) flushTickEnd();
+    }
+    flushTickEnd();
+    expect(seen).toEqual(Array.from({ length: 1000 }, (_, i) => i));
+    await flushMicrotasks();
+    expect(seen.length).toBe(1000);
+  });
+
+  it('a re-entrant flush takes what was queued since the running batch was taken; the rest of the batch stays with the outer loop', () => {
+    const order: string[] = [];
+    onTickEnd(() => {
+      order.push('a');
+      onTickEnd(() => order.push('x'));
+      flushTickEnd(); // like an effect apply calling flushSync()
+      order.push('a-end');
+    });
+    onTickEnd(() => order.push('b'));
+    flushTickEnd();
+    expect(order).toEqual(['a', 'x', 'a-end', 'b']);
+  });
+});
