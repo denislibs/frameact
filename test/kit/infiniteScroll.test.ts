@@ -217,6 +217,25 @@ describe('<InfiniteScroll>', () => {
   });
 });
 
+describe('<InfiniteScroll> restore scroll event', () => {
+  it('the scroll event of the restore\'s own write is not a user scroll: it lands within sensitiveArea of the bottom, yet asks for nothing (N5)', async () => {
+    const { el, setItems, loads } = mount({ sensitiveArea: 100 }, ids(0, 50)); // 2000 px, viewport 200
+    await frame();
+    el.dispatchEvent(new Event('scroll')); // the first event tracks the anchor
+    el.scrollTop = 1750; // 50 px from the bottom: asks backwards
+    el.dispatchEvent(new Event('scroll'));
+    expect(loads).toEqual([{ direction: 'backwards', noScroll: false }]);
+    setItems([...ids(-2, 0), ...ids(0, 50)]); // 2 rows (80 px) prepended; the new chunk re-arms the loader
+    await frame();
+    expect(el.scrollTop).toBe(1830); // restored: 50 px from the bottom of 2080 again, and "moving down"
+    el.dispatchEvent(new Event('scroll')); // the browser's scroll event for the restore's own write
+    expect(loads.length).toBe(1);
+    el.scrollTop = 1840; // a real user scroll right after is honoured
+    el.dispatchEvent(new Event('scroll'));
+    expect(loads.length).toBe(2);
+  });
+});
+
 describe('<InfiniteScroll> switching lists', () => {
   it('switching between two untouched store arrays (same shape version) preloads again (N1)', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
