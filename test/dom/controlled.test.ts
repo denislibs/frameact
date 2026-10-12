@@ -480,3 +480,73 @@ describe('I2: a caret snapshot is valid only for the frame it was taken in, or u
     expect(input.selectionStart).toBe(2);
   });
 });
+
+function radio(name: string, parent: ParentNode = container()) {
+  const r = document.createElement('input');
+  r.type = 'radio';
+  r.name = name;
+  parent.appendChild(r);
+  return r;
+}
+
+describe('I3: radio groups', () => {
+  it('a rejected switch restores the previously checked radio too (the browser unchecked it without a change event)', () => {
+    const a = radio('g');
+    const b = radio('g');
+    const [flagA] = createSignal(true);
+    const [flagB] = createSignal(false);
+    createRoot(() => {
+      setAttribute(a, 'use:checked', flagA);
+      setAttribute(b, 'use:checked', flagB);
+    });
+    expect([a.checked, b.checked]).toEqual([true, false]);
+    b.click(); // nothing accepts it
+    expect([a.checked, b.checked]).toEqual([true, false]);
+  });
+
+  it('an accepted switch stays', async () => {
+    const a = radio('g');
+    const b = radio('g');
+    const [selected, setSelected] = createSignal('a');
+    createRoot(() => {
+      setAttribute(a, 'use:checked', () => selected() === 'a');
+      setAttribute(b, 'use:checked', () => selected() === 'b');
+    });
+    b.addEventListener('change', () => setSelected('b'));
+    b.click();
+    expect([a.checked, b.checked]).toEqual([false, true]);
+    await frame();
+    expect([a.checked, b.checked]).toEqual([false, true]);
+  });
+
+  it('plain form: a rejected switch restores the whole group in the next frame', async () => {
+    const a = radio('g');
+    const b = radio('g');
+    const [selected] = createSignal('a');
+    createRoot(() => {
+      effect(() => selected() === 'a', (v) => { setAttribute(a, 'use:checked', v); });
+      effect(() => selected() === 'b', (v) => { setAttribute(b, 'use:checked', v); });
+    });
+    b.click();
+    expect([a.checked, b.checked]).toEqual([false, true]); // no synchronous rollback in the plain form
+    await frame();
+    expect([a.checked, b.checked]).toEqual([true, false]);
+  });
+
+  it('the group is the same name within the same form: a same-named radio in another form is left alone', () => {
+    const form1 = container().appendChild(document.createElement('form'));
+    const form2 = container().appendChild(document.createElement('form'));
+    const a = radio('g', form1);
+    const b = radio('g', form1);
+    const other = radio('g', form2);
+    other.checked = true; // uncontrolled, in its own group
+    const [flagA] = createSignal(true);
+    const [flagB] = createSignal(false);
+    createRoot(() => {
+      setAttribute(a, 'use:checked', flagA);
+      setAttribute(b, 'use:checked', flagB);
+    });
+    b.click();
+    expect([a.checked, b.checked, other.checked]).toEqual([true, false, true]);
+  });
+});

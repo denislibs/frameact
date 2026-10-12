@@ -324,8 +324,26 @@ function onFocusOut(e: Event): void {
   if (b) b.hasSelection = false;
 }
 
+/**
+ * Checking a radio silently unchecks the previously checked one of its group (no change event
+ * there), so a rejected switch must check the whole group: same name, same form owner (or, without
+ * a form, the same root).
+ */
+function verifyRadioGroup(el: HTMLInputElement): void {
+  const form = el.form;
+  const candidates = form ? form.elements : (el.getRootNode() as ParentNode).querySelectorAll('input[type="radio"]');
+  for (let i = 0; i < candidates.length; i++) {
+    const r = candidates[i] as HTMLInputElement;
+    if (r.localName !== 'input' || r.type !== 'radio' || r.name !== el.name || r.form !== form) continue;
+    const b = lookup(checkedKind, r);
+    if (b) verify(b);
+  }
+}
+
 function onChange(e: Event): void {
-  const b = lookup(checkedKind, e.target);
+  const el = e.target as HTMLInputElement;
+  if (el instanceof Element && el.localName === 'input' && el.type === 'radio' && el.name) return verifyRadioGroup(el);
+  const b = lookup(checkedKind, el);
   if (b) verify(b);
 }
 
