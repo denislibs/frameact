@@ -719,3 +719,92 @@ it('M5: an input inside an open shadow root is controlled: target from composedP
   input.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }));
   expect(text()).toBe('hell');
 });
+
+describe('M9: coverage', () => {
+  it('textarea: a rejected mid-text edit (multi-line) is rolled back with the caret in place; programmatic updates land', async () => {
+    const area = container().appendChild(document.createElement('textarea'));
+    area.focus();
+    const [text, setText] = createSignal('one\ntwo');
+    createRoot(() => setAttribute(area, 'use:value', text));
+    (area as any)[EVENT_KEY + 'input'] = (e: Event) => {
+      const v = (e.currentTarget as HTMLTextAreaElement).value;
+      if (!v.includes('!')) setText(v);
+    };
+    delegateEvents(['input']);
+    expect(area.value).toBe('one\ntwo');
+    area.value = 'one!\ntwo';
+    area.setSelectionRange(4, 4);
+    area.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    expect(area.value).toBe('one\ntwo');
+    expect(area.selectionStart).toBe(3);
+    setText('three');
+    await frame();
+    expect(area.value).toBe('three');
+  });
+
+  it('select with static options: a rejected choice is rolled back, an accepted one stays, programmatic updates land', async () => {
+    const select = container().appendChild(document.createElement('select'));
+    for (const v of ['a', 'b', 'c']) select.appendChild(new Option(v, v));
+    const [value, setValue] = createSignal('b');
+    createRoot(() => setAttribute(select, 'use:value', value));
+    (select as any)[EVENT_KEY + 'input'] = (e: Event) => {
+      const v = (e.currentTarget as HTMLSelectElement).value;
+      if (v !== 'a') setValue(v);
+    };
+    delegateEvents(['input']);
+    expect(select.value).toBe('b');
+    select.value = 'a';
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(select.value).toBe('b');
+    select.value = 'c';
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(select.value).toBe('c');
+    setValue('a');
+    await frame();
+    expect(select.value).toBe('a');
+  });
+
+  it('accessor form, several events in one frame: a rejected paste then an accepted keystroke', async () => {
+    const input = textInput();
+    const { text } = controlled(input, limit(5), 'hel');
+    type(input, 'helXYZ'); // paste, over the limit: rejected
+    expect(input.value).toBe('hel');
+    expect(input.selectionStart).toBe(3);
+    type(input, 'hell');
+    expect(input.value).toBe('hell');
+    await frame();
+    expect(input.value).toBe('hell');
+    expect(text()).toBe('hell');
+  });
+
+  it('focusout drops the caret snapshot: a deferred rollback after blur and refocus does not reuse the pre-blur caret', async () => {
+    const input = textInput();
+    const [text] = createSignal('hello');
+    createRoot(() => effect(() => text(), (v) => { setAttribute(input, 'use:value', v); }));
+    type(input, 'hxello', 2); // rejected (nothing accepts); the plain-form check is deferred
+    input.blur();
+    input.focus();
+    await frame();
+    expect(input.value).toBe('hello');
+    expect(input.selectionStart).toBe(5); // the browser's placement, not the mapped pre-blur caret (1)
+  });
+
+  it('IME in the plain form: no check during the composition; after compositionend an unaccepted text is rolled back in the next frame', async () => {
+    const input = textInput();
+    const [text, setText] = createSignal('ab');
+    createRoot(() => effect(() => text(), (v) => { setAttribute(input, 'use:value', v); }));
+    (input as any)[EVENT_KEY + 'input'] = (e: InputEvent) => {
+      const v = (e.currentTarget as HTMLInputElement).value;
+      if (/^[a-z]*$/.test(v)) setText(v);
+    };
+    delegateEvents(['input']);
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'abか');
+    await frame();
+    expect(input.value).toBe('abか');
+    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    expect(input.value).toBe('abか');
+    await frame();
+    expect(input.value).toBe('ab');
+  });
+});
