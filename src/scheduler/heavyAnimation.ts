@@ -89,7 +89,7 @@ export function firstAnimatingScopeSampled(scope: HeavyAnimationScope): HeavyAni
     // Decided earlier in this drain (one chain walk per scope per drain, not per effect). `null` is stable
     // (a scope that begins mid-drain began after the epoch); a scope found animating may have ended since.
     const cached = scope.gateResult;
-    if (cached === null || cached.isAnimating.peek()) return cached;
+    if (cached === null || (cached.isAnimating.peek() && beganAt.get(cached)! < epoch)) return cached; // (a scope re-begun mid-drain does not count)
   }
   let result: HeavyAnimationScope | null = null;
   for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) {

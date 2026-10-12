@@ -350,3 +350,30 @@ it('P4: a parked set whose scope chain contains the animating scope is still fou
   await settle();
   expect(log).toEqual([1, 1, 1]);
 });
+
+it('N2: a scope that ends and re-begins mid-drain does not park an effect it would not park uncached (the sampling rule, not the cache, decides)', async () => {
+  const [state, setState] = createStore({ a: 0, b: 0 });
+  const [loc, setLoc] = createSignal(0);
+  const S = createHeavyAnimationScope(null);
+  const log: string[] = [];
+  let end = () => {};
+  inScope(S, () => {
+    createMutationEffect(() => state.a, (v) => { log.push('A' + v); });
+  });
+  createRoot(() => createMutationEffect(loc, (v) => { if (v) { end(); end = S.begin(Infinity); log.push('restart'); } }));
+  inScope(S, () => {
+    createMutationEffect(() => state.b, (v) => { log.push('B' + v); });
+  });
+  await flushMicrotasks(); await frame();
+  log.length = 0;
+  end = S.begin(Infinity);
+  await flushMicrotasks(); await frame();
+  setState('a', 1); // A: parked (S began before this drain) and cached for S
+  setLoc(1);        // restarts S inside the drain
+  setState('b', 1); // B: S began in THIS drain -> does not count -> runs
+  await frame(); await flushMicrotasks();
+  expect(log.slice(0, 2)).toEqual(['restart', 'B1']);
+  end();
+  await flushMicrotasks(); await frame();
+  expect(log).toContain('A1'); // the parked one is released with the animation
+});
