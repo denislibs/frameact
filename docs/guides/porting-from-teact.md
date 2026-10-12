@@ -5,7 +5,8 @@ the three things that change: **a component runs once** (hooks become primitives
 halves and a phase**, and **the store is a tree of signals written in place** (model B, spec §3.5).
 The API named here is `frameact`, `frameact/dom`, `frameact/store`, `frameact/scheduler` and the
 client-readiness kit `frameact/kit` (plan 6). `frameact/stricterdom` (`enableStrict`, `forceMeasure`,
-`forceMutation`, `suppressStrict`, `setHandler`) is plan 4; call it from day one, it is a no-op until then.
+`forceMutation`, `suppressStrict`, `setHandler`) is plan 4, on its own branch: there is no such entry on this one, so the
+import fails until that branch merges. Enable it from the first day once it is there; the phase rules below are what it checks.
 
 ## 1. Hooks → primitives
 
@@ -15,18 +16,18 @@ client-readiness kit `frameact/kit` (plan 6). `frameact/stricterdom` (`enableStr
 | `useSignal`, `useDerivedSignal`, `useDerivedState`, `useSignalEffect`, `useStateRef` | `createSignal` / `createMemo` / `createEffect` | The most direct bridge: signal code ports almost verbatim. |
 | `useEffect(fn, deps)` (measure phase of the next frame) | `createEffect(compute, apply)` for logic (tickEnd); `createMeasureEffect` to read layout | Split by purpose. `compute` is tracked and pure; `apply(value, prev)` is the side effect and may return a cleanup. |
 | `useLayoutEffect` | `createMutationEffect` | Writes the live DOM in the mutate phase; the first apply is synchronous at creation (detached nodes). |
-| `useEffect(fn, [])`, `useLayoutEffect(fn, [])` | **`onMount(fn)`** | Runs once, after attach, in the measure phase (real layout; `focus()`, `scrollTop`). May return a cleanup. |
+| `useEffect(fn, [])`, `useLayoutEffect(fn, [])` | **`onMount(fn)`** | Runs once, after attach, in the measure phase: real layout to *read* (`getBoundingClientRect`, a `scrollTop` read, `focus()`). A DOM write after mounting (restoring `scrollTop`, a class) goes through `requestMutation(() => …)`. `onCleanup`/`createEffect` inside belong to the component. May return a cleanup (see `onDestroy` for what it may do). |
 | unmount cleanup (`useEffect(() => () => …, [])`, `useUnmountCleanup`) | **`onDestroy(fn)`** | Runs once when the component is disposed. Inside an effect/memo compute use `onCleanup` (runs per re-run; DEV warns). |
 | `useEffectWithPrevDeps`, `useLayoutEffectWithPrevDeps` | `apply(value, prev)` | `prev` is what the last apply received. |
 | `useSyncEffect` (during render) | `createMemo` for derived state; `createMeasureEffect` for a snapshot *before* a DOM update | There is no synchronous effect; a measure effect on the same signal runs before the mutate phase of the same frame (see §4). |
 | `useMemo`, `useCallback`, `useLastCallback`, `memo`, `useForceUpdate` | `createMemo`; plain functions | A component body runs once, so a handler closes over accessors and is never stale. |
 | `useRef`, `ref={}` | `let el: HTMLDivElement; <div ref={el}>` or a callback ref | A ref is assigned at element creation (detached). |
-| `usePrevious`, `useCurrentOrPrev`, `useFrozenProps`, `usePrevDuringAnimation` | **`previous`, `currentOrPrev`, `frozenWhile`** | Memos over a source's history. Read them continuously (JSX, an effect): a memo is lazy and only sees the values it is asked for. |
+| `usePrevious`, `useCurrentOrPrev`, `useFrozenProps`, `usePrevDuringAnimation` | **`previous`, `currentOrPrev`, `frozenWhile`** | Memos over a source's history. Read them continuously (JSX, an effect): a memo is lazy and only sees the values it is asked for. `currentOrPrev` is also what a `<ShowTransition>` needs when its data disappears while it closes (its children are live, there is no `prevChildren`): `props.user!.name` would be empty or throw, `currentOrPrev(() => props.user)()?.name` keeps showing the last user. |
 | `useHeavyAnimation`, `useThrottleForHeavyAnimation` | **`watchHeavyAnimation(onStart, onEnd, scope?)`**, `onFullyIdle` | Unsubscribes with the owner; `scope` defaults to the subtree's scope, not the root. |
 | `useMountAfterHeavyAnimation`, `isReady` | `deferUntilIdle(scope, () => <Heavy/>, placeholder)` | The creation gate; scopes gate updates. |
 | `useModuleLoader` + `*.async.tsx` | **`lazy(() => import('./X'))`** (`frameact/dom`) | No Suspense: `placeholder` until loaded, `X.preload()` ahead of time. |
 | `useShowTransition`, `useMediaTransition`, `<ShowTransition>` | **`createShowTransition`, `createMediaTransition`, `<ShowTransition>`** (`frameact/kit`) | Same classes (`shown/not-shown`, `open/not-open`, `closing`, `opacity-transition fast|slow`). |
-| `<Transition activeKey name>` | **`<Transition>`** (`frameact/kit`) | Same class contracts, keep-alive, cleanup policies; `scope` per subtree; slides always wrapped. Not ported: `slideOptimized`, swipe control, `nextKey`. |
+| `<Transition activeKey name>` | **`<Transition>`** (`frameact/kit`) | Same class contracts, keep-alive, cleanup policies; `scope` per subtree; slides always wrapped. Not ported: `slideOptimized`, swipe control, `nextKey`. By default the transition animates its own child scope, so global consumers of tt's `getIsHeavyAnimating` / `onFullyIdle()` on the root (lottie and video pauses) do not see it: pass `scope={rootScope}` for tt's behaviour. An `onMount` inside a slide of a blocking transition (`isBlockingAnimation`) waits for the end of the animation, so `onMount(() => input.focus())` fires after the slide, not before. |
 | `<InfiniteScroll>`, scroll anchoring in `MessageList` | **`<InfiniteScroll>`, `createScrollAnchor`** (`frameact/kit`) | Snapshot in measure, DOM in mutate, restore in forced reflow — one frame. |
 | `debounce`, `throttle`, `fastRaf`, `throttleWithTickEnd`, `onTickEnd`, `onIdle` | the same names in `frameact/scheduler` | Prefer `requestMeasure`/`requestMutation` to `fastRaf` for DOM work. |
 | `withGlobal(mapStateToProps)`, `useSelector` | read `state.chats[id].title` in JSX, or a selector function over the proxy | Per-leaf subscriptions; no containers, no storms. |
@@ -46,7 +47,10 @@ client-readiness kit `frameact/kit` (plan 6). `frameact/stricterdom` (`enableStr
 1. **Destructuring props.** `function Chat({ isOpen })` reads `isOpen` once, at creation; it never updates.
    Take `props` and read `props.isOpen` where it is used — in JSX, inside a memo, inside an effect's
    compute. The Vite plugin warns on `function X({`, `const X = ({`, and `const { a } = props` in dev.
-   To forward a subset use `splitProps(props, ['a', 'b'])` (lazy getters) or `mergeProps`.
+   To forward a subset use `splitProps(props, ['a', 'b'])` (lazy getters) or `mergeProps`. `splitProps` costs about
+   1.4 µs per call: fine for wrappers, but in a list row created hundreds of times per frame read `props.x`
+   directly. The destructuring lint skips the body form inside an `on*={…}` handler, where the read happens at
+   event time and is correct.
 2. **Reading a prop or a signal early.** `const open = props.isOpen;` at the top of the component is the same
    trap without braces. So is `const chat = state.chats[id]` followed by `chat.title` in JSX — that one is
    fine (the proxy is read lazily), but `const title = state.chats[id].title` is a one-time read.
@@ -58,17 +62,19 @@ client-readiness kit `frameact/kit` (plan 6). `frameact/stricterdom` (`enableStr
    A DOM write in `compute` runs in the wrong phase and under tracking.
 6. **Measure in measure, mutate in mutate.** Layout reads (`getBoundingClientRect`, `offsetHeight`,
    `scrollTop` read, `focus()`) belong in `createMeasureEffect`, `onMount`, an event handler or a
-   `requestMeasure` task; DOM writes in `createMutationEffect` or `requestMutation`. Need a read after a
+   `requestMeasure` task; DOM writes (a `scrollTop` assignment too) in `createMutationEffect` or
+   `requestMutation`: restoring a saved scroll position after mount is `onMount(() => { const top = …; requestMutation(() => { el.scrollTop = top; }); })`. Need a read after a
    write in the same frame? `createEffect(c, a, frameForcedReflow)` or `requestForcedReflow`.
 7. **`onCleanup` in an apply is a DEV error.** Return the cleanup from `apply` instead. In the component
-   body, `onDestroy(fn)` (or `onCleanup`) runs at disposal, synchronously — a live-DOM write there (a class
-   on `document.body`) goes through `requestMutation`.
+   body, `onDestroy(fn)` (or `onCleanup`) runs at disposal, synchronously, often in the mutate phase: a live-DOM
+   write there (a class on `document.body`) goes through `requestMutation`, and a layout read (`scrollTop`) must
+   not be there at all: keep the value up to date from an event handler (`onScroll`) and save that.
 8. **Identity memos go stale under in-place writes** (audit R2, see §5.3).
 
 ## 3. Component shape
 
 ```tsx
-import { createMemo, createSignal, onDestroy, onMount } from 'frameact';
+import { createMemo, onDestroy, onMount, requestMutation } from 'frameact';
 import { For, Show } from 'frameact/dom';
 import { state, actions } from '../global';
 
@@ -76,12 +82,13 @@ export function ChatList(props: { folderId: number; onSelect?: (id: string) => v
   const chats = createMemo(() => selectFolderChats(state, props.folderId)); // a selector over the proxy
   let list!: HTMLDivElement;
   onMount(() => {
-    list.scrollTop = state.ui.chatListScroll;            // real layout, after attach
-    return () => actions.saveChatListScroll(list.scrollTop); // runs on dispose
+    const top = state.ui.chatListScroll;                 // measure phase, after attach: read
+    requestMutation(() => { list.scrollTop = top; });    // the write belongs to the mutate phase
   });
   onDestroy(() => actions.chatListClosed());
   return (
-    <div ref={list} class="ChatList">
+    // a handler may read layout: the position is saved here, not in a cleanup (which may run in the mutate phase)
+    <div ref={list} class="ChatList" onScroll={() => actions.saveChatListScroll(list.scrollTop)}>
       <For each={chats()} order="manual" orderKey={(c) => c.lastMessageDate}>
         {(chat) => <ChatRow chat={chat} onClick={() => props.onSelect?.(chat.id)} />}
       </For>
@@ -110,7 +117,10 @@ createMutationEffect(() => fix(), (v) => { if (v !== undefined) el.scrollTop = v
 That is `createScrollAnchor` in `frameact/kit`. Under a heavy animation all three park and are released
 together, measure first (the store-gate release goes through a measure task for this — audit R1, fixed in the store's fix round).
 Create the anchor under the same heavy-animation scope as its list. A store array is tracked by its shape, so
-`produce`/`reconcile` writes in place are anchored too.
+`produce`/`reconcile` writes in place are anchored too. A list written in the mutate phase (a store write from a
+mutation apply, from `requestMutation`) cannot be snapshotted in time: the measure effect moves to the next frame
+and the anchor only re-bases its position instead of restoring from a stale one (DEV warns about the dirtied
+measure effect).
 
 ## 5. The store model (model B) for the client
 
@@ -170,3 +180,8 @@ subset of `unwrap(state)` in `onFullyIdle` / `createIdleEffect`, throttled; the 
 - `beginHeavyAnimation(…, true)` freezes every frame queue globally; prefer a scope (`createHeavyAnimationScope`,
   `<HeavyAnimationScope>`, `<Transition scope>`) so only the moving subtree waits.
 - `flushSync()` is for tests and imperative glue (View Transitions, iOS gesture) only.
+- `dangerouslySetInnerHTML` has no equivalent on purpose: render rich text as nodes. An explicit `innerHTML=` is for
+  markup you sanitised yourself. Never spread an object that came from the server into a component or an element
+  (`<ShowTransition {...payload}>`): spread lets the object choose attribute names, including `innerHTML`-class
+  ones. Pass explicit fields.
+- `setExtraStyles(el, { height })` takes property names written in your code; do not feed it keys from data.

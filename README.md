@@ -119,7 +119,7 @@ render(() => <Composer />, document.getElementById('app')!);
 ```
 
 `class=` / `classList=` / spreads diff class tokens, so imperative `addExtraClass` survives updates; a string
-`style=` writes `cssText` and is incompatible with `setExtraStyles`. Controlled inputs are `use:value` /
+`style=` writes `cssText`, after which the declarations set with `setExtraStyles` are re-applied on top. Controlled inputs are `use:value` /
 `use:checked` — a reactive `value=` is written as a property, and the Vite plugin warns about it in dev. To push
 a value through an active IME composition (e.g. clearing the field on Send), update the signal first, then call
 `forceControlledValue(el)` from the user event handler (`isForcingControlledValue` detects the forced cycle in your

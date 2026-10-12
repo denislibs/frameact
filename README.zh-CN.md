@@ -112,7 +112,7 @@ render(() => <Composer />, document.getElementById('app')!);
 ```
 
 `class=` / `classList=` / 展开属性按 token 做 diff，因此命令式的 `addExtraClass` 在更新后依然保留；字符串形式的 `style=`
-会写入 `cssText`，与 `setExtraStyles` 不兼容。受控输入使用 `use:value` / `use:checked` —— 响应式的 `value=` 会被当作属性直接写入，
+会写入 `cssText`，之后 `setExtraStyles` 设置的声明会被重新叠加。受控输入使用 `use:value` / `use:checked` —— 响应式的 `value=` 会被当作属性直接写入，
 Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的 IME 输入法组合（例如点击发送后清空输入框），请先更新信号，再在用户事件处理器中调用 `forceControlledValue(el)`（在你的 `blur`/`focus` 处理器中可用 `isForcingControlledValue` 识别该强制周期）。
 
 **安全。** 属性写入会拒绝 `javascript:` / `vbscript:` URL、非媒体类 `data:` URL、字符串形式的 `on*` 处理器以及 `srcdoc=`；
@@ -151,7 +151,7 @@ setState('messages', chatId, reconcile(chunk)); // 来自服务端的不可变�
 ## Kit
 
 `frameact/kit` 是 Telegram Web A 级客户端在主要界面之前所需的薄 UI 层，沿用 telegram-tt 的 class 约定
-（样式由客户端提供）：`<Transition>`（按 key 的滑块，上一张滑块在动画期间保留，清理策略，每个子树一个
+（样式由客户端提供）：`<Transition>`（按 key 的滑块，上一张滑块在动画结束后仍保留（直到 `shouldCleanup` 生效），清理策略，每个子树一个
 heavy-animation scope，`animationend` 在事件中读取、在 mutate 阶段应用）、`createShowTransition` /
 `<ShowTransition>` / `createMediaTransition`、`<InfiniteScroll>` 与 `createScrollAnchor`（锚点在 measure
 阶段快照，列表在 mutate 阶段更新，滚动位置在 forced-reflow 阶段恢复——同一帧内完成，从 heavy-animation

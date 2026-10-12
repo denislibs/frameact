@@ -118,7 +118,7 @@ render(() => <Composer />, document.getElementById('app')!);
 ```
 
 `class=` / `classList=` / спреды диффят токены классов, поэтому императивный `addExtraClass` переживает
-обновления; строковый `style=` пишет `cssText` и несовместим с `setExtraStyles`. Контролируемые инпуты —
+обновления; строковый `style=` пишет `cssText`, после чего стили из `setExtraStyles` накладываются заново. Контролируемые инпуты —
 `use:value` / `use:checked`: реактивный `value=` пишется как свойство, и Vite-плагин предупреждает об этом в dev. Чтобы
 протолкнуть значение через активную IME-композицию (например, очистить поле по «Отправить»), сначала обновите сигнал,
 затем вызовите `forceControlledValue(el)` из обработчика пользовательского события (`isForcingControlledValue`
@@ -170,7 +170,7 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
 
 `frameact/kit` — тонкий UI-слой, который нужен клиенту класса Telegram Web A до основных экранов, на тех
 же контрактах классов, что у telegram-tt (стили приносит клиент): `<Transition>` (слайды по ключу,
-предыдущий слайд живёт до конца анимации, политики cleanup, scope heavy-animation на поддерево,
+предыдущий слайд остаётся живым (и после анимации, пока не сработает `shouldCleanup`), политики cleanup, scope heavy-animation на поддерево,
 `animationend` читается в событии и применяется в mutate-фазе), `createShowTransition` /
 `<ShowTransition>` / `createMediaTransition`, `<InfiniteScroll>` и `createScrollAnchor` (якорь снимается в
 measure-фазе, список обновляется в mutate, позиция восстанавливается в forced-reflow — один кадр, в том
