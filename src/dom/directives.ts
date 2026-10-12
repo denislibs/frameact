@@ -147,10 +147,14 @@ function runDeferred(b: Binding<any>): void {
  */
 function verify(b: Binding<any>): void {
   if (b.live) check(b);
-  else if (!b.pending) {
-    b.pending = true;
-    requestMutation(b.runDeferred);
-  }
+  else deferCheck(b);
+}
+
+/** Queue the check into the mutate phase (one per frame per binding). */
+function deferCheck(b: Binding<any>): void {
+  if (b.pending) return;
+  b.pending = true;
+  requestMutation(b.runDeferred);
 }
 
 function newBinding<E extends Element>(kind: Kind<any>, el: E): Binding<E> {
@@ -333,7 +337,10 @@ function onCompositionEnd(e: Event): void {
     writeValue(b, current(b));
     return;
   }
-  verify(b);
+  // Deferred in both forms: handlers that skip composing input (`if (e.isComposing) return`) accept
+  // the committed text in a compositionend handler, or in the input event that some engines fire
+  // after compositionend — both run after this listener.
+  deferCheck(b);
 }
 
 function onFocusOut(e: Event): void {

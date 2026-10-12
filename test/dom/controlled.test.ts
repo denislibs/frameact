@@ -81,13 +81,15 @@ it('accepted input is left alone (no write, no frame needed); formatted input is
   expect(input.selectionStart).toBe(5);
 });
 
-it('does not write during IME composition; applies after compositionend', () => {
+it('does not write during IME composition; applies after compositionend (in the mutate phase)', async () => {
   const input = textInput();
   controlled(input, () => () => {}); // the handler never accepts
   input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
   type(input, 'abか');
   expect(input.value).toBe('abか');
   input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+  expect(input.value).toBe('abか'); // later compositionend/input handlers still get their turn
+  await frame();
   expect(input.value).toBe('ab');
 });
 
@@ -630,4 +632,23 @@ describe('M2: focusout ends a composition whose compositionend never came', () =
     input.blur();
     expect(input.value).toBe('zz');
   });
+});
+
+it('M7: the compositionend check is deferred to the mutate phase, so a handler that skips composing input can accept the committed text', async () => {
+  const input = textInput();
+  const [text, setText] = createSignal('ab');
+  createRoot(() => setAttribute(input, 'use:value', text));
+  (input as any)[EVENT_KEY + 'input'] = (e: InputEvent) => {
+    if (!e.isComposing) setText((e.currentTarget as HTMLInputElement).value);
+  };
+  // registered after the directive's document listeners: it runs after them
+  (input as any)[EVENT_KEY + 'compositionend'] = (e: Event) => setText((e.currentTarget as HTMLInputElement).value);
+  delegateEvents(['input', 'compositionend']);
+  input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+  compose(input, 'abか');
+  input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+  expect(input.value).toBe('abか');
+  await frame();
+  expect(input.value).toBe('abか');
+  expect(text()).toBe('abか');
 });
