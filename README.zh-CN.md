@@ -139,6 +139,9 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
   重型过渡动画、移动端输入延迟。
 - **[maverick-js/signals](https://github.com/maverick-js/signals)**（作者 Rahim Alwer）—— 响应式依赖图
   （已内置并打补丁），其本身基于 Reactively 算法。
+- **[alien-signals](https://github.com/stackblitz/alien-signals)**（作者 Johnson Chu，StackBlitz）—— 核心的依赖图
+  参照其设计重写：每条边是一个 `Link` 对象，同时位于两条双向链表中；重新运行时复用链接；迭代式传播与浅标记。
+  这使 frameact 核心在 js-reactivity-benchmark 上快了 1.5–2 倍。
 - **[SolidJS](https://github.com/solidjs/solid)** 与 **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
   （作者 Ryan Carniato）—— 组件模型、JSX 编译器以及 DOM 运行时的设计。
 
