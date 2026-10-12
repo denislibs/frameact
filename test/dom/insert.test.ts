@@ -2,6 +2,7 @@ import { createMemo, createRoot, createSignal, mapArray } from '../../src/index'
 import { insert, insertExpression, portalHostOf } from '../../src/dom/insert';
 import { reconcileArrays, SLOT } from '../../src/dom/reconcile';
 import { render } from '../../src/dom/render';
+import { strictHooks } from '../../src/dom/strict';
 import { container, useDomHarness } from '../helpers/dom';
 
 const { frame } = useDomHarness();
@@ -589,6 +590,47 @@ describe('render: disposer boundaries', () => {
       expect(warn).toHaveBeenCalledTimes(1);
     } finally {
       warn.mockRestore();
+    }
+  });
+});
+
+describe('render goes through the stricterdom seam', () => {
+  it.each([
+    ['an empty container (root mode)', ''],
+    ['a container with content (bounded by markers)', '<i>x</i>'],
+  ])('mount and dispose into %s call forceMutation(cb, element); every write into it happens inside', (_name, initial) => {
+    const el = container();
+    el.innerHTML = initial;
+    const real = strictHooks.forceMutation;
+    const targets: Node[] = [];
+    let forced = 0;
+    strictHooks.forceMutation = (cb, target) => {
+      targets.push(target);
+      forced++;
+      try {
+        return cb();
+      } finally {
+        forced--;
+      }
+    };
+    const unforced: string[] = [];
+    for (const method of ['appendChild', 'append', 'insertBefore', 'removeChild'] as const) {
+      const orig = el[method].bind(el) as (...args: unknown[]) => unknown;
+      (el as any)[method] = (...args: unknown[]) => {
+        if (!forced) unforced.push(method);
+        return orig(...args);
+      };
+    }
+    try {
+      const dispose = render(() => document.createElement('span'), el);
+      expect(el.querySelector('span')).not.toBeNull();
+      expect(targets).toEqual([el]);
+      dispose();
+      expect(el.querySelector('span')).toBeNull();
+      expect(targets).toEqual([el, el]);
+      expect(unforced).toEqual([]);
+    } finally {
+      strictHooks.forceMutation = real;
     }
   });
 });
