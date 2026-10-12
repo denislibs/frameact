@@ -12,7 +12,7 @@
 
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
-import { runWithOwner, untrack } from '../index';
+import { createMemo, runWithOwner, untrack } from '../index';
 import { isUnsafeAttribute, setAttribute, setBoolAttribute } from './attributes';
 import { className, classList } from './classes';
 import { Aliases, ChildProperties, DelegatedEvents, getPropAlias, Properties, SVG_NS } from './constants';
@@ -114,11 +114,7 @@ function put(bag: Record<string, unknown>, key: string, value: unknown): void {
 }
 
 function getOwn(bag: Record<string, unknown>, key: string): unknown {
-  return Object.prototype.hasOwnProperty.call(bag, key) ? bag[key] : undefined;
-}
-
-function hasOwnKey(bag: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(bag, key);
+  return isOwnProp(bag, key) ? bag[key] : undefined;
 }
 
 /**
@@ -136,8 +132,10 @@ export function spread(
 ): Record<string, unknown> {
   const prevProps: Record<string, unknown> = {};
   const sources: PropsSource[] = Array.isArray(props) ? props : [props];
+  // Function sources are called once per pass; the attribute effect and the children slot share the result.
+  const resolved = createMemo(() => sources.map(resolveSource));
   createRenderEffect(
-    () => collectProps(sources, skip),
+    () => collectProps(resolved(), skip),
     (next) => {
       const r = next.ref;
       if (r !== getOwn(prevProps, 'ref') && (typeof r === 'function' || Array.isArray(r))) ref(() => r, node);
@@ -146,28 +144,37 @@ export function spread(
     name === undefined ? undefined : { name: `${name}.spread` },
   );
   if (!skipChildren && !(skip !== undefined && skip('children'))) {
-    insert(node, () => childrenOf(sources), undefined, undefined, name === undefined ? undefined : { name: `${name}.children` });
+    insert(node, () => childrenOf(resolved()), undefined, undefined, name === undefined ? undefined : { name: `${name}.children` });
   }
   return prevProps;
 }
 
-/** Own enumerable string keys only (never prototype properties of untrusted objects); later sources win. */
-function collectProps(sources: PropsSource[], skip?: (key: string) => boolean): Record<string, unknown> {
+/**
+ * Merge like `mergeProps`: own enumerable string keys only (never prototype properties of untrusted
+ * objects), the key order of first appearance, the last DEFINED value wins (a later `undefined` falls
+ * through to an earlier source). Values are read from the end, so a getter shadowed by a later
+ * defined value is neither called nor tracked.
+ */
+function collectProps(sources: (Record<PropertyKey, any> | null)[], skip?: (key: string) => boolean): Record<string, unknown> {
   const out: Record<string, unknown> = Object.create(null);
-  for (let i = 0; i < sources.length; i++) {
-    const s = resolveSource(sources[i]);
-    if (!s) continue;
-    for (const key of Object.keys(s)) {
-      if (key === 'children' || (skip !== undefined && skip(key))) continue;
-      put(out, key, s[key]);
+  const keys = new Set<string>();
+  for (const s of sources) {
+    if (s) for (const key of Object.keys(s)) if (key !== 'children' && !(skip !== undefined && skip(key))) keys.add(key);
+  }
+  for (const key of keys) {
+    let value: unknown;
+    for (let i = sources.length - 1; i >= 0; i--) {
+      const s = sources[i];
+      if (s && isOwnProp(s, key) && (value = s[key]) !== undefined) break;
     }
+    put(out, key, value);
   }
   return out;
 }
 
-function childrenOf(sources: PropsSource[]): unknown {
+function childrenOf(sources: (Record<PropertyKey, any> | null)[]): unknown {
   for (let i = sources.length - 1; i >= 0; i--) {
-    const s = resolveSource(sources[i]);
+    const s = sources[i];
     if (s && isOwnProp(s, 'children')) return s.children;
   }
   return undefined;
@@ -183,20 +190,33 @@ export function assign(
 ): void {
   const next = props || {};
   const isSVG = node.namespaceURI === SVG_NS;
-  const isCE = node.nodeName.includes('-') || hasOwnKey(next, 'is');
+  const isCE = node.nodeName.includes('-') || isOwnProp(next, 'is');
   for (const prop of Object.keys(prevProps)) {
-    if (hasOwnKey(next, prop) || prop === 'children') continue;
+    if (isOwnProp(next, prop) || prop === 'children') continue;
     assignProp(node, prop, null, prevProps[prop], isSVG, isCE, skipRef);
     delete prevProps[prop];
+  }
+  // `class` and `className` write the one class channel: in one bag their tokens are combined.
+  const bothClasses = isOwnProp(next, 'class') && isOwnProp(next, 'className');
+  if (bothClasses && DEV && !warnedClassPair.has(node)) {
+    warnedClassPair.add(node);
+    console.error('[frameact] class and className in one props bag: their tokens are combined; use class.');
   }
   for (const prop of Object.keys(next)) {
     if (prop === 'children') {
       if (!skipChildren) insertExpression(node, normalize(next.children, false, false), undefined);
       continue;
     }
-    put(prevProps, prop, assignProp(node, prop, next[prop], getOwn(prevProps, prop), isSVG, isCE, skipRef));
+    if (bothClasses && prop === 'className') {
+      put(prevProps, prop, next.className);
+      continue;
+    }
+    const value = bothClasses && prop === 'class' ? [next.class, next.className] : next[prop];
+    put(prevProps, prop, assignProp(node, prop, value, getOwn(prevProps, prop), isSVG, isCE, skipRef));
   }
 }
+
+const warnedClassPair = new WeakSet<Element>();
 
 function toPropertyName(name: string): string {
   return name.toLowerCase().replace(/-([a-z])/g, (_match, letter: string) => letter.toUpperCase());

@@ -437,3 +437,94 @@ describe('events through a spread', () => {
     expect(clicks).toEqual([]);
   });
 });
+
+describe('sources', () => {
+  it('in an array of sources a later undefined falls through to an earlier one, like mergeProps', () => {
+    const el = container();
+    createRoot(() => spread(el, [{ title: 'a', id: 'i' }, { title: undefined }], true));
+    expect(el.getAttribute('title')).toBe('a');
+    expect(el.id).toBe('i');
+    const other = container();
+    createRoot(() => spread(other, [{ title: undefined }], true));
+    expect(other.hasAttribute('title')).toBe(false);
+  });
+
+  it('a getter shadowed by a later defined value is neither called nor tracked', async () => {
+    const el = container();
+    let calls = 0;
+    const [n, setN] = createSignal(0);
+    createRoot(() =>
+      spread(el, [{ get title() { calls++; return String(n()); } }, { title: 'later' }], true),
+    );
+    expect(el.getAttribute('title')).toBe('later');
+    expect(calls).toBe(0);
+    setN(1);
+    await frame();
+    expect(calls).toBe(0);
+  });
+
+  it('keeps first-seen key order and own-enumerable semantics', () => {
+    const el = container();
+    const order: string[] = [];
+    createRoot(() =>
+      spread(
+        el,
+        [
+          { get a() { order.push('a'); return '1'; }, get b() { order.push('b'); return '2'; } },
+          Object.defineProperty({}, 'c', { value: '3', enumerable: false }),
+        ],
+        true,
+      ),
+    );
+    expect(order).toEqual(['a', 'b']);
+    expect(el.hasAttribute('c')).toBe(false);
+  });
+
+  it('a function source is called once per pass and unrelated changes do not rebuild the children', async () => {
+    const el = container();
+    let calls = 0;
+    const [title, setTitle] = createSignal('a');
+    createRoot(() =>
+      spread(el, () => {
+        calls++;
+        return { title: title(), children: 'kid' };
+      }),
+    );
+    expect(calls).toBe(1);
+    const text = el.firstChild;
+    expect(el.textContent).toBe('kid');
+    setTitle('b');
+    await frame();
+    expect(calls).toBe(2);
+    expect(el.getAttribute('title')).toBe('b');
+    expect(el.firstChild).toBe(text);
+  });
+
+  it('class and className in one bag are combined into one channel; a DEV hint suggests class', async () => {
+    expectDevErrors();
+    const el = container();
+    const [n, setN] = createSignal(0);
+    createRoot(() => spread(el, { class: 'a', className: 'b', get title() { return String(n()); } }, true));
+    expect(new Set(el.classList)).toEqual(new Set(['a', 'b']));
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('use class'));
+    setN(1);
+    await frame();
+    expect(new Set(el.classList)).toEqual(new Set(['a', 'b']));
+  });
+
+  it('class alone, then className alone, then both', async () => {
+    expectDevErrors();
+    const el = container();
+    const [props, setProps] = createSignal<Record<string, unknown>>({ class: 'a' });
+    createRoot(() => spread(el, () => props(), true));
+    setProps({ className: 'b' });
+    await frame();
+    expect(Array.from(el.classList)).toEqual(['b']);
+    setProps({ class: 'a', className: 'c' });
+    await frame();
+    expect(new Set(el.classList)).toEqual(new Set(['a', 'c']));
+    setProps({ class: 'a' });
+    await frame();
+    expect(Array.from(el.classList)).toEqual(['a']);
+  });
+});
