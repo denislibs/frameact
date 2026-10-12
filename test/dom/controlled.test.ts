@@ -652,3 +652,49 @@ it('M7: the compositionend check is deferred to the mutate phase, so a handler t
   expect(input.value).toBe('abか');
   expect(text()).toBe('abか');
 });
+
+/** A keystroke in an input type without a selection API (number, email): no caret to set. */
+function typeRaw(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+}
+
+describe('I5: number and email inputs', () => {
+  it('type=number with a numeric signal compares numerically: "1.0" and "1.50" are not rolled back', async () => {
+    const input = textInput();
+    input.type = 'number';
+    const [num, setNum] = createSignal(1);
+    createRoot(() => setAttribute(input, 'use:value', num));
+    (input as any)[EVENT_KEY + 'input'] = (e: Event) => setNum((e.currentTarget as HTMLInputElement).valueAsNumber);
+    delegateEvents(['input']);
+    expect(input.value).toBe('1');
+    typeRaw(input, '1.0');
+    expect(input.value).toBe('1.0');
+    typeRaw(input, '1.50');
+    await frame();
+    expect(input.value).toBe('1.50');
+    expect(num()).toBe(1.5);
+    setNum(2); // a different number is still written
+    await frame();
+    expect(input.value).toBe('2');
+  });
+
+  it('type=number: a rejected value is rolled back to the number', () => {
+    const input = textInput();
+    input.type = 'number';
+    const [num] = createSignal(5);
+    createRoot(() => setAttribute(input, 'use:value', num));
+    typeRaw(input, '7');
+    expect(input.value).toBe('5');
+  });
+
+  it('selectionStart is null on email/number: no caret snapshot, rollback still works and nothing throws', () => {
+    const input = textInput();
+    input.type = 'email';
+    expect(input.selectionStart).toBe(null);
+    const [mail] = createSignal('a@b');
+    createRoot(() => setAttribute(input, 'use:value', mail));
+    expect(() => typeRaw(input, 'a@b!')).not.toThrow();
+    expect(input.value).toBe('a@b');
+  });
+});

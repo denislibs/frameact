@@ -178,6 +178,19 @@ function toText(v: unknown): string {
   return v == null ? '' : String(v);
 }
 
+/**
+ * The DOM already shows `v`. A number input bound to a number compares numerically, so "1.0" or
+ * "1.50" typed on the way to another number are not rolled back to "1" / "1.5" (an empty field
+ * matches NaN, what valueAsNumber reports for it).
+ */
+function showsValue(el: TextControl, v: unknown, text: string): boolean {
+  const shown = el.value;
+  if (typeof v === 'number' && (el as HTMLInputElement).type === 'number') {
+    return shown === '' ? Number.isNaN(v) : Number(shown) === v;
+  }
+  return shown === text;
+}
+
 function snapshot(b: ValueBinding): void {
   const input = b.el as HTMLInputElement;
   const start = 'selectionStart' in input ? input.selectionStart : null;
@@ -242,15 +255,16 @@ function mapCaret(i: number, prev: string, next: string, suffix: number): number
 function writeValue(b: ValueBinding, v: unknown): void {
   const el = b.el;
   const next = toText(v);
-  const prev = el.value;
+  const same = showsValue(el, v, next);
   if (b.composing) {
     // IME: writing now would break the composition. Only programmatic writes reach this point
     // (rollback checks are off while composing): remember it, compositionend applies the newest
     // value. A delivery equal to the DOM (the handler accepted composing input) changes nothing.
-    if (prev !== next) b.deferredWrite = true;
+    if (!same) b.deferredWrite = true;
     return;
   }
-  if (prev === next) return;
+  if (same) return;
+  const prev = el.value;
   el.value = next;
   if (b.hasSelection && document.activeElement === el && 'setSelectionRange' in el) {
     const suffix = commonSuffix(prev, next);
