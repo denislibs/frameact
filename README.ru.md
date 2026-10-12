@@ -23,9 +23,12 @@ frameact — реактивный UI-фреймворк для приложен�
   кадром после её окончания — глобально или только для одного поддерева;
 - **stricterdom** *(в планах)* — dev-режим, который ловит нарушения фаз на уровне DOM API и называет виновный эффект.
 
-> **Статус: ранняя разработка.** Реактивное ядро реализовано, прошло ревью и смержено
-> ([PR #1](https://github.com/denislibs/frameact/pull/1)); следующим идёт DOM-рантайм и интеграция с
-> JSX-компилятором. В npm пока не опубликован, API может меняться.
+> **Статус: ранняя разработка.** Реактивное ядро ([PR #1](https://github.com/denislibs/frameact/pull/1)) и
+> DOM-рантайм реализованы: `frameact/dom` для JSX-компилятора Solid 2.0
+> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (включая `order="manual"`),
+> `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, контролируемые инпуты (`use:value` / `use:checked`),
+> `HeavyAnimationScope`, context `Provider` и Vite-плагин `frameact/vite`. Дальше — стор и stricterdom.
+> В npm пока не опубликован, API может меняться.
 
 ## Зачем
 
@@ -92,8 +95,30 @@ provideHeavyAnimationScope(scope);
 scope.begin(300, true);
 ```
 
-Компоненты будут писаться в чистом Solid-стиле — выполняются один раз, пропсы-геттеры — и компилироваться
-JSX-компилятором Solid 2.0, настроенным на рантайм frameact.
+Компоненты пишутся в чистом Solid-стиле — выполняются один раз, пропсы-геттеры — и компилируются
+JSX-компилятором Solid 2.0, настроенным на рантайм frameact (`moduleName: "frameact/dom"`):
+
+```ts
+// vite.config.ts
+import frameact from 'frameact/vite';
+export default { plugins: [frameact()] };
+// tsconfig.json: "jsx": "preserve", "jsxImportSource": "frameact"
+```
+
+```tsx
+import { createSignal } from 'frameact';
+import { render } from 'frameact/dom';
+
+function Composer() {
+  const [text, setText] = createSignal('');
+  return <input use:value={text} onInput={(e) => setText(e.currentTarget.value.trimStart())} />;
+}
+render(() => <Composer />, document.getElementById('app')!);
+```
+
+`class=` / `classList=` / спреды диффят токены классов, поэтому императивный `addExtraClass` переживает
+обновления; строковый `style=` пишет `cssText` и несовместим с `setExtraStyles`. Контролируемые инпуты —
+`use:value` / `use:checked`: реактивный `value=` пишется как свойство, и Vite-плагин предупреждает об этом в dev.
 
 ## Вдохновение и благодарности
 
@@ -117,7 +142,7 @@ JSX-компилятором Solid 2.0, настроенным на рантай
 | План | Что входит | Статус |
 |---|---|---|
 | 1 · core | сигналы, двухфазные эффекты, кадровые очереди, гейтинг анимаций, `mapArray`, context | ✅ готово — [PR #1](https://github.com/denislibs/frameact/pull/1) |
-| 2 · dom | рантайм для JSX-компилятора, `For`/`Show`/`Switch`, контролируемые инпуты, списки с ручным порядком, Vite-плагин | 🛠 планирование |
+| 2 · dom | рантайм для JSX-компилятора, `For`/`Show`/`Switch`, контролируемые инпуты, списки с ручным порядком, Vite-плагин | ✅ готово |
 | 3 · store | глобальный стор в стиле TeactN (`withGlobal`, action handlers) с распространением, учитывающим анимации | ⏳ |
 | 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта | ⏳ |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact на сценариях мессенджера (Chromium + WebKit, CPU ×4) | ⏳ |

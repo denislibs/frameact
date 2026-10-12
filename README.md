@@ -24,9 +24,12 @@ behind Telegram Web A:
 - **stricterdom** *(planned)* — a dev mode that catches phase violations at the DOM-API level and names the
   offending effect.
 
-> **Status: early development.** The reactive core is implemented, reviewed and merged
-> ([PR #1](https://github.com/denislibs/frameact/pull/1)); the DOM runtime and JSX compiler integration are
-> next. Not published to npm yet. APIs may change.
+> **Status: early development.** The reactive core ([PR #1](https://github.com/denislibs/frameact/pull/1)) and
+> the DOM runtime are implemented: `frameact/dom` for the Solid 2.0 JSX compiler
+> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (including `order="manual"`),
+> `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, controlled inputs (`use:value` / `use:checked`),
+> `HeavyAnimationScope`, a context `Provider` and the `frameact/vite` plugin. Next: the store and
+> stricterdom. Not published to npm yet. APIs may change.
 
 ## Why
 
@@ -93,8 +96,30 @@ provideHeavyAnimationScope(scope);
 scope.begin(300, true);
 ```
 
-Components will be written in plain Solid style — they run once, props are getters — and compiled by
-Solid 2.0's JSX compiler pointed at frameact's runtime.
+Components are written in plain Solid style — they run once, props are getters — and compiled by
+Solid 2.0's JSX compiler pointed at frameact's runtime (`moduleName: "frameact/dom"`):
+
+```ts
+// vite.config.ts
+import frameact from 'frameact/vite';
+export default { plugins: [frameact()] };
+// tsconfig.json: "jsx": "preserve", "jsxImportSource": "frameact"
+```
+
+```tsx
+import { createSignal } from 'frameact';
+import { render } from 'frameact/dom';
+
+function Composer() {
+  const [text, setText] = createSignal('');
+  return <input use:value={text} onInput={(e) => setText(e.currentTarget.value.trimStart())} />;
+}
+render(() => <Composer />, document.getElementById('app')!);
+```
+
+`class=` / `classList=` / spreads diff class tokens, so imperative `addExtraClass` survives updates; a string
+`style=` writes `cssText` and is incompatible with `setExtraStyles`. Controlled inputs are `use:value` /
+`use:checked` — a reactive `value=` is written as a property, and the Vite plugin warns about it in dev.
 
 ## Inspiration and credits
 
@@ -118,7 +143,7 @@ Third-party code is MIT-licensed and attributed in each adapted file.
 | Plan | Scope | Status |
 |---|---|---|
 | 1 · core | signals, two-phase effects, frame queues, heavy-animation gating, `mapArray`, context | ✅ done — [PR #1](https://github.com/denislibs/frameact/pull/1) |
-| 2 · dom | runtime for the JSX compiler, `For`/`Show`/`Switch`, controlled inputs, manual-order lists, Vite plugin | 🛠 planning |
+| 2 · dom | runtime for the JSX compiler, `For`/`Show`/`Switch`, controlled inputs, manual-order lists, Vite plugin | ✅ done |
 | 3 · store | global store in the style of TeactN (`withGlobal`, action handlers) with animation-aware propagation | ⏳ |
 | 4 · stricterdom | dev-mode phase checks with effect attribution | ⏳ |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact on messenger scenarios (Chromium + WebKit, CPU ×4) | ⏳ |

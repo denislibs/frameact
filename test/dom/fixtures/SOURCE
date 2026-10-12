@@ -1,0 +1,3 @@
+Vendored from https://github.com/solidjs/solid, branch next, commit e0a7548dca6cd633ccd8bd486f47fc8c59c28ad7
+(@solidjs/babel-plugin 2.0.0-rc.14): packages/babel-plugin/test/__dom_fixtures__/<name>/code.js
+MIT License, Copyright (c) 2016-2025 Ryan Carniato. Do not edit; re-copy when bumping the compiler pin.

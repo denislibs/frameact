@@ -25,5 +25,5 @@
       "rules": { "no-underscore-dangle": "off" }
     }
   ],
-  "ignorePatterns": ["dist", "node_modules", "coverage"]
+  "ignorePatterns": ["dist", "node_modules", "coverage", "test/dom/fixtures"]
 }
