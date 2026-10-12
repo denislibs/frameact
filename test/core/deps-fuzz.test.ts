@@ -35,7 +35,15 @@ interface Spec {
   writer: { target: number; inputs: number[]; before: boolean; viaDirty: boolean } | null;
   /** 1 / 2: the compute creates an owned memo / signal and reads it first (re-linked every run) */
   owned: number;
+  /**
+   * Throwing mode: the compute throws when node `on` reads `val` (mod MOD) — right after reading
+   * it (`before`) or after reading its list.
+   */
+  thr: { on: number; val: number; before: boolean } | null;
 }
+
+/** The error a throwing node throws (readers catch only this one: fuzz failures propagate). */
+class FuzzThrow extends Error {}
 
 /** FUZZ_BIG=1: larger graphs than the default runs use (manual sweeps; old seeds change graphs). */
 const BIG = typeof process !== 'undefined' && process.env.FUZZ_BIG === '1';
@@ -51,18 +59,28 @@ function evalSpec(spec: Spec, rd: (j: number) => number, write: ((w: number, v: 
     wv = (wv + 1) % 3;
     if (spec.writer.before && write) write(spec.writer.target, wv);
   }
+  const throwsNow = spec.thr !== null && rd(spec.thr.on) % MOD === spec.thr.val;
+  if (throwsNow && spec.thr!.before) throw new FuzzThrow('thrown');
   const list = spec.cond >= 0 && rd(spec.cond) % 2 === 1 ? spec.b : spec.a;
   let v = spec.k;
   for (let i = 0; i < list.length; i++) v += (i + 1) * rd(list[i]);
+  if (throwsNow) throw new FuzzThrow('thrown');
   if (spec.writer && !spec.writer.before && write) write(spec.writer.target, wv);
   return v % MOD;
 }
 
-/** `sync`: effects run synchronously from inside notify() (a custom `(run) => run()` schedule). */
-function runFuzz(seed: number, withWriters: boolean, sync = false) {
+/**
+ * `sync`: effects run synchronously from inside notify() (a custom `(run) => run()` schedule).
+ * `throwing` (stage-3 review, Minor 9): ~25% of memos/effects throw on a condition of an input. A
+ * memo that throws holds the error (every read rethrows it); a reader catches it and falls back to
+ * that node's last good value. Oracle: a node that throws now — throws (a memo) / keeps its last
+ * applied value (an effect); every other node has its pure value with those fallbacks.
+ */
+function runFuzz(seed: number, withWriters: boolean, sync = false, throwing = false) {
   const rand = mulberry32(seed);
   // Features added later draw from their own stream, so older seeds keep their graphs.
   const rand2 = mulberry32(seed ^ 0x9e3779b9);
+  const rand4 = mulberry32(seed ^ 0xc2b2ae35);
   const int = (n: number) => Math.floor(rand() * n);
   const shuffle = <T>(arr: T[]) => {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -75,7 +93,7 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   // effects do), so it is also kept and re-thrown after the step.
   let firstFailure: Error | null = null;
   const fail = (msg: string): never => {
-    firstFailure ??= new Error(`[deps fuzz] seed ${seed} (${withWriters ? 'writers' : 'pure'}${sync ? ', sync' : ''}): ${msg}`);
+    firstFailure ??= new Error(`[deps fuzz] seed ${seed} (${withWriters ? 'writers' : 'pure'}${sync ? ', sync' : ''}${throwing ? ', throwing' : ''}): ${msg}`);
     throw firstFailure;
   };
 
@@ -117,12 +135,15 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
       const inputs = Array.from({ length: 1 + int(2) }, () => allowed[int(allowed.length)]);
       writer = { target: firstW + k, inputs, before: rand() < 0.4, viaDirty: false };
     }
-    const spec: Spec = { kind: i < firstEff ? 'memo' : 'effect', cond, a, b, k: int(MOD), writer, owned: 0 };
+    const spec: Spec = { kind: i < firstEff ? 'memo' : 'effect', cond, a, b, k: int(MOD), writer, owned: 0, thr: null };
+    if (throwing && rand4() < 0.25) {
+      spec.thr = { on: Math.floor(rand4() * Math.min(i, firstEff)), val: Math.floor(rand4() * MOD), before: rand4() < 0.5 };
+    }
     if (writer && spec.kind === 'memo') writer.viaDirty = rand2() < 0.4;
     if (rand2() < 0.15) spec.owned = rand2() < 0.5 ? 1 : 2;
     specs[i] = spec;
     let m = 0;
-    for (const j of [...a, ...b, ...(cond >= 0 ? [cond] : []), ...(writer ? writer.inputs : [])]) m |= mask[j];
+    for (const j of [...a, ...b, ...(cond >= 0 ? [cond] : []), ...(writer ? writer.inputs : []), ...(spec.thr ? [spec.thr.on] : [])]) m |= mask[j];
     mask[i] = m;
   }
   // W signals whose writer was never assigned keep their initial value (plain signals).
@@ -138,7 +159,7 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   for (let i = firstMemo; i < total; i++) {
     const spec = specs[i]!;
     let n = 0;
-    for (const j of [...spec.a, ...spec.b, ...(spec.cond >= 0 ? [spec.cond] : []), ...(spec.writer ? spec.writer.inputs : [])]) n += pathsTo[j];
+    for (const j of [...spec.a, ...spec.b, ...(spec.cond >= 0 ? [spec.cond] : []), ...(spec.writer ? spec.writer.inputs : []), ...(spec.thr ? [spec.thr.on] : [])]) n += pathsTo[j];
     pathsTo[i] = Math.min(n, 1e9);
   }
 
@@ -160,7 +181,11 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   let stepRuns = 0;
   const logs: number[][] = Array.from({ length: total }, () => []);
   const allowance = new Array<boolean>(total).fill(false);
-  const lastValue = new Array<number>(total).fill(NaN);
+  // the last successful result (a memo keeps it when its compute throws; initial: 0)
+  const lastValue = new Array<number>(total).fill(0);
+  const succeeded = new Array<boolean>(total).fill(false);
+  /** the node's last run threw (a memo then holds the error) */
+  const errNow = new Array<boolean>(total).fill(false);
   const applied = new Array<number>(total).fill(NaN);
   const disposed = new Array<boolean>(total).fill(false);
   let writeSerial = 0;
@@ -221,6 +246,18 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   };
 
   const pendingW = new Array<number>(total).fill(-1);
+  const checkExplained = (i: number, prevLog: number[]) => {
+    if (runs[i] > 0 && !allowance[i] && !sync) {
+      let explained = false;
+      for (let t = 0; t < prevLog.length; t += 2) {
+        if (changeCount[prevLog[t]] !== prevLog[t + 1]) {
+          explained = true;
+          break;
+        }
+      }
+      if (!explained) fail(`node ${i} (${specs[i]!.kind}) re-ran with no changed input`);
+    }
+  };
   const runNode = (i: number) => {
     const spec = specs[i]!;
     if (sync) {
@@ -231,7 +268,13 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
     const startSerial = writeSerial;
     const log: number[] = [];
     const rd = (j: number) => {
-      const v = acc[j]();
+      let v: number;
+      try {
+        v = acc[j]();
+      } catch (error) {
+        if (!(error instanceof FuzzThrow)) throw error;
+        v = lastValue[j]; // fallback: the last good value of the node holding the error
+      }
       log.push(j, changeCount[j]);
       return v;
     };
@@ -239,30 +282,38 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
     if (spec.owned === 1) computed(() => 1)();
     else if (spec.owned === 2) signal(1)();
     const deferred = spec.writer !== null && spec.writer.viaDirty && runs[i] > 0;
-    const value = evalSpec(spec, rd, deferred ? (_w, v) => { pendingW[i] = v; } : writeSig);
+    let value: number;
+    try {
+      value = evalSpec(spec, rd, deferred ? (_w, v) => { pendingW[i] = v; } : writeSig);
+    } catch (error) {
+      if (!(error instanceof FuzzThrow)) throw error;
+      checkExplained(i, prevLog);
+      runs[i]++;
+      runsInFlush[i]++;
+      totalRuns++;
+      runsInStep[i]++;
+      logs[i] = log;
+      allowance[i] = true; // a node that threw re-runs on its next check (F_THREW)
+      if (!errNow[i]) changeCount[i]++; // value → error: a change for its readers
+      errNow[i] = true;
+      throw error;
+    }
     // Glitch-free / no over-execution: a re-run must be explained by an input that changed since
     // the previous run (checked after this run pulled its memo inputs), unless the previous run
     // overlapped a value-changing write (the latch is conservative: "wrote, then read" re-runs).
     // (Not with synchronous effects: one that runs in the middle of a notify() walk may read a
     // memo the walk has not marked yet; the walk then reaches it and correctly runs it again — a
     // re-run that can repeat inputs another path already showed it. Values are still checked.)
-    if (runs[i] > 0 && !allowance[i] && !sync) {
-      let explained = false;
-      for (let t = 0; t < prevLog.length; t += 2) {
-        if (changeCount[prevLog[t]] !== prevLog[t + 1]) {
-          explained = true;
-          break;
-        }
-      }
-      if (!explained) fail(`node ${i} (${spec.kind}) re-ran with no changed input`);
-    }
+    checkExplained(i, prevLog);
     runs[i]++;
     runsInFlush[i]++;
     totalRuns++;
     logs[i] = log;
     allowance[i] = writeSerial !== startSerial;
-    if (runs[i] > 1 && value !== lastValue[i]) changeCount[i]++;
+    if (errNow[i] || (runs[i] > 1 && value !== lastValue[i])) changeCount[i]++; // (error → value: always)
+    errNow[i] = false;
     lastValue[i] = value;
+    succeeded[i] = true;
     runsInStep[i]++;
     return value;
   };
@@ -309,6 +360,10 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
   // --- oracle ---------------------------------------------------------------------------------
   const oracle = () => {
     const cache = new Map<number, number>();
+    const throwsNow = (j: number) => {
+      const thr = j >= firstMemo ? specs[j]!.thr : null;
+      return thr !== null && ov(thr.on) % MOD === thr.val;
+    };
     const ov = (j: number): number => {
       const hit = cache.get(j);
       if (hit !== undefined) return hit;
@@ -322,11 +377,16 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
           for (const x of specs[w]!.writer!.inputs) s += ov(x);
           v = (s + 1) % 3;
         }
-      } else v = evalSpec(specs[j]!, ov, null);
+      } else {
+        // a node that throws now: readers fall back to its last good value (an effect keeps the
+        // last one it applied)
+        if (throwsNow(j)) v = j >= firstEff && !succeeded[j] ? NaN : lastValue[j];
+        else v = evalSpec(specs[j]!, ov, null);
+      }
       cache.set(j, v);
       return v;
     };
-    return ov;
+    return { ov, throwsNow };
   };
 
   const order = Array.from({ length: nMemo }, (_, t) => firstMemo + t);
@@ -336,24 +396,38 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
       const before = totalRuns;
       flush();
       shuffle(order);
-      for (const i of order) acc[i]();
+      for (const i of order) {
+        try {
+          acc[i]();
+        } catch (error) {
+          if (!(error instanceof FuzzThrow)) throw error;
+        }
+      }
       flush();
       if (totalRuns === before) break;
       if (!withWriters && !sync && pass >= 1) fail(`step ${step}: a pure graph needed a second settle pass`);
     }
     if (pass === 30) fail(`step ${step}: did not settle`);
-    const ov = oracle();
+    const { ov, throwsNow } = oracle();
     const runsBefore = totalRuns;
     for (let i = firstMemo; i < firstEff; i++) {
-      const got = acc[i]();
-      if (got !== ov(i)) fail(`step ${step}: memo ${i} = ${got}, oracle ${ov(i)}`);
+      let threw = false;
+      let got = NaN;
+      try {
+        got = acc[i]();
+      } catch (error) {
+        if (!(error instanceof FuzzThrow)) throw error;
+        threw = true;
+      }
+      if (threw !== throwsNow(i)) fail(`step ${step}: memo ${i} ${threw ? 'holds an error' : 'has a value'}, oracle: ${throwsNow(i) ? 'throws' : 'a value'}`);
+      if (!threw && got !== ov(i)) fail(`step ${step}: memo ${i} = ${got}, oracle ${ov(i)}`);
     }
     if (totalRuns !== runsBefore) fail(`step ${step}: reading settled memos recomputed something`);
     for (let j = firstW; j < firstMemo; j++) {
       if (sigs[j]() !== ov(j)) fail(`step ${step}: W signal ${j} = ${sigs[j]()}, oracle ${ov(j)}`);
     }
     for (let i = firstEff; i < total; i++) {
-      if (!disposed[i] && applied[i] !== ov(i)) fail(`step ${step}: effect ${i} applied ${applied[i]}, oracle ${ov(i)}`);
+      if (!disposed[i] && !Object.is(applied[i], ov(i))) fail(`step ${step}: effect ${i} applied ${applied[i]}, oracle ${ov(i)}`);
     }
     checkStructure(step);
   };
@@ -405,7 +479,13 @@ function runFuzz(seed: number, withWriters: boolean, sync = false) {
     stepSerial = writeSerial;
     for (let w = 0; w < writes; w++) {
       writeSig(int(nBase), int(MOD));
-      if (rand() < 0.3) acc[firstMemo + int(nMemo)](); // a partial read mid-batch
+      if (rand() < 0.3) {
+        try {
+          acc[firstMemo + int(nMemo)](); // a partial read mid-batch
+        } catch (error) {
+          if (!(error instanceof FuzzThrow)) throw error;
+        }
+      }
     }
     if (rand() < 0.08) {
       const e = firstEff + int(nEff);
@@ -450,5 +530,23 @@ describe('dependency graph: differential fuzz', () => {
   it('synchronous effects (run from inside notify), with and without writes in computes: oracle values, structure, bounded runs per write', () => {
     for (const seed of seeds(300, 200_003)) runFuzz(seed, false, true);
     for (const seed of seeds(300, 300_007)) runFuzz(seed, true, true);
+  });
+
+  // Stage-3 review, Minor 9: computes that throw (error resilience: an error never freezes part of
+  // the graph — every node that does not throw now ends with its pure value after settling).
+  describe('throwing computes', () => {
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errorSpy.mockRestore();
+    });
+    it('queued effects: oracle values (a memo that throws now holds the error, readers fall back), structure, no unexplained re-runs', () => {
+      for (const seed of seeds(600, 400_009)) runFuzz(seed, false, false, true);
+    });
+    it('synchronous effects: oracle values, structure, bounded runs per write', () => {
+      for (const seed of seeds(300, 500_009)) runFuzz(seed, false, true, true);
+    });
   });
 });
