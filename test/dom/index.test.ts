@@ -15,3 +15,12 @@ it('exports the compiler contract (every name the 2.0 compiler imports from modu
     expect(typeof (dom as Record<string, unknown>)[name], name).toBe('function');
   }
 });
+
+it('the policy tables are not part of the public surface (a live Set could be mutated to change the policy)', () => {
+  for (const name of [
+    'Properties', 'ChildProperties', 'BooleanAttributes', 'Aliases', 'DelegatedEvents', 'SVGElements', 'SVGNamespace',
+    'DOMElements', 'getPropAlias',
+  ]) {
+    expect(name in dom, name).toBe(false);
+  }
+});

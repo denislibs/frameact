@@ -257,3 +257,20 @@ describe('prop:<name> never writes the prototype slots', () => {
     expect(errors).not.toHaveBeenCalled();
   });
 });
+
+describe('the namespace table has no inherited names', () => {
+  it('setAttribute(el, "constructor:x") is a plain attribute, not a write into a fake namespace', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    expect(() => setAttribute(svg, 'constructor:x', 'v')).not.toThrow();
+    expect(svg.getAttribute('constructor:x')).toBe('v');
+    expect(svg.attributes[0].namespaceURI).toBeNull();
+    setAttribute(svg, 'toString:y', 'w');
+    expect(svg.getAttribute('toString:y')).toBe('w');
+  });
+
+  it('xlink: and xml: still resolve to their namespaces', () => {
+    const svgUse = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    setAttribute(svgUse, 'xml:lang', 'en');
+    expect(svgUse.getAttributeNS('http://www.w3.org/XML/1998/namespace', 'lang')).toBe('en');
+  });
+});

@@ -86,10 +86,10 @@ const ChildProperties = /*#__PURE__*/ new Set([
 ]);
 
 // React Compat
-const Aliases = /*#__PURE__*/ Object.assign(Object.create(null), {
+const Aliases = /*#__PURE__*/ Object.freeze(Object.assign(Object.create(null), {
   className: "class",
   htmlFor: "for"
-});
+}));
 
 const PropAliases = /*#__PURE__*/ Object.assign(Object.create(null), {
   // locked to properties
@@ -296,10 +296,13 @@ const SVGElements = /*#__PURE__*/ new Set([
   "vkern"
 ]);
 
-const SVGNamespace: Record<string, string> = {
-  xlink: "http://www.w3.org/1999/xlink",
-  xml: "http://www.w3.org/XML/1998/namespace"
-};
+// Null prototype, frozen: `SVGNamespace['constructor']` must not resolve to `Object`.
+const SVGNamespace: Record<string, string> = /*#__PURE__*/ Object.freeze(
+  Object.assign(Object.create(null) as Record<string, string>, {
+    xlink: "http://www.w3.org/1999/xlink",
+    xml: "http://www.w3.org/XML/1998/namespace"
+  })
+);
 
 const DOMElements = /*#__PURE__*/ new Set([
   "html",
