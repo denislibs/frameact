@@ -114,7 +114,7 @@ export function insert(
   options?: InsertOptions,
 ): void {
   const multi = marker !== undefined;
-  const host = options?.host;
+  const host = options?.host && hostGetter(parent, options.host);
   if (multi && !initial) initial = [];
   if (typeof accessor !== 'function' || (accessor as (...args: unknown[]) => unknown).length) {
     const value = normalize(accessor, multi, true);
@@ -287,12 +287,32 @@ function appendNodes(parent: MountableElement, array: any[], marker: Node | null
   }
 }
 
-/** Portal content: top-level nodes learn their logical host (delegated events bubble through it). */
-function tagHost(value: any, host: () => Node | null): void {
+type HostGetter = (this: Node) => Node | null;
+
+let nativeParentNode: ((this: Node) => Node | null) | undefined;
+
+/**
+ * The `_$host` accessor of Portal content. It answers only while the node is still a direct child of
+ * the portal's mount (`parent`): a node that was moved out, or removed, stops reporting the old host
+ * without anything having to remove the getter. `parentNode` is read through the prototype getter
+ * (a `<form>` with a control named `parentNode` shadows it).
+ */
+function hostGetter(parent: MountableElement, host: () => Node | null): HostGetter {
+  return function (this: Node) {
+    nativeParentNode ??= Object.getOwnPropertyDescriptor(Node.prototype, 'parentNode')!.get!;
+    return nativeParentNode.call(this) === parent ? host() : null;
+  };
+}
+
+/**
+ * Portal content: top-level nodes learn their logical host (delegated events bubble through it). Only
+ * an own accessor property counts as a host for event delegation (events.ts), never a data property.
+ */
+function tagHost(value: any, getter: HostGetter): void {
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) tagHost(value[i], host);
-  } else if (value && value.nodeType && value[HOST_TAG] !== host) {
-    value[HOST_TAG] = host;
-    Object.defineProperty(value, HOST_KEY, { get: host, configurable: true });
+    for (let i = 0; i < value.length; i++) tagHost(value[i], getter);
+  } else if (value && value.nodeType && value[HOST_TAG] !== getter) {
+    value[HOST_TAG] = getter;
+    Object.defineProperty(value, HOST_KEY, { get: getter, configurable: true });
   }
 }

@@ -18,3 +18,4 @@ export { style, setStyleProperty, setExtraStyles } from './styles';
 export { setAttribute, setAttributeNS, setBoolAttribute, setProperty } from './attributes';
 export { addEvent, delegateEvents, clearDelegatedEvents, setListener, EVENT_KEY } from './events';
 export { defineDirective, use, type Directive } from './directives';
+export { Show, Switch, Match, Dynamic, Portal, type MatchProps } from './flow';
