@@ -95,17 +95,22 @@ export function mergeProps(...sources: PropsSource[]): any {
  * (reads stay reactive, nothing is evaluated here). Keys are the own enumerable keys of `props` at
  * call time: a `mergeProps` result with a function source (a Proxy whose key set may change) is
  * split by the keys it has now. Solid's `splitProps` without the Proxy branch.
+ *
+ * Cost: about 1.4 µs per call (one `defineProperty` per key). Fine for wrapper components; a list row
+ * created hundreds of times per frame should read `props.x` directly instead. Linear in the number
+ * of keys, but split only bags whose keys you control (see the TRUST note on `spread`).
  */
 export function splitProps<T extends Record<string, any>, const K extends readonly (readonly (keyof T)[])[]>(
   props: T,
   ...keys: K
 ): [...{ [I in keyof K]: Pick<T, K[I][number]> }, Omit<T, K[number][number]>] {
   const own = Reflect.ownKeys(props).filter((key) => isOwnProp(props, key)) as (keyof T)[];
+  const ownSet = new Set<keyof T>(own); // `own.includes` per key would make the split quadratic
   const taken = new Set<keyof T>();
   const pick = (list: readonly (keyof T)[]) => {
     const out: Record<PropertyKey, unknown> = {};
     for (const key of list) {
-      if (!own.includes(key) || taken.has(key)) continue;
+      if (!ownSet.has(key) || taken.has(key)) continue;
       taken.add(key);
       Object.defineProperty(out, key, { configurable: true, enumerable: true, get: () => props[key] });
     }

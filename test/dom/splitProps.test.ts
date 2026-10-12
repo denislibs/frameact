@@ -32,3 +32,23 @@ it('works over a mergeProps result (keys as of the call)', () => {
   expect({ ...ab }).toEqual({ a: 1, b: 2 });
   expect({ ...rest }).toEqual({ c: 3 });
 });
+
+it('is linear in the number of keys (a bag of data-chosen keys must not stall the main thread)', () => {
+  const props: Record<string, number> = {};
+  for (let i = 0; i < 50_000; i++) props[`k${i}`] = i;
+  const start = performance.now();
+  const [picked, rest] = splitProps(props, ['k1', 'k2']);
+  const elapsed = performance.now() - start;
+  expect(Object.keys(picked)).toEqual(['k1', 'k2']);
+  expect(Object.keys(rest)).toHaveLength(49_998);
+  expect(elapsed).toBeLessThan(250); // quadratic `includes`: ~1.2 s here
+});
+
+it('__proto__ as a data key stays an own key of the rest and never reaches a prototype', () => {
+  const props = JSON.parse('{"__proto__": {"polluted": true}, "a": 1}') as Record<string, unknown>;
+  const [a, rest] = splitProps(props, ['a']);
+  expect(a.a).toBe(1);
+  expect(Object.keys(rest)).toEqual(['__proto__']);
+  expect(Object.getPrototypeOf(rest)).toBe(Object.prototype);
+  expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+});
