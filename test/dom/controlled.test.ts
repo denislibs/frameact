@@ -698,3 +698,24 @@ describe('I5: number and email inputs', () => {
     expect(input.value).toBe('a@b');
   });
 });
+
+it('M5: an input inside an open shadow root is controlled: target from composedPath, focus from its own root', () => {
+  const host = container().appendChild(document.createElement('div'));
+  const root = host.attachShadow({ mode: 'open' });
+  const input = root.appendChild(document.createElement('input'));
+  input.focus();
+  expect(root.activeElement).toBe(input);
+  const [text, setText] = createSignal('hello');
+  createRoot(() => setAttribute(input, 'use:value', text));
+  (input as any)[EVENT_KEY + 'input'] = limit(5)(setText);
+  delegateEvents(['input']);
+  input.value = 'hxello';
+  input.setSelectionRange(2, 2);
+  input.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }));
+  expect(input.value).toBe('hello');
+  expect(input.selectionStart).toBe(1);
+  input.value = 'hell';
+  input.setSelectionRange(4, 4);
+  input.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }));
+  expect(text()).toBe('hell');
+});

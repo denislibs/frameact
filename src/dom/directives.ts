@@ -252,6 +252,11 @@ function mapCaret(i: number, prev: string, next: string, suffix: number): number
   return j;
 }
 
+/** Focus is read from the element's own root (its document, or the shadow root it lives in). */
+function isFocused(el: Element): boolean {
+  return (el.getRootNode() as Document | ShadowRoot).activeElement === el;
+}
+
 function writeValue(b: ValueBinding, v: unknown): void {
   const el = b.el;
   const next = toText(v);
@@ -266,7 +271,7 @@ function writeValue(b: ValueBinding, v: unknown): void {
   if (same) return;
   const prev = el.value;
   el.value = next;
-  if (b.hasSelection && document.activeElement === el && 'setSelectionRange' in el) {
+  if (b.hasSelection && isFocused(el) && 'setSelectionRange' in el) {
     const suffix = commonSuffix(prev, next);
     const start = mapCaret(b.selStart, prev, next, suffix);
     const end = b.selEnd === b.selStart ? start : mapCaret(b.selEnd, prev, next, suffix);
@@ -311,8 +316,18 @@ const checkedKind: Kind<CheckedBinding> = {
 
 // ---- document listeners ----
 
+/**
+ * The element the event happened on. A document listener sees events from inside a shadow root
+ * retargeted at the host; the first entry of the composed path is the real target (open roots).
+ * Only hosts pay for composedPath() (it allocates).
+ */
+function targetOf(e: Event): unknown {
+  const t = e.target as Element | null;
+  return t !== null && t.shadowRoot ? e.composedPath()[0] : t;
+}
+
 function onInput(e: Event): void {
-  const b = lookup(valueKind, e.target);
+  const b = lookup(valueKind, targetOf(e));
   if (!b || (e as InputEvent).isComposing || b.composing) return;
   snapshot(b);
   verify(b);
@@ -328,18 +343,20 @@ function deepActiveElement(doc: Document): Element | null {
 
 /** Measure-time event: a caret moved by clicks or arrows refreshes a still-valid snapshot (never creates one). */
 function onSelectionChange(e: Event): void {
-  const target = e.target;
-  const b = lookup(valueKind, target instanceof Element ? target : deepActiveElement(target as Document));
+  const target = targetOf(e);
+  // Fired at the element (current engines) or at the document (older ones). No instanceof: iframes.
+  const isDocument = target !== null && (target as Node).nodeType === 9; // Node.DOCUMENT_NODE
+  const b = lookup(valueKind, isDocument ? deepActiveElement(target as Document) : target);
   if (b && b.hasSelection) snapshot(b);
 }
 
 function onCompositionStart(e: Event): void {
-  const b = lookup(valueKind, e.target);
+  const b = lookup(valueKind, targetOf(e));
   if (b) b.composing = true;
 }
 
 function onCompositionEnd(e: Event): void {
-  const b = lookup(valueKind, e.target);
+  const b = lookup(valueKind, targetOf(e));
   if (!b) return;
   b.composing = false;
   snapshot(b);
@@ -358,7 +375,7 @@ function onCompositionEnd(e: Event): void {
 }
 
 function onFocusOut(e: Event): void {
-  const b = lookup(valueKind, e.target);
+  const b = lookup(valueKind, targetOf(e));
   if (!b) return;
   b.hasSelection = false;
   // A composition cannot outlive the focus; compositionend may never come (the element was hidden
@@ -387,8 +404,8 @@ function verifyRadioGroup(el: HTMLInputElement): void {
 }
 
 function onChange(e: Event): void {
-  const el = e.target as HTMLInputElement;
-  if (el instanceof Element && el.localName === 'input' && el.type === 'radio' && el.name) return verifyRadioGroup(el);
+  const el = targetOf(e) as HTMLInputElement;
+  if (el && el.localName === 'input' && el.type === 'radio' && el.name) return verifyRadioGroup(el);
   const b = lookup(checkedKind, el);
   if (b) verify(b);
 }
