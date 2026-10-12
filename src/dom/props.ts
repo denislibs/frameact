@@ -120,8 +120,13 @@ function getOwn(bag: Record<string, unknown>, key: string): unknown {
 /**
  * Compiler primitive: `spread(el, props | [sources], skipChildren, skip, name)`. One render effect
  * reads every prop (compute) and assigns the changed ones (apply); `children`, when not skipped,
- * get their own `insert` so an attribute change never rebuilds the subtree. Returns the props as
- * last applied.
+ * get their own `insert`, which re-evaluates only when `children` or a function source changes
+ * (an identical `children` value is a no-op). Returns the props as last applied.
+ *
+ * TRUST: the bag chooses the KEYS. A bag can name `innerHTML`, `prop:*` (a raw property write,
+ * `prop:srcdoc`, `prop:href`) or `use:<directive>`, all of which are outside the value policy
+ * (URLs, string handlers, `srcdoc` are policed; explicit sinks are not). Spread only bags whose
+ * keys you control; the policy protects values, not key names.
  */
 export function spread(
   node: Element,
@@ -180,7 +185,10 @@ function childrenOf(sources: (Record<PropertyKey, any> | null)[]): unknown {
   return undefined;
 }
 
-/** Compiler/author primitive: write `props` onto `node`, removing props present in `prevProps` but absent now. */
+/**
+ * Compiler/author primitive: write `props` onto `node`, removing props present in `prevProps` but
+ * absent now. Same trust rule as `spread`: the bag's keys must be trusted, its values are policed.
+ */
 export function assign(
   node: Element,
   props: Record<string, unknown> | null | undefined,

@@ -383,6 +383,9 @@ describe('style and directives through a spread', () => {
     setProps({ 'use:t9spy': 6 });
     await frame();
     expect(seen).toEqual([5, 6]);
+    setProps({});
+    await frame();
+    expect(seen).toEqual([5, 6, null]); // removal reaches the directive as null
     const input = document.createElement('input');
     createRoot(() => spread(input, { 'use:value': 'hello' }, true));
     expect(input.value).toBe('hello');
@@ -526,5 +529,60 @@ describe('sources', () => {
     setProps({ class: 'a' });
     await frame();
     expect(Array.from(el.classList)).toEqual(['a']);
+  });
+});
+
+describe('children, skip, classList, ref', () => {
+  it('skipChildren=true leaves a children key alone; false inserts it', () => {
+    const skipped = container();
+    skipped.textContent = 'old';
+    createRoot(() => spread(skipped, { children: 'new', id: 'x' }, true));
+    expect(skipped.textContent).toBe('old');
+    expect(skipped.id).toBe('x');
+    const inserted = container();
+    createRoot(() => spread(inserted, { children: 'new' }, false));
+    expect(inserted.textContent).toBe('new');
+  });
+
+  it('the skip callback drops keys, and skip("children") drops the children slot', () => {
+    const el = container();
+    el.textContent = 'old';
+    createRoot(() => spread(el, { id: 'x', title: 't', children: 'new' }, false, (key) => key === 'title' || key === 'children'));
+    expect(el.id).toBe('x');
+    expect(el.hasAttribute('title')).toBe(false);
+    expect(el.textContent).toBe('old');
+  });
+
+  it('classList through a spread diffs and is cleaned up on removal', async () => {
+    const el = container();
+    el.classList.add('imperative');
+    const [props, setProps] = createSignal<Record<string, unknown>>({ classList: { a: true, b: true } });
+    createRoot(() => spread(el, () => props(), true));
+    expect(new Set(el.classList)).toEqual(new Set(['imperative', 'a', 'b']));
+    setProps({ classList: { a: true, b: false } });
+    await frame();
+    expect(new Set(el.classList)).toEqual(new Set(['imperative', 'a']));
+    setProps({});
+    await frame();
+    expect(Array.from(el.classList)).toEqual(['imperative']);
+  });
+
+  it('a changed ref identity is called again; the same one is not; a disappearing ref is not called', async () => {
+    const el = container();
+    const first = vi.fn();
+    const second = vi.fn();
+    const [props, setProps] = createSignal<Record<string, unknown>>({ ref: first, title: 'a' });
+    createRoot(() => spread(el, () => props(), true));
+    setProps({ ref: first, title: 'b' });
+    await frame();
+    expect(first).toHaveBeenCalledTimes(1);
+    setProps({ ref: second, title: 'b' });
+    await frame();
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledWith(el);
+    setProps({ title: 'c' });
+    await frame();
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
   });
 });
