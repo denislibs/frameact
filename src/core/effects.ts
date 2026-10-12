@@ -235,27 +235,34 @@ function runEffect(node: EffectNode) {
   // Ancestor rule (spec §3.2): never run an ancestor effect's compute from here. Check the WHOLE
   // owner chain for effects first; bail onto the nearest non-CLEAN one — its own run disposes us
   // (DIRTY) or releases us (CHECK that resolves clean, or a run that throws).
-  let memos: Computation[] | null = null;
-  for (let p = node[SCOPE] as Computation | null; p !== null; p = p[SCOPE] as Computation | null) {
-    if (p._effect) {
-      if (p._state !== STATE_CLEAN) {
-        ((p as EffectNode)._bailed ??= []).push(node);
-        return;
-      }
-    } else if (p._compute && p._state !== STATE_CLEAN) {
-      (memos ??= []).push(p);
-    } else if (p._mapMemo !== undefined && p._mapMemo._state !== STATE_CLEAN) {
-      // A list row (map.ts links the rows' scope to its map memo): a dirty map is pulled first, like a
-      // dirty memo ancestor — it may dispose this row (its item or id is gone). Zombie rows: a row
-      // that looks its entity up by id must not run after the entity went but before the list did.
-      (memos ??= []).push(p._mapMemo);
-    }
-  }
-
+  let bailed = false;
   try {
-    // All effect ancestors are clean: pull dirty memo ancestors top-down like any read (pure);
-    // one of them may dispose us.
-    if (memos) {
+    for (;;) {
+      let memos: Computation[] | null = null;
+      let pullsMap = false;
+      for (let p = node[SCOPE] as Computation | null; p !== null; p = p[SCOPE] as Computation | null) {
+        if (p._effect) {
+          if (p._state !== STATE_CLEAN) {
+            ((p as EffectNode)._bailed ??= []).push(node);
+            bailed = true; // the finally below must not run: this run did not happen
+            return;
+          }
+        } else if (p._compute && p._state !== STATE_CLEAN) {
+          (memos ??= []).push(p);
+        } else if (p._mapMemo !== undefined && p._mapMemo._state !== STATE_CLEAN) {
+          // A list row (map.ts links the rows' scope to its map memo): a dirty map is pulled like a
+          // dirty memo ancestor, at the row scope's position — it may dispose this row (its item or
+          // id is gone). Zombie rows: a row that looks its entity up by id must not run after the
+          // entity went but before the list did.
+          (memos ??= []).push(p._mapMemo);
+          pullsMap = true;
+        }
+      }
+      if (!memos) break;
+
+      // All effect ancestors are clean: pull dirty memo ancestors top-down like any read; one of
+      // them may dispose us.
+      let settled = true;
       for (let i = memos.length - 1; i >= 0; i--) {
         try {
           updateCheck(memos[i]);
@@ -263,17 +270,25 @@ function runEffect(node: EffectNode) {
           logEffectError(node, error);
         }
         if (node._state === STATE_DISPOSED) return;
+        if (memos[i]._state !== STATE_CLEAN) settled = false;
       }
+      // A memo ancestor's recompute only disposes; a map's also WRITES the item/index nodes of the
+      // rows it keeps, which can dirty an effect between us and the map scope or an inner map memo
+      // (nested lists) that the walk above saw clean: walk the chain again. A pulled memo that is
+      // still not CLEAN is mid-recompute (a row run from inside its own map): do not loop on it.
+      if (!pullsMap || !settled) break;
     }
 
     if (!computeNode(node)) return;
     if (node._applied === NOT_APPLIED || node._value !== node._applied) applyEffect(node);
   } finally {
-    // Reset the self-dirty counter only when the whole run (compute AND apply) ended without
-    // re-dirtying the node.
-    if (node._state === STATE_CLEAN) node._selfDirty = 0;
-    // Children that bailed onto us are re-scheduled however this run ended (success or error).
-    releaseBailed(node);
+    if (!bailed) {
+      // Reset the self-dirty counter only when the whole run (compute AND apply) ended without
+      // re-dirtying the node.
+      if (node._state === STATE_CLEAN) node._selfDirty = 0;
+      // Children that bailed onto us are re-scheduled however this run ended (success or error).
+      releaseBailed(node);
+    }
   }
 }
 

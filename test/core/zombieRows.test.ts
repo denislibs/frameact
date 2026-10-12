@@ -88,6 +88,9 @@ describe.each(modes)('mapArray %s', (_name, keyed) => {
     expect(disposed).toEqual([3]);
     expect(mapRuns()).toBe(2);
     expect(titles.filter((t) => t.startsWith('3:'))).toEqual(['3:c']);
+    // the kept rows re-ran once each (chats changed) with the current data
+    expect(titles.slice(3)).toHaveLength(2);
+    expect(titles.slice(3)).toEqual(expect.arrayContaining(['1:a', '2:b']));
   });
 });
 
@@ -102,6 +105,224 @@ it('For (frame effects): a row text bound to entities()[id] is disposed before i
       ul,
       createComponent(ForC, {
         get each() { return ids(); },
+        children: (id: number) => {
+          const li = document.createElement('li');
+          insert(li, () => {
+            try {
+              return chats()[id].title;
+            } catch (e) {
+              errors.push(e);
+              return 'error';
+            }
+          });
+          return li;
+        },
+      }),
+    ),
+  );
+  expect(ul.textContent).toBe('ab');
+  setChats({ 1: { title: 'A' } });
+  setIds([1]);
+  await frame();
+  expect(errors).toEqual([]);
+  expect(ul.textContent).toBe('A');
+});
+
+// The map pull WRITES the item/index nodes of the rows it keeps: it can dirty an effect between a row
+// and the map scope, or an inner map memo (nested lists), that the ancestor walk saw clean. The run
+// walks its chain again after pulling a map.
+describe('map pull dirties what the walk saw clean', () => {
+  type Row = { id: number; child: number | null };
+  it('keyed: fn, a conditional subtree on item().child: the inner effect never reads the deleted entity', () => {
+    const [list, setList] = createSignal<Row[]>([{ id: 1, child: 2 }]);
+    const [ents, setEnts] = createSignal<Record<number, { t: string }>>({ 2: { t: 'x' } });
+    const errors: unknown[] = [];
+    const seen: string[] = [];
+    createRoot(() => {
+      const rows = mapArray(
+        list,
+        (item: () => Row) => {
+          createEffect(
+            () => {
+              const c = item().child;
+              if (c != null) {
+                createEffect(
+                  () => {
+                    try {
+                      const t = ents()[c].t;
+                      seen.push(t);
+                      return t;
+                    } catch (e) {
+                      errors.push(e);
+                      return 'error';
+                    }
+                  },
+                  () => {},
+                );
+              }
+              return c;
+            },
+            () => {},
+          );
+          return item().id;
+        },
+        { keyed: (r: Row) => r.id },
+      );
+      createEffect(() => rows().join(), () => {});
+    });
+    flushSync();
+    expect(seen).toEqual(['x']);
+    setEnts({});
+    setList([{ id: 1, child: null }]);
+    flushSync();
+    expect(errors).toEqual([]);
+    expect(seen).toEqual(['x']);
+  });
+
+  const nestedModes: [string, Mode][] = [['outer keyed: false', false], ['outer keyed: fn', (g: any) => g.id]];
+  it.each(nestedModes)('nested mapArray, %s: the inner row never reads the deleted entity', (_n, outerKeyed) => {
+    type Group = { id: number; ids: number[] };
+    const [groups, setGroups] = createSignal<Group[]>([{ id: 1, ids: [2, 1] }]);
+    const [ents, setEnts] = createSignal<Record<number, { t: string }>>({ 1: { t: 'a' }, 2: { t: 'b' } });
+    const errors: unknown[] = [];
+    const seen: string[] = [];
+    createRoot(() => {
+      const outer = mapArray(
+        groups,
+        (g: any) => {
+          const gg = typeof g === 'function' ? (g as () => Group) : () => g as Group;
+          const inner = mapArray(
+            () => gg().ids,
+            (id: number) => {
+              createEffect(
+                () => {
+                  try {
+                    const t = `${id}:${ents()[id].t}`;
+                    seen.push(t);
+                    return t;
+                  } catch (e) {
+                    errors.push(e);
+                    return 'error';
+                  }
+                },
+                () => {},
+              );
+              return id;
+            },
+          );
+          createEffect(() => inner().join(), () => {});
+          return gg().id;
+        },
+        { keyed: outerKeyed } as any,
+      );
+      createEffect(() => outer().join(), () => {});
+    });
+    flushSync();
+    expect(seen).toEqual(['2:b', '1:a']);
+    setEnts({ 1: { t: 'a' } });
+    setGroups([{ id: 1, ids: [1] }]);
+    flushSync();
+    expect(errors).toEqual([]);
+    expect(seen.filter((t) => t.startsWith('2:'))).toEqual(['2:b']);
+  });
+});
+
+it('a throwing map memo does not break its rows: they run with the current data, nothing is logged twice', () => {
+  const [ids, setIds] = createSignal([1, 2]);
+  const [chats, setChats] = createSignal<Chats>({ 1: { title: 'a' }, 2: { title: 'b' } });
+  const [boom, setBoom] = createSignal(false);
+  const titles: string[] = [];
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    createRoot(() => {
+      const rows = mapArray(
+        () => {
+          const l = ids();
+          if (boom()) throw new Error('boom');
+          return l;
+        },
+        (id: number) => {
+          createEffect(() => {
+            const t = `${id}:${chats()[id]?.title}`;
+            titles.push(t);
+            return t;
+          }, () => {});
+          return id;
+        },
+      );
+      createEffect(() => { try { return rows().join(); } catch { return 'err'; } }, () => {});
+    });
+    flushSync();
+    setBoom(true);
+    setChats({ 1: { title: 'A' }, 2: { title: 'B' } });
+    flushSync();
+    expect(titles.slice(2)).toHaveLength(2);
+    expect(titles.slice(2)).toEqual(expect.arrayContaining(['1:A', '2:B']));
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(1);
+    setBoom(false);
+    setIds([1]);
+    flushSync();
+    expect(titles.slice(4)).toEqual([]);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it('a row under a dirty owner effect bails onto it (the map is not pulled by the row) and is disposed with it', () => {
+  const [gen, setGen] = createSignal(0);
+  const [ids, setIds] = createSignal([1, 2]);
+  const [chats, setChats] = createSignal<Chats>({ 1: { title: 'a' }, 2: { title: 'b' } });
+  const errors: unknown[] = [];
+  const titles: string[] = [];
+  createRoot(() => {
+    createEffect(
+      () => {
+        const g = gen();
+        const rows = mapArray(ids, (id: number) => {
+          createEffect(
+            () => {
+              try {
+                const t = `${g}:${id}:${chats()[id].title}`;
+                titles.push(t);
+                return t;
+              } catch (e) {
+                errors.push(e);
+                return 'error';
+              }
+            },
+            () => {},
+          );
+          return id;
+        });
+        createEffect(() => rows().join(), () => {});
+        return g;
+      },
+      () => {},
+    );
+  });
+  flushSync();
+  expect(titles).toEqual(['0:1:a', '0:2:b']);
+  setChats({ 1: { title: 'a' } });
+  setIds([1]);
+  setGen(1); // the owner effect is dirty: the rows bail onto it and die with the old map
+  flushSync();
+  expect(errors).toEqual([]);
+  expect(titles).toEqual(['0:1:a', '0:2:b', '1:1:a']);
+});
+
+it('For order="manual": a row looking an entity up by id is disposed, not run, when both are deleted', async () => {
+  const ul = container();
+  const [ids, setIds] = createSignal([1, 2]);
+  const [chats, setChats] = createSignal<Chats>({ 1: { title: 'a' }, 2: { title: 'b' } });
+  const errors: unknown[] = [];
+  const ForC = For as (props: any) => unknown;
+  createRoot(() =>
+    insert(
+      ul,
+      createComponent(ForC, {
+        order: 'manual',
+        get each() { return ids(); },
+        orderKey: (id: number) => id,
         children: (id: number) => {
           const li = document.createElement('li');
           insert(li, () => {
