@@ -1,5 +1,5 @@
 import { createMemo, createRoot, createSignal, mapArray } from '../../src/index';
-import { insert } from '../../src/dom/insert';
+import { insert, insertExpression } from '../../src/dom/insert';
 import { render } from '../../src/dom/render';
 import { container, useDomHarness } from '../helpers/dom';
 
@@ -199,5 +199,21 @@ describe('render', () => {
     el.innerHTML = '<i>x</i>';
     render(() => 'y', el);
     expect(el.innerHTML).toBe('<i>x</i>y');
+  });
+});
+
+describe('foreign text nodes', () => {
+  it('a Text node supplied by the user is never reused (or mutated) as a positional text slot', () => {
+    const el = container();
+    const marker = document.createTextNode('');
+    el.append(marker);
+    const t1 = document.createTextNode('row1');
+    const t2 = document.createTextNode('row2');
+    let current = insertExpression(el, [t1, t2], [], marker);
+    expect(el.textContent).toBe('row1row2');
+    current = insertExpression(el, ['header', t1, t2], current, marker);
+    expect(el.textContent).toBe('headerrow1row2');
+    expect(t1.data).toBe('row1');
+    expect(current).toHaveLength(3);
   });
 });

@@ -22,6 +22,14 @@ const INNER_OWNED: unique symbol = Symbol('frameact.innerOwned');
 /** Compiler/portal contract: a getter on portal content nodes pointing at the logical parent. */
 export const HOST_KEY = '_$host';
 const HOST_TAG: unique symbol = Symbol('frameact.hostTag');
+/** Text nodes created by this module. Only these are reused as positional text slots; a Text node handed in by the user is a plain node. */
+const ownText = new WeakSet<Text>();
+
+function createOwnText(data: string): Text {
+  const node = document.createTextNode(data);
+  ownText.add(node);
+  return node;
+}
 
 /**
  * Resolve nested accessors and arrays. Functions with parameters (row mappers) are values, not
@@ -106,7 +114,7 @@ export function insert(
     accessor = value;
   }
   if (multi && (initial as unknown[]).length === 0) {
-    const placeholder = document.createTextNode('');
+    const placeholder = createOwnText('');
     parent.insertBefore(placeholder, marker ?? null);
     initial = [placeholder];
   }
@@ -150,9 +158,9 @@ export function insertExpression(parent: MountableElement, value: any, current: 
     if (multi) {
       // Direct callers only: insert() wraps primitives into an array in multi mode.
       let node = Array.isArray(current) ? current[0] : undefined;
-      if (node && node.nodeType === 3) {
+      if (node && ownText.has(node)) {
         if (node.data !== text) node.data = text;
-      } else node = document.createTextNode(text);
+      } else node = createOwnText(text);
       return cleanChildren(parent, current, marker, node);
     }
     const tc = typeof current;
@@ -175,16 +183,16 @@ export function insertExpression(parent: MountableElement, value: any, current: 
       if (ti === 'string' || ti === 'number') {
         const text = String(item);
         const prev = currentArray ? current[i] : undefined;
-        if (prev && prev.nodeType === 3) {
+        if (prev && ownText.has(prev)) {
           if (prev.data !== text) prev.data = text;
           value[i] = prev;
-        } else value[i] = document.createTextNode(text);
+        } else value[i] = createOwnText(text);
       } else if (item == null || !item.nodeType) {
         // Not renderable: a function with parameters (a row mapper is a value, not an accessor), a plain
         // object, a stray null. Placing it into the DOM would throw `insertBefore: not of type Node`, so it
         // renders as nothing (Solid 2.0's client.ts has no such guard and throws).
         if (DEV) console.warn('[frameact] Unrecognized child value. Rendered as nothing', item);
-        value[i] = document.createTextNode('');
+        value[i] = createOwnText('');
       }
     }
     if (value.length === 0) {
