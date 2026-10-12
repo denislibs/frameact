@@ -1,3 +1,4 @@
+import { markLiveRead, pinLive } from '../core/core';
 import { getRunningEffect, isEffectClean, isEffectDisposed, type EffectNode } from '../core/effects';
 import { createMutationEffect } from '../core/frame';
 import { DEV } from '../env';
@@ -505,7 +506,12 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
       if (kind.bindings.get(el) === owned && owned.accessor === accessor) kind.bindings.delete(el);
     });
     createMutationEffect(
-      () => ({ v: accessor() }),
+      () => {
+        // A controlled input never waits for a heavy animation (store gate, spec §3.5 req. 7): a
+        // programmatic write and the rollback of rejected input must reach the DOM now.
+        markLiveRead();
+        return { v: accessor() };
+      },
       ({ v }) => {
         kind.write(owned, v);
       },
@@ -518,6 +524,9 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
     b.accessor = null;
     b.live = false;
     b.effect = applying;
+    // The delivering compiler effect is pinned live: the store gate never parks it (nor the other
+    // attributes of the element it groups into this effect — spec §3.5 req. 7).
+    if (applying !== null) pinLive(applying);
     b.delivered = value;
     kind.write(b, value);
   }

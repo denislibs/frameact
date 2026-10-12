@@ -5,7 +5,7 @@
 // bookkeeping (proxy, leaf signals, shape signal) lives in a WeakMap'd StoreNode, which is also the
 // Proxy handler of that object (the traps reach its fields through `this`: no lookup on the read path).
 import { DEV } from '../env';
-import { createSignalNode, getObserver, trackNode, writeStoreNode } from '../core/core';
+import { createSignalNode, getObserver, markLiveRead, trackNode, writeStoreNode } from '../core/core';
 import { TRACK } from '../core/symbols';
 import type { Computation } from '../core/types';
 
@@ -463,4 +463,35 @@ export function createStore<T extends object>(initial: T): [Store<T>, SetStoreFu
   const node = nodes.get(raw) ?? new StoreNode(raw);
   const setState = ((...args: unknown[]) => updatePath(raw, args, 0)) as SetStoreFunction<T>;
   return [node.proxy as Store<T>, setState];
+}
+
+
+// ---- gate bypasses (spec §3.5 req. 6): facades with greppable names, not options -----------------
+
+/**
+ * `live(() => state.typing)`: the computation reading the store inside is marked live for this
+ * compute — its store-caused runs are never parked by a heavy animation, and a live memo is delivered
+ * to its readers as a plain walk (they are not parked either). For an indicator or a progress bar
+ * inside an animating subtree. Controlled inputs do not need it (their bindings are never parked).
+ * Note: an effect on a synchronous custom `Schedule` (`(run) => run()`) runs inside the store walk
+ * itself, before the live memo is re-delivered, and may see the memo's previous value for that one
+ * run (it re-runs right after); frame and tickEnd effects run after the walk and are not affected.
+ */
+export function live<T>(read: () => T): T {
+  markLiveRead();
+  return read();
+}
+
+/**
+ * `ungated(() => setState(…))`: the store writes inside run plain walks (teact's
+ * `forceOnHeavyAnimation`): their readers run now even inside an animating scope, and a parked
+ * reader of a written leaf is unparked — it runs with the current state, every leaf included.
+ */
+export function ungated<T>(write: () => T): T {
+  setUngatedDepth(ungatedDepth + 1);
+  try {
+    return write();
+  } finally {
+    setUngatedDepth(ungatedDepth - 1);
+  }
 }
