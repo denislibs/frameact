@@ -113,7 +113,7 @@ render(() => <Composer />, document.getElementById('app')!);
 
 `class=` / `classList=` / 展开属性按 token 做 diff，因此命令式的 `addExtraClass` 在更新后依然保留；字符串形式的 `style=`
 会写入 `cssText`，与 `setExtraStyles` 不兼容。受控输入使用 `use:value` / `use:checked` —— 响应式的 `value=` 会被当作属性直接写入，
-Vite 插件会在开发模式下给出警告。如需以命令式方式写入受控输入，请使用 `forceControlledValue`（`isForcingControlledValue` 用于检测）。
+Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的 IME 输入法组合（例如点击发送后清空输入框），请先更新信号，再在用户事件处理器中调用 `forceControlledValue(el)`（在你的 `blur`/`focus` 处理器中可用 `isForcingControlledValue` 识别该强制周期）。
 
 **安全。** 属性写入会拒绝 `javascript:` / `vbscript:` URL、非媒体类 `data:` URL、字符串形式的 `on*` 处理器以及 `srcdoc=`；
 受信任 HTML 的显式出口是 `prop:srcdoc`。生产环境中拒绝是静默的，开发模式下会输出 `console.error`。

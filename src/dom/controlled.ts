@@ -529,7 +529,8 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
  * browser has already selected another option and nothing re-applies the last delivered value, so the
  * DOM diverges from the signal until the signal changes. Options that exist at the first application
  * are fine (the compiler emits their `insert` before the `use:value` effect). Same as Solid; see
- * spec §3.3.
+ * spec §3.3. Workaround: call `forceControlledValue(select)` (no `value`) after the list changes; it
+ * re-applies the binding's current authoritative value.
  */
 function valueDirective(el: Element, value: unknown): void {
   if (DEV && !('value' in el)) console.error('[frameact] use:value expects an input, textarea or select', el);

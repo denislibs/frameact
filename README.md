@@ -119,8 +119,10 @@ render(() => <Composer />, document.getElementById('app')!);
 
 `class=` / `classList=` / spreads diff class tokens, so imperative `addExtraClass` survives updates; a string
 `style=` writes `cssText` and is incompatible with `setExtraStyles`. Controlled inputs are `use:value` /
-`use:checked` — a reactive `value=` is written as a property, and the Vite plugin warns about it in dev. To write
-to a controlled input imperatively, use `forceControlledValue` (and `isForcingControlledValue` to detect it).
+`use:checked` — a reactive `value=` is written as a property, and the Vite plugin warns about it in dev. To push
+a value through an active IME composition (e.g. clearing the field on Send), update the signal first, then call
+`forceControlledValue(el)` from the user event handler (`isForcingControlledValue` detects the forced cycle in your
+`blur`/`focus` handlers).
 
 **Security.** Attribute writes refuse `javascript:` / `vbscript:` URLs, non-media `data:` URLs, string `on*`
 handlers and `srcdoc=`; the explicit escape hatch for trusted HTML is `prop:srcdoc`. Refusals are silent in
