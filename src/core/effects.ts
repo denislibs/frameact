@@ -13,6 +13,8 @@ import {
   handleError,
   initComputationNode,
   isFunction,
+  notifyDep,
+  notifyRoot,
   setEffectDisposeHook,
   setEffectScheduler,
   setInEffectApply,
@@ -51,6 +53,47 @@ export interface EffectNode<T = any> extends Computation<T> {
   _drainEpoch: number;
   /** @internal frame drain loop guard: runs within `_drainEpoch` */
   _drainRuns: number;
+  /** @internal DEV only ("why did this run"): the dep whose change scheduled the pending run (a signal or memo); cleared when the run ends */
+  _dirtyDep: Computation | null;
+  /** @internal DEV only: the node written at the root of that notify walk; cleared when the run ends */
+  _dirtyRoot: Computation | null;
+  /** @internal DEV only: runs of this effect — the creation run and every scheduled run that reached its compute */
+  _runs: number;
+}
+
+/** DEV: what dirtied an effect's pending run (null once it ran: a released store leaf is not kept alive), and how often it ran. */
+export interface EffectDebugInfo {
+  /** The signal/memo whose link reached the effect. */
+  dep: Computation | null;
+  /** The node written at the root of the walk (the signal or store leaf that changed). */
+  root: Computation | null;
+  runs: number;
+}
+
+/** DEV: null outside DEV. */
+export function getEffectDebugInfo(node: EffectNode): EffectDebugInfo | null {
+  if (!DEV) return null;
+  return { dep: node._dirtyDep, root: node._dirtyRoot, runs: node._runs };
+}
+
+/** DEV: called after every completed run of an effect with the time it took (stricterdom's run log). */
+export type RunObserver = (node: EffectNode, ms: number) => void;
+let runObserver: RunObserver | null = null;
+/** @internal stricterdom: observe effect runs (DEV only; a no-op in prod). */
+export function setRunObserver(fn: RunObserver | null) {
+  if (DEV) runObserver = fn;
+}
+
+/**
+ * DEV: called twice around every apply — right before it, while `currentEffect` is still the
+ * enclosing effect (or null), and at its end, while `currentEffect` is the effect. stricterdom drains
+ * mutation records at both points, so a write is attributed to the effect whose apply made it, never
+ * to the next apply that happens to drain it. Must not throw (it runs where `currentEffect` is swapped).
+ */
+let applyHook: ((node: EffectNode) => void) | null = null;
+/** @internal stricterdom (DEV only; a no-op in prod). */
+export function setApplyHook(fn: ((node: EffectNode) => void) | null) {
+  if (DEV) applyHook = fn;
 }
 
 export interface EffectOptions {
@@ -183,6 +226,7 @@ export function createEffect<T>(
 
   // First compute: synchronous, tracked, under the owner that created the effect.
   if (!computeNode(node)) return;
+  if (DEV) node._runs = 1; // the creation run (not reported to the run observer: nothing dirtied it)
   if (options?.immediateApply) applyEffect(node);
   else bookRun(node); // (a throwing custom schedule is this effect's error, not the creator's)
 }
@@ -218,6 +262,11 @@ function Effect(
   this._tickRuns = 0;
   this._drainEpoch = 0;
   this._drainRuns = 0;
+  if (DEV) {
+    this._dirtyDep = null;
+    this._dirtyRoot = null;
+    this._runs = 0;
+  }
   if (storeGatedSchedules.has(schedule)) this._flags |= F_STORE_GATED;
 }
 Effect.prototype = computationPrototype;
@@ -301,6 +350,7 @@ function runEffect(node: EffectNode) {
       break;
     }
   }
+  const t0 = DEV && runObserver !== null ? performance.now() : 0;
   try {
     if (!computeNode(node)) return;
     if (node._applied === NOT_APPLIED || node._value !== node._applied) applyEffect(node);
@@ -310,6 +360,12 @@ function runEffect(node: EffectNode) {
     if (node._state === STATE_CLEAN) node._selfDirty = 0;
     // Children that bailed onto us are re-scheduled however this run ended (success or error).
     releaseBailed(node);
+    if (DEV) {
+      node._runs++;
+      if (runObserver !== null) runObserver(node, performance.now() - t0);
+      node._dirtyDep = null; // (a store leaf released meanwhile must not stay reachable from here)
+      node._dirtyRoot = null;
+    }
   }
 }
 
@@ -373,6 +429,7 @@ function applyEffect(node: EffectNode) {
   const cleanup = node._applyCleanup;
   node._applyCleanup = null;
   const outer = currentEffect;
+  if (DEV && applyHook !== null) applyHook(node); // records made before this apply belong to the context around it
   currentEffect = node;
   const outerInApply = DEV ? setInEffectApply(true) : false;
   try {
@@ -400,7 +457,10 @@ function applyEffect(node: EffectNode) {
       reportApplyError(node, error);
     }
   } finally {
-    if (DEV) setInEffectApply(outerInApply);
+    if (DEV) {
+      setInEffectApply(outerInApply);
+      if (applyHook !== null) applyHook(node); // still attributed to this effect
+    }
     currentEffect = outer;
   }
 }
@@ -454,6 +514,10 @@ function logEffectError(node: EffectNode, error: unknown) {
 
 setEffectScheduler((raw) => {
   const node = raw as EffectNode;
+  if (DEV) {
+    node._dirtyDep = notifyDep;
+    node._dirtyRoot = notifyRoot;
+  }
   // Dirtied by a write made inside its own compute or apply (patch 1 made this visible). Guards
   // custom schedules, e.g. a synchronous `(run) => run()` that would otherwise recurse without
   // bound. tickEnd and the frame queues count runs per drain themselves (drain-guarded): skipped.

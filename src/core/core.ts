@@ -134,6 +134,14 @@ let writeEpoch = 0;
 let effectScheduler: (node: Computation) => void = () => {};
 let effectDisposeHook: (node: Computation) => void = () => {};
 
+/**
+ * DEV ("why did this run", spec §3.4): set right before `effectScheduler` is called — the dep whose
+ * link reached the effect (a signal or a memo) and the root of the walk (the node that was written).
+ * Live bindings: effects.ts reads them inside its scheduler hook. Null outside a walk / in prod.
+ */
+export let notifyDep: Computation | null = null;
+export let notifyRoot: Computation | null = null;
+
 /** effects.ts installs the function that schedules a dirty effect (called once per CLEAN→dirty transition). */
 export function setEffectScheduler(fn: (node: Computation) => void) {
   effectScheduler = fn;
@@ -1146,8 +1154,15 @@ let notifyTop = 0;
  * node and reads it first) appends a new link behind the walk, which reaches it again, forever.
  * An effect that ran mid-walk BEFORE a memo it read was marked has an older link: visited.
  */
+/** DEV: record the dep that reached the effect being scheduled and the walk's root (see notifyDep). */
+function stampNotify(l: Link | null, via: Link | null, rootDep: Computation | null) {
+  notifyDep = l !== null ? l.dep : via !== null ? via.dep : null;
+  notifyRoot = rootDep;
+}
+
 function notify(node: Computation, state: number, latch: boolean, via: Link | null) {
   const base = notifyTop;
+  const rootDep = DEV && via !== null ? via.dep : null; // the written node (DEV attribution)
   let l: Link | null = null, // the link `node` was reached through (null: the root, via `via`)
     lc = 0; // the cycle `l`'s level was entered at
   try {
@@ -1172,11 +1187,17 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
             // only on the CLEAN → dirty edge (or on unpark). (Effects have no subscribers.)
             node._state = state;
             if (flags & (F_UNSURE | F_STORE | F_PARKED)) node._flags = flags & ~(F_UNSURE | F_STORE | F_PARKED);
-            if (node._effect && (prev === STATE_CLEAN || flags & F_PARKED)) effectScheduler(node);
+            if (node._effect && (prev === STATE_CLEAN || flags & F_PARKED)) {
+              if (DEV) stampNotify(l, via, rootDep);
+              effectScheduler(node);
+            }
             subs = node._subs;
           } else if (flags & (F_UNSURE | F_STORE)) {
             node._flags = flags & ~(F_UNSURE | F_STORE | F_PARKED);
-            if (flags & F_PARKED) effectScheduler(node);
+            if (flags & F_PARKED) {
+              if (DEV) stampNotify(l, via, rootDep);
+              effectScheduler(node);
+            }
             subs = node._subs;
           }
         } else if (prev === STATE_CLEAN) {
@@ -1186,7 +1207,10 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
           else {
             node._state = state;
             node._flags = (flags & ~F_UNSURE) | F_STORE;
-            if (node._effect) effectScheduler(node);
+            if (node._effect) {
+              if (DEV) stampNotify(l, via, rootDep);
+              effectScheduler(node);
+            }
             subs = node._subs;
           }
         } else if (prev < state) {

@@ -316,3 +316,20 @@ it('a drain with no blocking animation never consults the gate hook', async () =
   expect(applied).toHaveBeenCalledTimes(400);
   expect(gateCalls).toBe(0);
 });
+
+it('the measure-dirtied warning names the effect path, the phase and the signal that dirtied it', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const $x = signal(0, { id: 'scrollTop' });
+  root(() => {
+    createMeasureEffect(() => $x(), () => {}, { name: 'MessageList > measure' });
+  });
+  await frame(raf); // first measure apply
+  const $t = signal(0);
+  root(() => createMutationEffect(() => $t(), (v) => { if (v) $x.set(9); }));
+  $t.set(1);
+  await frame(raf);
+  expect(warn).toHaveBeenCalledWith(
+    '[frameact] measure effect MessageList > measure [mutate] was dirtied during the mutate phase by signal "scrollTop" — it will run next frame. Write that signal from a measure effect or event handler instead.',
+  );
+  warn.mockRestore();
+});
