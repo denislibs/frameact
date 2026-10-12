@@ -285,37 +285,40 @@ export function snapshot<T>(value: T): T {
  * the shape (a key added or removed), `values`/`entries` to every write into the object (they hand out
  * the values, so a replaced or changed value must re-run the reader; reading a nested field of a returned
  * item is tracked by that item as usual). Object values come back wrapped (read-only views). Arrays: any
- * item write. A non-store argument is handed to the `Object` function.
+ * item write. A non-store argument is handed to the `Object` function. On a `produce` draft they
+ * subscribe to nothing and `values`/`entries` hand out drafts (their items can be written).
  */
 export function keys<T extends object>(obj: T): Extract<keyof T, string>[] {
   const raw = (obj as any)[$RAW];
   if (raw === undefined) return Object.keys(obj) as Extract<keyof T, string>[];
-  trackSelf(nodes.get(raw)!);
+  if (scopeOf(obj) === undefined) trackSelf(nodes.get(raw)!); // (a produce draft: nothing to subscribe to)
   return Object.keys(raw) as Extract<keyof T, string>[];
 }
 export function values<T extends object>(obj: T): T[Extract<keyof T, string>][] {
   const raw = (obj as any)[$RAW];
   if (raw === undefined) return Object.values(obj);
-  trackShapeOrVals(raw);
+  const scope = scopeOf(obj);
+  if (scope === undefined) trackShapeOrVals(raw);
   const ks = Object.keys(raw);
   const out: unknown[] = [];
   out.length = ks.length;
   for (let i = 0; i < ks.length; i++) {
     const v = raw[ks[i]];
-    out[i] = typeof v === 'object' && v !== null ? wrap(v) : v;
+    out[i] = typeof v === 'object' && v !== null ? (scope === undefined ? wrap(v) : asDraft(scope, v)) : v;
   }
   return out as T[Extract<keyof T, string>][];
 }
 export function entries<T extends object>(obj: T): [Extract<keyof T, string>, T[Extract<keyof T, string>]][] {
   const raw = (obj as any)[$RAW];
   if (raw === undefined) return Object.entries(obj) as [Extract<keyof T, string>, T[Extract<keyof T, string>]][];
-  trackShapeOrVals(raw);
+  const scope = scopeOf(obj);
+  if (scope === undefined) trackShapeOrVals(raw);
   const ks = Object.keys(raw);
   const out: unknown[] = [];
   out.length = ks.length;
   for (let i = 0; i < ks.length; i++) {
     const v = raw[ks[i]];
-    out[i] = [ks[i], typeof v === 'object' && v !== null ? wrap(v) : v];
+    out[i] = [ks[i], typeof v === 'object' && v !== null ? (scope === undefined ? wrap(v) : asDraft(scope, v)) : v];
   }
   return out as [Extract<keyof T, string>, T[Extract<keyof T, string>]][];
 }

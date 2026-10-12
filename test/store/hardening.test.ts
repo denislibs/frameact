@@ -2,7 +2,7 @@
 // createStore adopting `initial`, cyclic/deep new data, atomic fan-out, holes by index, the read-only
 // view's remaining traps, drafts that outlive their produce().
 import { createEffect, createRoot, flushSync } from '../../src/index';
-import { createStore, produce, unwrap } from 'frameact/store';
+import { createStore, entries, keys, produce, unwrap, values } from 'frameact/store';
 
 function watch<T>(fn: () => T): T[] {
   const log: T[] = [];
@@ -201,5 +201,45 @@ describe('a leaked draft is valid in its own produce() invocation only (N4)', ()
     }));
     expect(state.a.n).toBe(3);
     expect(state.b.n).toBe(1);
+  });
+});
+
+describe('keys() / values() / entries() on a produce() draft (N5)', () => {
+  it('work in a tracked context (no subscription, no TypeError) and list the keys', () => {
+    const [state, setState] = createStore<any>({ nest: { a: { x: 1, y: 2 } } });
+    let got: unknown;
+    let threw: unknown = null;
+    const runs: number[] = [];
+    createRoot(() => {
+      createEffect(
+        () => {
+          runs.push(1);
+          try { setState('nest', produce((d: any) => { got = [keys(d.a), values(d.a), entries(d.a)]; })); } catch (e) { threw = e; }
+        },
+        () => {},
+        (r) => r(),
+      );
+    });
+    flushSync();
+    expect(threw).toBeNull();
+    expect(got).toEqual([['x', 'y'], [1, 2], [['x', 1], ['y', 2]]]);
+    setState('nest', 'a', 'z', 3); // the effect did not subscribe to the draft's object
+    flushSync();
+    expect(runs).toHaveLength(1);
+    expect(state.nest.a.z).toBe(3);
+  });
+  it('values() / entries() hand out drafts: items can be written', () => {
+    const [state, setState] = createStore<any>({ by: { a: { read: false }, b: { read: false } }, list: [{ n: 0 }, { n: 0 }] });
+    setState('by', produce((d: any) => {
+      for (const m of values(d)) (m as any).read = true;
+    }));
+    setState('by', produce((d: any) => {
+      for (const [, m] of entries(d)) (m as any).seen = true;
+    }));
+    setState('list', produce((d: any) => {
+      for (const m of values(d)) (m as any).n = 5;
+    }));
+    expect(unwrap(state).by).toEqual({ a: { read: true, seen: true }, b: { read: true, seen: true } });
+    expect(unwrap(state).list).toEqual([{ n: 5 }, { n: 5 }]);
   });
 });
