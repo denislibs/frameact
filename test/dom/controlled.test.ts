@@ -876,6 +876,10 @@ describe('M9: coverage', () => {
   });
 });
 
+function preventError(e: ErrorEvent) {
+  e.preventDefault();
+}
+
 describe('forceControlledValue: explicit write-through (Android "Send -> clear")', () => {
   it('is exported from frameact/dom', async () => {
     expect(forceControlledValue).toBe((await import('../../src/dom/controlled')).forceControlledValue);
@@ -963,14 +967,13 @@ describe('forceControlledValue: explicit write-through (Android "Send -> clear")
     });
     input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
     compose(input, 'hello');
-    const onerror = (e: ErrorEvent) => e.preventDefault();
-    window.addEventListener('error', onerror);
+    window.addEventListener('error', preventError);
     try {
       forceControlledValue(input, '');
     } catch {
       // either way the window must be closed
     }
-    window.removeEventListener('error', onerror);
+    window.removeEventListener('error', preventError);
     expect(isForcingControlledValue()).toBe(false);
   });
 
