@@ -1,15 +1,25 @@
-// Show/hide with a CSS transition (telegram-tt `useShowTransition` / `<ShowTransition>` /
-// `useMediaTransition`, re-done on signals). The element gets the classes
-// `${prefix}shown|not-shown`, `${prefix}open|not-open`, `${prefix}closing` plus
-// `opacity-transition ${className}` (the client's CSS animates `.open`); opening goes through
-// `scheduled-open` so the element paints once without `open` and the transition runs; closing keeps
-// the element for `closeDuration` ms (teact uses a timer, not `transitionend`: an element whose
-// transition never runs still closes) and then `shouldRender` turns false.
-import { DEV } from '../env';
-import { createEffect, createMemo, createMutationEffect, createSignal, onCleanup, tickEnd, untrack, type Accessor } from '../index';
-import { addExtraClass, toggleExtraClass } from '../dom/classes';
-import { splitProps, spread } from '../dom/props';
+// Original frameact code (clean-room, written from the kit's behavioural spec): the show/hide
+// transition — an element that mounts with a "not yet open" frame, flips to open one frame later,
+// and stays rendered for the duration of its close transition.
+//
+// State machine (`ShowTransitionState`): closed → scheduled-open → open → closing → closed.
+//   - `isOpen` turns true: `scheduled-open` at once (tickEnd). The element is created and attached
+//     with `shown not-open` in the next mutate phase; the flip to `open` is booked from THAT mutate
+//     phase into the following frame's measure phase, so the browser paints the not-open frame
+//     and the CSS transition runs from it. `noOpenTransition` skips straight to `open`.
+//   - `isOpen` turns false: `closing` (classes `not-open closing`), then `closed` after `closeDuration`
+//     (`onCloseAnimationEnd`). `noCloseTransition` closes at once. Re-opening while closing cancels
+//     the timer. `forceOpen` counts as open.
+// Per instance (ShowTransition is used per list row): two signals (state, shouldRender), one tickEnd
+// effect (the machine), one mutation effect (the class writes) — no element signal, no memos. The
+// element is handed in through `ref`, which writes the current classes once; every later state
+// change is one apply of the mutation effect (five classList toggles).
+import { createEffect, createMemo, createMutationEffect, onCleanup, untrack, type Accessor } from '../index';
+import { createSignalNode, readSignal, write } from '../core/core';
 import { requestMeasure } from '../scheduler/fasterdom';
+import { insert } from '../dom/insert';
+import { getNatives } from '../dom/natives';
+import { spread } from '../dom/props';
 
 export type ShowTransitionState = 'closed' | 'scheduled-open' | 'open' | 'closing';
 
@@ -39,99 +49,118 @@ export interface ShowTransitionResult {
   isClosing: Accessor<boolean>;
 }
 
-const CLOSE_DURATION = 350;
+const DEFAULT_CLOSE_DURATION_MS = 350;
+const TRANSITION_CLASS = 'opacity-transition';
 
-function applyClasses(el: Element, state: ShowTransitionState, prefix: string): void {
-  const shown = state !== 'closed';
-  toggleExtraClass(el, `${prefix}shown`, shown);
-  toggleExtraClass(el, `${prefix}not-shown`, !shown);
-  toggleExtraClass(el, `${prefix}open`, state === 'open');
-  toggleExtraClass(el, `${prefix}not-open`, state !== 'open');
-  toggleExtraClass(el, `${prefix}closing`, state === 'closing');
+/** The five state tokens, in the order they are written: [shown, not-shown, open, not-open, closing]. */
+type StateTokens = readonly [string, string, string, string, string];
+const UNPREFIXED_TOKENS: StateTokens = ['shown', 'not-shown', 'open', 'not-open', 'closing'];
+
+function stateTokens(prefix: string): StateTokens {
+  if (prefix === '') return UNPREFIXED_TOKENS;
+  return [`${prefix}shown`, `${prefix}not-shown`, `${prefix}open`, `${prefix}not-open`, `${prefix}closing`];
+}
+
+/**
+ * Mutate-phase (or detached-element) write of the state classes; idempotent, and the token order is
+ * stable (shown-ness, then open-ness, then `closing`): leaving `closed` re-adds `not-open` after `shown`.
+ */
+function writeState(el: Element, tokens: StateTokens, state: ShowTransitionState): void {
+  const list = el.classList;
+  const closed = state === 'closed';
+  if (!closed && list.contains(tokens[1])) list.remove(tokens[3]);
+  list.toggle(tokens[0], !closed);
+  list.toggle(tokens[1], closed);
+  list.toggle(tokens[2], state === 'open');
+  list.toggle(tokens[3], state !== 'open');
+  list.toggle(tokens[4], state === 'closing');
 }
 
 export function createShowTransition(options: ShowTransitionOptions): ShowTransitionResult {
-  const { isOpen, noOpenTransition, noCloseTransition, forceOpen, onCloseAnimationEnd } = options;
-  const closeDuration = options.closeDuration ?? CLOSE_DURATION;
+  const { isOpen, forceOpen, noOpenTransition, noCloseTransition, onCloseAnimationEnd } = options;
+  const closeDuration = options.closeDuration ?? DEFAULT_CLOSE_DURATION_MS;
   const className = options.className ?? 'fast';
-  const prefix = options.prefix ?? '';
+  const tokens = stateTokens(options.prefix ?? '');
+  const wantsOpen = (): boolean => !!(forceOpen?.() || isOpen());
 
-  const initiallyOpen = untrack(() => !!(forceOpen?.() || isOpen()));
-  const [state, setState] = createSignal<ShowTransitionState>(
-    initiallyOpen ? (options.noMountTransition || untrack(() => noOpenTransition?.()) ? 'open' : 'scheduled-open') : 'closed',
-  );
-  const [el, setEl] = createSignal<Element | null>(null);
+  let current: ShowTransitionState = options.noMountTransition && untrack(wantsOpen) ? 'open' : 'closed';
+  // Two bare signal nodes (one bound read each; writes go through `write.call`): the cheapest
+  // reactive cells the core has. `shouldRender` is its own node so that a slot reading it is not
+  // re-run — and its element not recreated — by the state changes in between.
+  const stateNode = createSignalNode<ShowTransitionState>(current);
+  const renderNode = createSignalNode(current !== 'closed');
+  const state = readSignal.bind(stateNode) as Accessor<ShowTransitionState>;
+  let el: Element | undefined;
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
-  const clearCloseTimer = () => {
-    if (closeTimer !== undefined) {
-      clearTimeout(closeTimer);
-      closeTimer = undefined;
-    }
-  };
-  onCleanup(clearCloseTimer);
+  let disposed = false;
 
-  // Logic: the state machine follows `isOpen` (tickEnd — no DOM here).
+  function go(next: ShowTransitionState): void {
+    current = next;
+    write.call(stateNode, next);
+    write.call(renderNode, next !== 'closed');
+  }
+
+  function close(): void {
+    closeTimer = undefined;
+    go('closed');
+    onCloseAnimationEnd?.();
+  }
+
+  /** Measure task booked from the mutate phase that wrote `not-open`: the open frame is the next one. */
+  function flip(): void {
+    if (!disposed && current === 'scheduled-open') go('open');
+  }
+
+  // The machine: logic, so tickEnd (never parked by animations). `apply` runs untracked; the option
+  // accessors are read at the moment of the transition they modify.
   createEffect(
-    () => ({ open: !!isOpen(), force: !!forceOpen?.() }),
-    ({ open, force }) => {
-      const s = untrack(state);
-      if (force) {
-        clearCloseTimer();
-        setState('open');
-        return;
-      }
+    wantsOpen,
+    (open) => {
       if (open) {
-        if (s === 'open' || s === 'scheduled-open') return;
-        clearCloseTimer();
-        setState(untrack(() => noOpenTransition?.()) ? 'open' : 'scheduled-open');
-        return;
+        if (current === 'open' || current === 'scheduled-open') return;
+        if (closeTimer !== undefined) {
+          clearTimeout(closeTimer); // re-opened while closing
+          closeTimer = undefined;
+        }
+        go(noOpenTransition?.() ? 'open' : 'scheduled-open');
+      } else {
+        if (current === 'closed' || current === 'closing') return;
+        if (noCloseTransition?.()) close();
+        else {
+          go('closing');
+          closeTimer = setTimeout(close, closeDuration);
+        }
       }
-      if (s === 'closed' || s === 'closing') return;
-      if (untrack(() => noCloseTransition?.())) {
-        setState('closed');
-        return;
-      }
-      setState('closing');
-      closeTimer = setTimeout(() => {
-        closeTimer = undefined;
-        setState('closed');
-        onCloseAnimationEnd?.();
-      }, closeDuration);
     },
-    tickEnd,
+    undefined,
     { name: 'showTransition' },
   );
 
-  // DOM: the classes follow the state (mutate phase). `scheduled-open` paints once, then the next
-  // frame's measure flips to `open`, so the CSS transition starts from the painted `not-open` state.
+  // The class writes, in the mutate phase. The scheduled-open frame also books the flip.
   createMutationEffect(
-    () => [el(), state()] as const,
-    ([element, s]) => {
-      if (element === null) return;
-      applyClasses(element, s, prefix);
-      if (s === 'scheduled-open') {
-        requestMeasure(() => {
-          if (untrack(state) === 'scheduled-open') setState('open');
-        });
-      }
+    state,
+    (s) => {
+      if (el !== undefined) writeState(el, tokens, s);
+      if (s === 'scheduled-open') requestMeasure(flip);
     },
     { name: 'showTransition.classes' },
   );
 
+  onCleanup(() => {
+    disposed = true;
+    if (closeTimer !== undefined) clearTimeout(closeTimer);
+    closeTimer = undefined;
+  });
+
   return {
-    ref(element) {
-      if (className !== false) {
-        addExtraClass(element, 'opacity-transition');
-        addExtraClass(element, className);
-      }
-      // Applied right here, at creation (the node is detached): the element attaches with its initial
-      // classes, so no transition starts from an unstyled first paint (teact's `ref.onChange` workaround).
-      applyClasses(element, untrack(state), prefix);
-      setEl(element);
+    ref(node) {
+      el = node;
+      if (className !== false) node.classList.add(TRANSITION_CLASS, className);
+      writeState(node, tokens, current);
     },
     state,
-    shouldRender: createMemo(() => state() !== 'closed'),
-    isClosing: createMemo(() => state() === 'closing'),
+    shouldRender: readSignal.bind(renderNode) as Accessor<boolean>,
+    isClosing: () => state() === 'closing',
   };
 }
 
@@ -142,12 +171,12 @@ export interface MediaTransitionOptions extends Omit<ShowTransitionOptions, 'isO
 
 /** For large media: no fade-in when the data is already there at creation, the `slow` class. */
 export function createMediaTransition(options: MediaTransitionOptions): ShowTransitionResult {
-  const { hasMediaData, ...rest } = options;
+  const { hasMediaData, className, ...rest } = options;
   return createShowTransition({
     ...rest,
     isOpen: hasMediaData,
-    noMountTransition: untrack(() => !!hasMediaData()),
-    className: options.className ?? 'slow',
+    noMountTransition: untrack(hasMediaData) === true,
+    className: className ?? 'slow',
   });
 }
 
@@ -169,7 +198,9 @@ export interface ShowTransitionProps {
   [attr: `data-${string}`]: unknown;
 }
 
-const OWN_PROPS = ['isOpen', 'isHidden', 'isCustom', 'noCloseTransition', 'shouldAnimateFirstRender'] as const;
+/** The props the component consumes itself; everything else is spread onto the div. */
+const OWN_PROPS = new Set(['isOpen', 'isHidden', 'isCustom', 'noCloseTransition', 'shouldAnimateFirstRender', 'children']);
+const isOwnProp = (key: string) => OWN_PROPS.has(key);
 
 /**
  * `<ShowTransition isOpen>`: a `<div>` (the remaining props are spread onto it: `id`, `class`,
@@ -178,30 +209,23 @@ const OWN_PROPS = ['isOpen', 'isHidden', 'isCustom', 'noCloseTransition', 'shoul
  * they simply stay mounted while closing).
  */
 export function ShowTransition(props: ShowTransitionProps): unknown {
-  if (DEV) {
-    // The descriptor, not `props.children`: reading a JSX getter would create the children an extra time.
-    const children = Object.getOwnPropertyDescriptor(props, 'children')?.value as unknown;
-    if (typeof children === 'function' && children.length > 0) {
-      console.error('[frameact] <ShowTransition>: children must be JSX, not a render function.');
-    }
-  }
-  const [own, rest] = splitProps(props, OWN_PROPS);
   const t = createShowTransition({
-    isOpen: () => !!own.isOpen && !own.isHidden,
-    noMountTransition: !untrack(() => own.shouldAnimateFirstRender),
-    className: untrack(() => own.isCustom) ? false : undefined,
-    noCloseTransition: () => own.noCloseTransition,
+    isOpen: () => !!props.isOpen && !props.isHidden,
+    noMountTransition: !props.shouldAnimateFirstRender,
+    noCloseTransition: () => props.noCloseTransition,
+    className: props.isCustom ? false : 'fast',
   });
-  // A boolean memo: the element is created when it becomes present and kept while it stays present
-  // (isHidden toggling while open, or open -> closing -> closed under isHidden, keeps the same div).
-  const present = createMemo(() => t.shouldRender() || !!own.isHidden);
+  // Rendered while the transition says so or while hidden-but-kept. A boolean memo first: the div
+  // must survive every state change and an `isHidden` flip (same element through closing and closed).
+  const rendered = createMemo(() => t.shouldRender() || !!props.isHidden);
   return createMemo(() => {
-    if (!present()) return undefined;
+    if (!rendered()) return undefined;
     return untrack(() => {
-      const el = document.createElement('div');
-      t.ref(el);
-      spread(el, rest, false, undefined, 'ShowTransition');
-      return el;
+      const div = getNatives().createElement.call(document, 'div');
+      t.ref(div); // the state classes come first, the user's `class` tokens after them
+      insert(div, () => props.children);
+      spread(div, props, true, isOwnProp);
+      return div;
     });
   });
 }

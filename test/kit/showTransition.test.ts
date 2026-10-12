@@ -188,3 +188,67 @@ it('<ShowTransition>: isHidden toggled while open keeps the same element through
   expect(el.classList.contains('closing')).toBe(false);
   expect(made).toBe(1);
 });
+
+it('disposal while closing or scheduled-open: no close callback, no state change, no class write after it (clean-room finding 5)', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const [open, setOpen] = createSignal(true);
+  const ends = vi.fn();
+  const el = document.createElement('div');
+  let t!: ReturnType<typeof createShowTransition>;
+  const dispose = createRoot((d) => {
+    t = createShowTransition({ isOpen: open, noMountTransition: true, onCloseAnimationEnd: ends });
+    t.ref(el);
+    return d;
+  });
+  setOpen(false);
+  flushSync();
+  expect(t.state()).toBe('closing');
+  expect(classes(el)).toBe('opacity-transition fast shown not-open closing');
+  dispose(); // inside the close timer
+  vi.advanceTimersByTime(1000);
+  setOpen(true);
+  await frame();
+  await frame();
+  expect(ends).not.toHaveBeenCalled();
+  expect(t.state()).toBe('closing'); // frozen where it was
+  expect(classes(el)).toBe('opacity-transition fast shown not-open closing');
+
+  const [open2, setOpen2] = createSignal(false);
+  const el2 = document.createElement('div');
+  let t2!: ReturnType<typeof createShowTransition>;
+  const dispose2 = createRoot((d) => {
+    t2 = createShowTransition({ isOpen: open2 });
+    t2.ref(el2);
+    return d;
+  });
+  setOpen2(true);
+  await flushMicrotasks();
+  expect(t2.state()).toBe('scheduled-open');
+  await frame(); // not-open written, the flip booked for the next measure phase
+  expect(classes(el2)).toBe('opacity-transition fast shown not-open');
+  dispose2(); // before the flip
+  await frame();
+  await frame();
+  expect(t2.state()).toBe('scheduled-open');
+  expect(classes(el2)).toBe('opacity-transition fast shown not-open');
+});
+
+it('per-instance cost: creating an instance is a few microseconds (a regression bound; the measured numbers are in the clean-room report) (clean-room finding 7)', () => {
+  const [open] = createSignal(true);
+  const make = () => createShowTransition({ isOpen: open, noMountTransition: true });
+  createRoot((d) => {
+    for (let i = 0; i < 500; i++) make(); // warm-up
+    d();
+  });
+  const n = 2000;
+  const start = performance.now();
+  const dispose = createRoot((d) => {
+    for (let i = 0; i < n; i++) make();
+    return d;
+  });
+  const perInstanceUs = ((performance.now() - start) * 1000) / n;
+  dispose();
+  // ≈ 1.5 µs in jsdom (2 signal nodes, 1 tickEnd effect, 1 mutation effect); the bound is an order
+  // of magnitude up so that CI noise never trips it while an extra memo/effect per instance would show.
+  expect(perInstanceUs).toBeLessThan(25);
+});

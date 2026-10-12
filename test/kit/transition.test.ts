@@ -1,4 +1,4 @@
-import { createHeavyAnimationScope, createMutationEffect, createRoot, createSignal, type HeavyAnimationScope } from '../../src/index';
+import { createHeavyAnimationScope, createMutationEffect, createRoot, createSignal, onCleanup, type HeavyAnimationScope } from '../../src/index';
 import { createComponent } from '../../src/dom/component';
 import { insert } from '../../src/dom/insert';
 import { Transition, type TransitionSlide } from '../../src/kit/transition';
@@ -263,4 +263,115 @@ it('disposal after the end event but before its mutate task: no onStop, no write
   await frame();
   expect(log).toEqual(['start']);
   expect(classes(s1)).toBe('Transition_slide Transition_slide-to');
+});
+
+it('a throwing onStart / onStop is reported and leaves neither the step animating nor the scope begun (clean-room finding 2)', async () => {
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const { root, scope, setKey, log } = setup({
+    onStart: () => { log.push('start'); throw new Error('onStart boom'); },
+    onStop: () => { log.push('stop'); throw new Error('onStop boom'); },
+  });
+  const t = root.firstElementChild as HTMLElement;
+  setKey(1);
+  await frame();
+  const [s0, s1] = slidesOf(t);
+  expect(log).toEqual(['start']);
+  expect(errors).toHaveBeenCalledTimes(1);
+  expect(scope.isAnimating.peek()).toBe(true); // the throw came after the step was set up
+  expect(classes(s1)).toBe('Transition_slide Transition_slide-to');
+  animationEnd(s1);
+  await frame();
+  expect(scope.isAnimating.peek()).toBe(false); // released before onStop ran
+  expect(classes(t)).toBe('Transition');
+  expect(classes(s0)).toBe('Transition_slide Transition_slide-inactive');
+  expect(classes(s1)).toBe('Transition_slide Transition_slide-active');
+  expect(log).toEqual(['start', 'stop']);
+  expect(errors).toHaveBeenCalledTimes(2);
+  setKey(2); // the next step is a normal one
+  await frame();
+  expect(scope.isAnimating.peek()).toBe(true);
+  expect(log).toEqual(['start', 'stop', 'start']);
+});
+
+it('a non-animated switch during an animation stops it: waiter cancelled, scope released, onStop once, classes and isFrom settled (clean-room finding 2)', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const root = container();
+  const scope = createHeavyAnimationScope();
+  const [key, setKey] = createSignal(0);
+  const [off, setOff] = createSignal(false);
+  const log: string[] = [];
+  createRoot(() => {
+    insert(
+      root,
+      createComponent(Transition, {
+        get activeKey() { return key(); },
+        name: 'slide',
+        scope,
+        isBlockingAnimation: true,
+        get disableAnimation() { return off(); },
+        onStart: () => log.push('start'),
+        onStop: () => log.push('stop'),
+        children: (slide: TransitionSlide) => {
+          const b = document.createElement('b');
+          insert(b, () => `${slide.key}:${slide.isFrom() ? 'from' : slide.isActive() ? 'active' : '-'}`);
+          return b;
+        },
+      }),
+    );
+  });
+  const t = root.firstElementChild as HTMLElement;
+  setKey(1);
+  await frame();
+  const [, s1] = slidesOf(t);
+  expect(scope.isBlockingAnimating.peek()).toBe(true);
+  expect(t.textContent).toBe('0:from1:active');
+  setOff(true);
+  setKey(2);
+  await frame();
+  const now = slidesOf(t);
+  expect(now.length).toBe(2); // keep-alive: {1, 2}
+  expect(now[0]).toBe(s1);
+  expect(classes(t)).toBe('Transition');
+  expect(classes(s1)).toBe('Transition_slide Transition_slide-inactive');
+  expect(classes(now[1])).toBe('Transition_slide Transition_slide-active');
+  expect(t.textContent).toBe('1:-2:active'); // isFrom cleared, the slides' effects not parked (the scope was released in the same step)
+  expect(scope.isBlockingAnimating.peek()).toBe(false);
+  expect(log).toEqual(['start', 'stop']);
+  animationEnd(s1); // the cancelled waiter and the fallback: nothing happens
+  vi.advanceTimersByTime(2000);
+  await frame();
+  expect(log).toEqual(['start', 'stop']);
+  expect(classes(now[1])).toBe('Transition_slide Transition_slide-active');
+});
+
+it('disposal mid-animation: the fallback timer and a late end event do nothing, the slides are disposed, keep-alive disposes a dropped slide (clean-room finding 5)', async () => {
+  const { root, scope, setKey, dispose, log } = setup({
+    children: (slide: TransitionSlide) => {
+      onCleanup(() => log.push(`gone ${slide.key}`));
+      const b = document.createElement('b');
+      b.textContent = String(slide.key);
+      return b;
+    },
+  });
+  const t = root.firstElementChild as HTMLElement;
+  setKey(1);
+  await frame();
+  animationEnd(slidesOf(t)[1]);
+  await frame();
+  setKey(2); // keep-alive keeps {1, 2}: slide 0 is dropped and disposed at the step
+  await frame();
+  expect(log).toEqual(['start', 'stop', 'gone 0', 'start']);
+  const [s1, s2] = slidesOf(t);
+  dispose();
+  expect(scope.isAnimating.peek()).toBe(false);
+  expect(new Set(log.slice(4))).toEqual(new Set(['gone 1', 'gone 2']));
+  vi.advanceTimersByTime(2000); // the 1 s end fallback would have settled the step
+  s2.dispatchEvent(new Event('animationend', { bubbles: true }));
+  vi.advanceTimersByTime(50);
+  await frame();
+  await frame();
+  expect(log.length).toBe(6); // no onStop
+  expect(classes(t)).toBe('Transition Transition-slide'); // no class write after dispose
+  expect(classes(s1)).toBe('Transition_slide Transition_slide-from');
+  expect(classes(s2)).toBe('Transition_slide Transition_slide-to');
 });

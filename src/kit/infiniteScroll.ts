@@ -1,14 +1,27 @@
-// `<InfiniteScroll>` (telegram-tt `components/ui/InfiniteScroll.tsx` on signals): a scroll
-// container that keeps its scroll position across list updates (`createScrollAnchor`), asks for
-// more items near either end (`onLoadMore`, debounced like tt: fire at once, then quiet for 1 s),
-// and preloads when the list is shorter than `preloadBackwards` or does not fill the viewport.
-// Not ported: `withAbsolutePositioning`/`maxHeight`, `cacheBuster`, `beforeChildren` (put it in
-// `children`); `scrollContainer` (tt `scrollContainerClosest`) is a selector for a scrolling ancestor.
-import { createMeasureEffect, createMemo, untrack } from '../index';
-import { insert } from '../dom/insert';
-import { splitProps, spread } from '../dom/props';
+// Original frameact code (clean-room, written from the kit's behavioural spec): a scrolling list
+// that asks for more items at either end and keeps the visible item in place across updates.
+//
+//   - The element is a `<div>` (rest props spread onto it) holding the children; the scrolling
+//     element is the div itself or, with `scrollContainer`, the nearest ancestor matching it
+//     (resolved once, after attach).
+//   - Scroll anchoring is `createScrollAnchor` (snapshot in measure, restore in forced reflow).
+//     The scroll handler keeps the anchor on the first visible item (a bounded walk from the last
+//     anchor, two or three rect reads per event), so a list that drops rows from the far end still
+//     restores to what the user sees.
+//   - Loading: one MEASURE effect per items update (ONE tracked read of the list — a store array by
+//     its shape) re-arms the two loaders and preloads backwards while the list is shorter than
+//     `preloadBackwards` (`noScroll: true`) or does not fill the viewport. The scroll handler asks
+//     backwards when moving down within `sensitiveArea` of the bottom and forwards when moving up
+//     within it of the top. Each direction is `debounce(fn, 1000, true, false)`: one request, then
+//     quiet for a second (or until the next chunk arrives, which re-arms it). The scroll event the
+//     restore itself causes (`consumeRestored`) never asks for anything.
+import { createMeasureEffect, onCleanup } from '../index';
+import { TRACK } from '../core/symbols';
 import { debounce } from '../scheduler/schedulers';
-import { createScrollAnchor, trackItems } from './scrollAnchor';
+import { insert } from '../dom/insert';
+import { getNatives } from '../dom/natives';
+import { spread } from '../dom/props';
+import { createScrollAnchor } from './scrollAnchor';
 
 export type LoadMoreDirection = 'forwards' | 'backwards';
 
@@ -37,121 +50,126 @@ export interface InfiniteScrollProps {
 }
 
 const DEFAULT_PRELOAD_BACKWARDS = 20;
-const DEFAULT_SENSITIVE_AREA = 800;
+const DEFAULT_SENSITIVE_AREA_PX = 800;
+/** After a request a direction stays quiet this long (unless a new chunk arrives). */
 const LOAD_MORE_QUIET_MS = 1000;
 
-const OWN_PROPS = [
-  'items', 'itemSelector', 'preloadBackwards', 'sensitiveArea', 'noScrollRestore', 'noScrollRestoreOnTop',
-  'scrollContainer', 'onLoadMore', 'onScroll', 'children',
-] as const;
+/** The props the component consumes itself; everything else (`id`, `class`, `style`, `ref`, `data-*`, `on*`) is spread onto the div. */
+const OWN_PROPS = new Set([
+  'items', 'itemSelector', 'preloadBackwards', 'sensitiveArea', 'noScrollRestore', 'noScrollRestoreOnTop', 'scrollContainer',
+  'onLoadMore', 'onScroll', 'children',
+]);
+const isOwnProp = (key: string) => OWN_PROPS.has(key);
 
-function offsetTopIn(el: HTMLElement, scroller: HTMLElement, nested: boolean): number {
-  if (!nested) return el.offsetTop;
-  return el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+/** What an update is detected by: a store array through its shape (one subscription), anything else by identity. */
+function versionOf(items: unknown): unknown {
+  if (items !== null && typeof items === 'object') {
+    const shape = (items as { [TRACK]?: unknown })[TRACK];
+    if (shape !== undefined) return shape;
+  }
+  return items;
 }
 
 export function InfiniteScroll(props: InfiniteScrollProps): unknown {
-  const [own, rest] = splitProps(props, OWN_PROPS);
-  const el = document.createElement('div');
-  spread(el, rest, true, undefined, 'InfiniteScroll');
-  insert(el, () => own.children);
-
-  const closest = untrack(() => own.scrollContainer);
-  const scroller = (): HTMLElement => (closest ? (el.closest<HTMLElement>(closest) ?? el) : el);
-  const nested = closest !== undefined;
+  const natives = getNatives();
+  const el = natives.createElement.call(document, 'div') as HTMLDivElement;
+  const scrollContainerSelector = props.scrollContainer;
+  let scroller: HTMLElement = el;
+  let listening = false;
+  let lastScrollTop: number | undefined;
+  let anchorIndex = 0;
 
   const anchor = createScrollAnchor({
-    container: scroller,
+    container: () => scroller,
     list: () => el,
-    items: () => own.items,
-    itemSelector: untrack(() => own.itemSelector),
-    noScrollRestore: () => own.noScrollRestore,
-    noScrollRestoreOnTop: () => own.noScrollRestoreOnTop,
+    items: () => props.items,
+    itemSelector: props.itemSelector,
+    noScrollRestore: () => props.noScrollRestore,
+    noScrollRestoreOnTop: () => props.noScrollRestoreOnTop,
   });
 
-  // Recreated per `items` change (as tt does): a new chunk re-arms the quiet period.
-  const loaders = createMemo(() => {
-    trackItems(own.items);
-    const onLoadMore = own.onLoadMore;
-    if (!onLoadMore) return undefined;
-    return {
-      backwards: debounce((noScroll = false) => onLoadMore({ direction: 'backwards', noScroll }), LOAD_MORE_QUIET_MS, true, false),
-      forwards: debounce(() => onLoadMore({ direction: 'forwards' }), LOAD_MORE_QUIET_MS, true, false),
-    };
-  });
+  // ---- loading ----------------------------------------------------------------
 
-  // Initial preload (measure: reads scrollHeight/clientHeight after attach).
-  createMeasureEffect(
-    () => [trackItems(own.items) as readonly unknown[] | undefined, loaders(), own.preloadBackwards ?? DEFAULT_PRELOAD_BACKWARDS] as const,
-    ([items, load, preloadBackwards]) => {
-      if (!load) return;
-      if (preloadBackwards > 0 && (!items || items.length < preloadBackwards)) {
-        load.backwards(true);
-        return;
-      }
-      const { scrollHeight, clientHeight } = scroller();
-      if (clientHeight && scrollHeight < clientHeight) load.backwards();
-    },
-    { name: 'InfiniteScroll.preload' },
-  );
+  const requestBackwards = () => props.onLoadMore?.({ direction: 'backwards', noScroll: false });
+  const requestForwards = () => props.onLoadMore?.({ direction: 'forwards' });
+  let loadBackwards = requestBackwards;
+  let loadForwards = requestForwards;
 
-  function onScroll(e: Event): void {
-    const load = untrack(loaders);
-    if (load) {
-      const items = anchor.items();
-      const current = anchor.anchor();
-      const container = scroller();
-      if (nested && !el.getBoundingClientRect().width) {
-        anchor.track(undefined);
-        anchor.consumeRestored();
-      } else if (!anchor.consumeRestored()) {
-        const { scrollTop, scrollHeight, offsetHeight } = container;
-        const first = items[0];
-        const last = items[items.length - 1];
-        const top = first ? offsetTopIn(first, container, nested) : 0;
-        const bottom = last ? offsetTopIn(last, container, nested) + last.offsetHeight : scrollHeight;
-        const sensitiveArea = untrack(() => own.sensitiveArea) ?? DEFAULT_SENSITIVE_AREA;
-        const isNearTop = scrollTop <= top + sensitiveArea;
-        const isNearBottom = bottom - (scrollTop + offsetHeight) <= sensitiveArea;
-        const currentTop = current?.offsetParent ? current.getBoundingClientRect().top : undefined;
-        let updated = false;
-        if (isNearTop && first) {
-          const firstTop = first.getBoundingClientRect().top;
-          const newTop = currentTop !== undefined && current !== first ? currentTop : firstTop;
-          if (current && newTop > anchor.anchorTop()) {
-            anchor.track(first, firstTop);
-            updated = true;
-            load.forwards();
-          }
-        }
-        if (isNearBottom && last) {
-          const lastTop = last.getBoundingClientRect().top;
-          const newTop = currentTop !== undefined && current !== last ? currentTop : lastTop;
-          if (current && newTop < anchor.anchorTop()) {
-            anchor.track(last, lastTop);
-            updated = true;
-            load.backwards();
-          }
-        }
-        if (!updated) {
-          if (currentTop !== undefined) anchor.track(current, currentTop);
-          else if (first) anchor.track(first, first.getBoundingClientRect().top);
-        }
-      }
-    }
-    untrack(() => own.onScroll)?.(e);
+  /** Fresh loaders: the next approach to an end asks at once; repeats within a second are ignored. */
+  function armLoaders(): void {
+    loadBackwards = debounce(requestBackwards, LOAD_MORE_QUIET_MS, true, false);
+    loadForwards = debounce(requestForwards, LOAD_MORE_QUIET_MS, true, false);
   }
 
-  // The listener goes on the scrolling element; a nested list finds its ancestor once attached.
+  /** Measure phase (layout reads): preload while the list is short or does not fill the viewport. */
+  function preload(): void {
+    const count = props.items?.length ?? 0;
+    if (count < (props.preloadBackwards ?? DEFAULT_PRELOAD_BACKWARDS)) props.onLoadMore?.({ direction: 'backwards', noScroll: true });
+    else if (scroller.scrollHeight <= scroller.clientHeight) loadBackwards();
+  }
+
+  // ---- the scroll handler (an event handler: layout reads are fine here) --------
+
+  /** Keep the anchor on the first visible item: a bounded walk from the current anchor. */
+  function trackAnchor(): void {
+    const items = anchor.items();
+    if (items.length === 0) return;
+    const viewportTop = scroller.getBoundingClientRect().top;
+    const current = anchor.anchor();
+    let i = anchorIndex < items.length && items[anchorIndex] === current ? anchorIndex : Math.max(0, current ? items.indexOf(current) : 0);
+    let rect = items[i].getBoundingClientRect();
+    while (i > 0) {
+      const above = items[i - 1].getBoundingClientRect();
+      if (above.bottom <= viewportTop) break;
+      i--;
+      rect = above;
+    }
+    while (rect.bottom <= viewportTop && i < items.length - 1) rect = items[++i].getBoundingClientRect();
+    anchorIndex = i;
+    anchor.track(items[i], rect.top);
+  }
+
+  function onScroll(event: Event): void {
+    props.onScroll?.(event);
+    const top = scroller.scrollTop;
+    if (anchor.consumeRestored()) {
+      // The browser's scroll event for the restore's own scrollTop write: not the user's.
+      lastScrollTop = top;
+      return;
+    }
+    trackAnchor();
+    const prevTop = lastScrollTop;
+    lastScrollTop = top;
+    if (prevTop === undefined || top === prevTop) return; // the first event only tracks the anchor
+    const area = props.sensitiveArea ?? DEFAULT_SENSITIVE_AREA_PX;
+    if (top > prevTop) {
+      if (scroller.scrollHeight - top - scroller.clientHeight <= area) loadBackwards();
+    } else if (top <= area) loadForwards();
+  }
+
+  /** After attach: the scrolling element (the div, or the ancestor `scrollContainer` names) and its scroll listener. */
+  function listen(): void {
+    listening = true;
+    if (scrollContainerSelector) scroller = (el.closest(scrollContainerSelector) as HTMLElement | null) ?? el;
+    natives.addEventListener.call(scroller, 'scroll', onScroll, { passive: true });
+  }
+
+  // One tracked read of the list per update; the apply reads layout in the measure phase.
   createMeasureEffect(
-    () => undefined,
+    () => versionOf(props.items),
     () => {
-      const target = scroller();
-      target.addEventListener('scroll', onScroll);
-      return () => target.removeEventListener('scroll', onScroll);
+      if (!listening) listen();
+      armLoaders();
+      preload();
     },
-    { name: 'InfiniteScroll.listen' },
+    { name: 'infiniteScroll.items' },
   );
 
+  onCleanup(() => {
+    if (listening) natives.removeEventListener.call(scroller, 'scroll', onScroll);
+  });
+
+  insert(el, () => props.children);
+  spread(el, props, true, isOwnProp);
   return el;
 }
