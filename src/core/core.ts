@@ -37,6 +37,10 @@ const NOOP = () => {};
  * scheduler before it visited them. The next walk reaching it descends into its subscribers even
  * though it is already dirty (and clears the flag); update() clears it too (the node is CLEAN
  * after, and a CLEAN node is always descended into when marked).
+ * F_THREW: the node's last compute threw (it kept its previous value, CLEAN). Its next check
+ * recomputes it even if no dep changed: that run may have read inputs that had changed, and the
+ * thrower may recover to its old value (no change to see). Survives update()'s exit; the next
+ * compute clears it on entry.
  * The F_MISSED clear on entry is only a safety net; the clear on exit (update()'s `finally`, after
  * reading it) is the one that keeps the latch from leaking into the next run. They are not
  * duplicates: do not remove either.
@@ -45,7 +49,8 @@ export const F_INIT = 1,
   F_COMPUTING = 2,
   F_MISSED = 4,
   F_REENTERED = 8,
-  F_UNSURE = 16;
+  F_UNSURE = 16,
+  F_THREW = 32;
 
 // For more information about this graph tracking scheme see Reactively:
 // https://github.com/modderme123/reactively/blob/main/packages/core/src/core.ts#L21
@@ -659,7 +664,10 @@ export function updateCheck(node: Computation) {
         }
         // `cur` resolved: DIRTY → recompute; CHECK with no dirty dep → CLEAN; DISPOSED stays.
         if (cur._state === STATE_DIRTY) update(cur);
-        else if (cur._state === STATE_CHECK) cur._state = STATE_CLEAN;
+        else if (cur._state === STATE_CHECK) {
+          if (cur._flags & F_THREW) update(cur); // its last run threw: no dep change to rely on
+          else cur._state = STATE_CLEAN;
+        }
         if (checkTop === base) return;
         scan = checkStack[--checkTop];
         l = (checkStack[--checkTop] as Link).nextDep;
@@ -803,10 +811,11 @@ export function update(node: Computation) {
     // Keep the deps read before the throw. A failure before compute (in cleanup) keeps them all:
     // purging would unlink every dep and the node would never wake again.
     if (computeStarted) purgeDeps(node);
+    node._flags |= F_THREW;
     handleError(node, error);
   } finally {
     const missed = node._flags & F_MISSED;
-    node._flags &= F_INIT;
+    node._flags &= F_INIT | F_THREW;
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;
       if (missed) {

@@ -203,3 +203,45 @@ describe('stage-3 review: an aborted pull leaves other dirty deps of the reader 
     expect(seen).toEqual([0, 200]);
   });
 });
+
+describe('stage-3 review, Important 2: a node whose compute threw re-runs on its next check', () => {
+  it('a memo whose run threw (another input had changed) recomputes when the thrower recovers to its old value', () => {
+    const $o = signal('a');
+    const $s = signal(0);
+    const $t = computed(() => {
+      if ($s() === 1) throw new Error('boom');
+      return $s();
+    });
+    const spy = vi.fn(() => $o() + $t());
+    const $r = computed(spy);
+    expect($r()).toBe('a0');
+    $o.set('b');
+    $s.set(1);
+    expect(() => $r()).toThrow('boom'); // read 'b', then $t threw: $r keeps 'a0'
+    $s.set(0); // $t recovers to its old value: no change seen through $t
+    expect($r()).toBe('b0');
+    expect($r()).toBe('b0');
+    expect(spy).toHaveBeenCalledTimes(3); // no extra run once it succeeded
+  });
+
+  it('an effect whose compute threw re-runs its compute on the next check', () => {
+    const { schedule, flush } = queue();
+    const $o = signal(1);
+    const $s = signal(0);
+    const $t = computed(() => {
+      if ($s() === 1) throw new Error('boom');
+      return $s();
+    });
+    const seen: number[] = [];
+    root(() => createEffect(() => $o() * 10 + $t(), (v) => { seen.push(v); }, schedule));
+    flush();
+    $o.set(2);
+    $s.set(1);
+    flush();
+    expect(seen).toEqual([10]);
+    $s.set(0);
+    flush();
+    expect(seen).toEqual([10, 20]);
+  });
+});
+
