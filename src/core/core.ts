@@ -713,6 +713,25 @@ export function createSignalNode<T>(initialValue: T, options?: SignalOptions<T>)
   return new (SignalNode as any)(initialValue, (options && options.dirty) || isNotEqual, options?.id);
 }
 
+/**
+ * @internal store: a signal node that remembers the table slot it lives in (`owner`, `key`). When its
+ * last subscriber unlinks, the hook set by `setLeafOrphanHook` is called so the store can drop the slot
+ * (the value lives in the raw tree; the next tracked read creates a fresh leaf). Only nodes made here
+ * pay for it, and only at the moment their last reader goes away.
+ */
+export function createLeafNode<T>(initialValue: T, owner: object, key: PropertyKey): Computation<T> {
+  const node = createSignalNode(initialValue) as any;
+  node._leafOwner = owner;
+  node._leafKey = key;
+  return node;
+}
+
+let leafOrphanHook: ((owner: any, key: PropertyKey, leaf: Computation) => void) | null = null;
+/** @internal store: called when a leaf made by `createLeafNode` loses its last subscriber. */
+export function setLeafOrphanHook(hook: ((owner: any, key: PropertyKey, leaf: Computation) => void) | null) {
+  leafOrphanHook = hook;
+}
+
 /** P5: read a createSignal node (the slim read(): no pull, never disposed, never an effect). */
 export function readSignal(this: Computation): any {
   if (currentObserver !== null) link(this, currentObserver);
@@ -1071,7 +1090,12 @@ function unlinkDeps(from: Link) {
     if (nextSub !== null) nextSub.prevSub = prevSub;
     else dep._subsTail = prevSub;
     if (prevSub !== null) prevSub.nextSub = nextSub;
-    else dep._subs = nextSub;
+    else {
+      dep._subs = nextSub;
+      if (nextSub === null && (dep as any)._leafOwner !== undefined && leafOrphanHook !== null) {
+        leafOrphanHook((dep as any)._leafOwner, (dep as any)._leafKey, dep);
+      }
+    }
   }
 }
 

@@ -5,7 +5,7 @@
 // bookkeeping (proxy, leaf signals, shape signal) lives in a WeakMap'd StoreNode, which is also the
 // Proxy handler of that object (the traps reach its fields through `this`: no lookup on the read path).
 import { DEV } from '../env';
-import { createSignalNode, getObserver, markLiveRead, trackNode, writeStoreNode } from '../core/core';
+import { createLeafNode, getObserver, markLiveRead, setLeafOrphanHook, trackNode, writeStoreNode } from '../core/core';
 import { TRACK } from '../core/symbols';
 import type { Computation } from '../core/types';
 
@@ -83,6 +83,8 @@ class StoreNode {
   readonly proxy: any;
   /** key → leaf signal (slim core signal node), created on the first tracked read */
   sigs: Record<PropertyKey, Computation> | null;
+  /** number of entries in `sigs` (the table is dropped when the last leaf goes) */
+  nsigs: number;
   /** shape signal: arrays — any index/length change; objects — a key added or removed (ownKeys, $TRACK) */
   self: Computation | null;
   /** the shape signal's value: bumped by every shape change */
@@ -94,6 +96,7 @@ class StoreNode {
   constructor(raw: object) {
     this.raw = raw;
     this.sigs = null;
+    this.nsigs = 0;
     this.self = null;
     this.shape = 0;
     this.vals = null;
@@ -166,6 +169,42 @@ class StoreNode {
   }
 }
 
+/** Slots of the node's own signals in the orphan hook (a symbol cannot clash with a data key: tracked keys are never symbols). */
+const SELF: unique symbol = Symbol('frameact.store.self') as any;
+const VALS: unique symbol = Symbol('frameact.store.vals') as any;
+
+// A leaf (or the shape / values signal) that lost its last reader is dropped from its node: the value
+// lives in the raw tree, the next tracked read creates a fresh one. Memory then follows what is
+// subscribed, not what was ever rendered (a missing key read before its data loaded leaves nothing).
+setLeafOrphanHook((node: StoreNode, key, leaf) => {
+  if (key === SELF) {
+    if (node.self === leaf) node.self = null;
+  } else if (key === VALS) {
+    if (node.vals === leaf) node.vals = null;
+  } else {
+    dropLeaf(node, key, leaf);
+  }
+});
+
+/** Remove `key`'s leaf from the table if it is still `leaf` (`undefined`: whatever is there); an empty table goes too. */
+function dropLeaf(node: StoreNode, key: PropertyKey, leaf: Computation | undefined): void {
+  const sigs = node.sigs;
+  if (sigs === null || sigs[key] === undefined || (leaf !== undefined && sigs[key] !== leaf)) return;
+  delete sigs[key];
+  if (--node.nsigs === 0) node.sigs = null;
+}
+
+/** @internal tests: the keys that currently have a leaf signal on a store object (proxy or raw). */
+export function leafKeys(obj: object): string[] {
+  const sigs = nodes.get(unwrap(obj))?.sigs;
+  return sigs ? Object.keys(sigs) : [];
+}
+/** @internal tests: whether the object's shape / values signal exists. */
+export function hasShapeSignals(obj: object): { self: boolean; vals: boolean } {
+  const node = nodes.get(unwrap(obj));
+  return { self: !!node?.self, vals: !!node?.vals };
+}
+
 /** DEV: enumerating a store object with more keys than this through its proxy is reported once. */
 const BIG_KEYS = 1000;
 let warnedBig = false;
@@ -175,7 +214,8 @@ function trackKey(node: StoreNode, key: PropertyKey, value: unknown) {
   if (sigs === null) sigs = node.sigs = new SigTable();
   let s = sigs[key];
   if (s === undefined) {
-    s = sigs[key] = createSignalNode(value);
+    s = sigs[key] = createLeafNode(value, node, key);
+    node.nsigs++;
     if (DEV) storeStats.leafSignals++;
   }
   trackNode(s);
@@ -185,7 +225,7 @@ function trackSelf(node: StoreNode) {
   if (getObserver() === null) return;
   let s = node.self;
   if (s === null) {
-    s = node.self = createSignalNode(0);
+    s = node.self = createLeafNode(0, node, SELF);
     if (DEV) storeStats.leafSignals++;
   }
   trackNode(s);
@@ -195,7 +235,7 @@ function trackVals(node: StoreNode) {
   if (getObserver() === null) return;
   let s = node.vals;
   if (s === null) {
-    s = node.vals = createSignalNode(0);
+    s = node.vals = createLeafNode(0, node, VALS);
     if (DEV) storeStats.leafSignals++;
   }
   trackNode(s);
@@ -370,7 +410,7 @@ export function setProperty(raw: any, key: PropertyKey, value: unknown, deleteOn
     const s = sigs[key];
     if (s !== undefined) {
       notifyLeaf(s, value);
-      if (del) delete sigs[key];
+      if (del) dropLeaf(node, key, s);
     }
     if (isArr) {
       const len = raw.length;
@@ -421,7 +461,8 @@ export function writeArray<R>(raw: any[], always: boolean, mutate: () => R): R {
     if (idx !== null) {
       for (let j = 0; j < idx.length; j++) {
         const v = raw[idx[j]];
-        if (v !== old![j]) notifyLeaf(sigs[idx[j]], v);
+        const leaf = sigs[idx[j]]; // (a synchronous reader that ran meanwhile may have dropped it)
+        if (leaf !== undefined && v !== old![j]) notifyLeaf(leaf, v);
       }
     }
     if (len !== prevLen) {
