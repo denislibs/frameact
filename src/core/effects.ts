@@ -23,6 +23,7 @@ import {
   update,
   updateCheck,
 } from './core';
+import { reportDevHookError } from './debug';
 import { SCOPE } from './symbols';
 import type { Computation } from './types';
 import { getTickDrainEpoch, isTickDraining, onTickEnd } from '../scheduler/schedulers';
@@ -53,15 +54,15 @@ export interface EffectNode<T = any> extends Computation<T> {
   _drainEpoch: number;
   /** @internal frame drain loop guard: runs within `_drainEpoch` */
   _drainRuns: number;
-  /** @internal DEV only ("why did this run"): the dep whose change scheduled the pending run (a signal or memo); cleared when the run ends */
+  /** @internal DEV only ("why did this run"): the dep whose change scheduled the pending run (a signal or memo); moved to a local (and cleared) when the run starts */
   _dirtyDep: Computation | null;
-  /** @internal DEV only: the node written at the root of that notify walk; cleared when the run ends */
+  /** @internal DEV only: the node written at the root of that notify walk; cleared when the run starts */
   _dirtyRoot: Computation | null;
   /** @internal DEV only: runs of this effect — the creation run and every scheduled run that reached its compute */
   _runs: number;
 }
 
-/** DEV: what dirtied an effect's pending run (null once it ran: a released store leaf is not kept alive), and how often it ran. */
+/** DEV: what dirtied an effect's pending run (null once that run started: a released store leaf is not kept alive), and how often it ran. */
 export interface EffectDebugInfo {
   /** The signal/memo whose link reached the effect. */
   dep: Computation | null;
@@ -76,8 +77,12 @@ export function getEffectDebugInfo(node: EffectNode): EffectDebugInfo | null {
   return { dep: node._dirtyDep, root: node._dirtyRoot, runs: node._runs };
 }
 
-/** DEV: called after every completed run of an effect with the time it took (stricterdom's run log). */
-export type RunObserver = (node: EffectNode, ms: number) => void;
+/**
+ * DEV: called after every completed run of an effect with the time it took (stricterdom's run log),
+ * and the dep / written root that scheduled THIS run (taken at its start: a write made during the
+ * run stamps the next one).
+ */
+export type RunObserver = (node: EffectNode, ms: number, dep: Computation | null, root: Computation | null) => void;
 let runObserver: RunObserver | null = null;
 /** @internal stricterdom: observe effect runs (DEV only; a no-op in prod). */
 export function setRunObserver(fn: RunObserver | null) {
@@ -350,21 +355,42 @@ function runEffect(node: EffectNode) {
       break;
     }
   }
+  // The stamps of THIS run move to locals now: a write made during the run (an apply that re-dirties
+  // its own effect) stamps the next run, and the fields never keep a store leaf alive after this point.
+  let dep: Computation | null = null;
+  let root: Computation | null = null;
+  let computes = false; // DEV: this run recomputes (a booking that finds the effect clean only applies, or does nothing)
+  let applies = false;
+  if (DEV) {
+    dep = node._dirtyDep;
+    root = node._dirtyRoot;
+    node._dirtyDep = node._dirtyRoot = null;
+    computes = node._state !== STATE_CLEAN;
+  }
   const t0 = DEV && runObserver !== null ? performance.now() : 0;
   try {
     if (!computeNode(node)) return;
-    if (node._applied === NOT_APPLIED || node._value !== node._applied) applyEffect(node);
+    if (node._applied === NOT_APPLIED || node._value !== node._applied) {
+      if (DEV) applies = true;
+      applyEffect(node);
+    }
   } finally {
     // Reset the self-dirty counter only when the whole run (compute AND apply) ended without
     // re-dirtying the node.
     if (node._state === STATE_CLEAN) node._selfDirty = 0;
     // Children that bailed onto us are re-scheduled however this run ended (success or error).
     releaseBailed(node);
-    if (DEV) {
-      node._runs++;
-      if (runObserver !== null) runObserver(node, performance.now() - t0);
-      node._dirtyDep = null; // (a store leaf released meanwhile must not stay reachable from here)
-      node._dirtyRoot = null;
+    // DEV: a run counts when it recomputed; the first apply of a scheduled effect ends its creation
+    // run (observed for its time, not counted); a booking that found the effect clean did nothing.
+    if (DEV && (computes || applies)) {
+      if (computes) node._runs++;
+      if (runObserver !== null) {
+        try {
+          runObserver(node, performance.now() - t0, dep, root);
+        } catch (error) {
+          reportDevHookError('run observer', error); // (must not replace the run's own error)
+        }
+      }
     }
   }
 }

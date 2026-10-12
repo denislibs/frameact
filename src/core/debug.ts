@@ -39,3 +39,12 @@ export function describeNode(node: Computation | null): string {
   const owner = kind === 'signal' ? [] : ownerPath(node[SCOPE]);
   return `${kind} "${node.id ?? kind}"${owner.length ? ` in ${owner.join(' > ')}` : ''}`;
 }
+
+/** DEV hooks (apply hook, run/drain observers, phase listeners) must never break the core: report, and never throw even from a throwing `console.error`. */
+export function reportDevHookError(what: string, error: unknown) {
+  try {
+    console.error(`[frameact] ${what} failed`, error);
+  } catch {
+    // a "fail on console.error" setup: nothing more can be done here
+  }
+}

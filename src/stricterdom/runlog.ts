@@ -3,6 +3,7 @@
 // signal (or store leaf) whose write scheduled it.
 import { DEV } from '../env';
 import { getEffectDebugInfo, setRunObserver, type EffectNode } from '../core/effects';
+import type { Computation } from '../core/types';
 import { getDrainingPhase, setDrainObserver, type FramePhase } from '../core/frame';
 import { describeNode, effectPath } from '../core/debug';
 import { getPhase } from '../scheduler/fasterdom';
@@ -41,27 +42,30 @@ function pathOf(node: EffectNode): string {
   return path;
 }
 
-function onRun(node: EffectNode, ms: number) {
+function onRun(node: EffectNode, ms: number, dep: Computation | null, root: Computation | null) {
   const path = pathOf(node);
-  let entry = stats.get(path);
-  if (entry === undefined) {
-    entry = { path, runs: 0, totalMs: 0, maxMs: 0 };
-    stats.set(path, entry);
+  const runs = getEffectDebugInfo(node)!.runs;
+  // `runs` is 1 for the first apply of a scheduled effect: the end of its creation run, not a scheduled run.
+  if (runs > 1) {
+    let entry = stats.get(path);
+    if (entry === undefined) {
+      entry = { path, runs: 0, totalMs: 0, maxMs: 0 };
+      stats.set(path, entry);
+    }
+    entry.runs++;
+    entry.totalMs += ms;
+    if (ms > entry.maxMs) entry.maxMs = ms;
   }
-  entry.runs++;
-  entry.totalMs += ms;
-  if (ms > entry.maxMs) entry.maxMs = ms;
   if (getDrainingPhase() !== null && (drainSlowest === null || ms > drainSlowest.ms)) drainSlowest = { path, ms };
   if (ms > SLOW_RUN_MS) console.warn(`[frameact] Slow effect run: ${ms.toFixed(1)} ms in ${path} [${getPhase()}]`);
   if (logging && (filter === null || path.search(filter) !== -1)) { // (search: a /g filter has no lastIndex state)
-    const info = getEffectDebugInfo(node)!;
     const why =
-      info.root === null
+      root === null
         ? 'rescheduled (no write recorded)'
-        : info.dep === info.root
-          ? describeNode(info.root)
-          : `${describeNode(info.root)} via ${describeNode(info.dep)}`;
-    console.log(`[frameact] run #${info.runs} ${path} [${getPhase()}] ← ${why}`);
+        : dep === root
+          ? describeNode(root)
+          : `${describeNode(root)} via ${describeNode(dep)}`;
+    console.log(runs === 1 ? `[frameact] first apply ${path} [${getPhase()}]` : `[frameact] run #${runs} ${path} [${getPhase()}] ← ${why}`);
   }
 }
 

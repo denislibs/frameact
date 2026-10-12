@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createMutationEffect, createRoot, createSignal, flushSync } from '../../src/index';
 import { createComponent } from '../../src/dom/component';
+import { setRunObserver } from '../../src/core/effects';
 import { disableStrict, enableStrict, setHandler } from '../../src/stricterdom/stricterdom';
 import { disableRunLog, enableRunLog, getRunStats, resetRunStats, SLOW_RUN_MS } from '../../src/stricterdom/runlog';
 import { useDomHarness } from '../helpers/dom';
@@ -137,4 +138,55 @@ it('the slowest effect a drain warning names ran in that drain (a slow tickEnd r
     '[frameact] Slow effect run: 8.0 ms in div.title [mutate]',
     '[frameact] Slow mutate drain: 8.0 ms, 1 effect run; slowest: div.title (8.0 ms)',
   ]);
+});
+
+it('an effect that re-dirties itself from its own apply keeps the "why" of the run that write caused', () => {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const [n, setN] = createSignal(0, { id: 'n' });
+  createRoot((dispose) => {
+    disposers.push(dispose);
+    createEffect(() => n(), (v) => { if (v === 1) setN(2); }, undefined, { name: 'loop' });
+  });
+  enableRunLog();
+  setN(1);
+  flushSync();
+  const lines = log.mock.calls.map((c) => c[0] as string).filter((l) => l.includes(' loop '));
+  expect(lines).toEqual([
+    '[frameact] run #2 loop [measure] ← signal "n"',
+    '[frameact] run #3 loop [measure] ← signal "n"', // caused by setN(2) in run #2's apply
+  ]); // (the third booking finds the effect clean: nothing ran, nothing is logged or counted)
+  expect(getRunStats().map((s) => `${s.path}:${s.runs}`)).toEqual(['loop:2']);
+});
+
+it('the first apply of a scheduled (tickEnd) effect is the end of its creation run: logged as such, not counted as a scheduled run', () => {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const [n] = createSignal(0);
+  enableRunLog();
+  createRoot((dispose) => {
+    disposers.push(dispose);
+    createEffect(() => n(), () => {}, undefined, { name: 'first' });
+  });
+  flushSync();
+  expect(log.mock.calls.map((c) => c[0])).toEqual(['[frameact] first apply first [measure]']);
+  expect(getRunStats()).toEqual([]);
+});
+
+it('a throwing run observer neither replaces the run nor skips it (reported once, the hook fails alone)', () => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const [n, setN] = createSignal(0);
+  let applied = 0;
+  createRoot((dispose) => {
+    disposers.push(dispose);
+    createEffect(() => n(), () => { applied++; }, undefined, { name: 'fx' });
+  });
+  flushSync();
+  setRunObserver(() => { throw new Error('observer boom'); });
+  try {
+    setN(1);
+    expect(() => flushSync()).not.toThrow();
+  } finally {
+    setRunObserver(null);
+  }
+  expect(applied).toBe(2);
+  expect(error.mock.calls.some((c) => String(c[0]).includes('run observer failed'))).toBe(true);
 });
