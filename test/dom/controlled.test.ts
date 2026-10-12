@@ -2,6 +2,7 @@ import { createHeavyAnimationScope, createRoot, createSignal, provideHeavyAnimat
 import { setAttribute } from '../../src/dom/attributes';
 import { effect } from '../../src/dom/component';
 import { forceControlledValue } from '../../src/dom';
+import { registerControlledDirectives } from '../../src/dom/controlled';
 import { delegateEvents, EVENT_KEY } from '../../src/dom/events';
 import { container, useDomHarness } from '../helpers/dom';
 
@@ -982,4 +983,15 @@ describe('forceControlledValue: explicit write-through (Android "Send -> clear")
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
+});
+
+it('R-5: registerControlledDirectives is idempotent and the built-ins are reachable through setAttribute alone', () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  registerControlledDirectives();
+  registerControlledDirectives();
+  const input = textInput();
+  setAttribute(input, 'use:value', 'x');
+  expect(input.value).toBe('x');
+  expect(err).not.toHaveBeenCalled(); // no "unknown directive"
+  err.mockRestore();
 });

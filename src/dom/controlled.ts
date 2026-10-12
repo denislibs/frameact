@@ -511,8 +511,15 @@ function checkedDirective(el: Element, value: unknown): void {
   bind(checkedKind, el, value);
 }
 
-defineBuiltinDirective('value', valueDirective);
-defineBuiltinDirective('checked', checkedDirective);
+/**
+ * Registers the built-in `use:value` / `use:checked`. `attributes.ts` calls it (a used symbol, not a
+ * bare side-effect import, so a `"sideEffects": false` package cannot tree-shake the registration
+ * away). Idempotent.
+ */
+export function registerControlledDirectives(): void {
+  defineBuiltinDirective('value', valueDirective);
+  defineBuiltinDirective('checked', checkedDirective);
+}
 
 /**
  * Explicit write-through for a control bound with `use:value`: writes `value` into the DOM at once,
