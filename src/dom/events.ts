@@ -45,6 +45,13 @@ function refuseHandler(where: string, name: string, handler: unknown): void {
   if (DEV) console.error(`[frameact] ${where}${name}: the handler must be a function, a [fn, data] tuple or an object with handleEvent; got`, handler);
 }
 
+/** `[fn, data]` as a listener calling `fn.call(node, data, e)`; `undefined` when `fn` is not a function. The tuple is never written to (it may be shared). */
+export function tupleListener(node: Element, tuple: readonly unknown[]): EventListener | undefined {
+  const fn = tuple[0] as (data: unknown, e: Event) => void;
+  const data = tuple[1];
+  return typeof fn === 'function' ? (e: Event) => fn.call(node, data, e) : undefined;
+}
+
 /** Compiler primitive: `addEvent(el, name, handler, delegate)`; tuple handlers carry bound data. */
 export function addEvent(node: Element, name: string, handler: unknown, delegate?: boolean): void {
   const target = node as unknown as Record<string, unknown>;
@@ -61,11 +68,9 @@ export function addEvent(node: Element, name: string, handler: unknown, delegate
     return;
   }
   if (Array.isArray(handler)) {
-    // The tuple belongs to the caller (it may be shared between elements): never write into it.
-    const fn = handler[0] as (data: unknown, e: Event) => void;
-    const data = handler[1];
-    if (typeof fn !== 'function') return refuseHandler('onX=', name, handler);
-    node.addEventListener(name, (e: Event) => fn.call(node, data, e));
+    const listener = tupleListener(node, handler);
+    if (!listener) return refuseHandler('onX=', name, handler);
+    node.addEventListener(name, listener);
   } else if (handler == null) {
     // nothing to attach
   } else if (isListener(handler)) {
@@ -75,10 +80,13 @@ export function addEvent(node: Element, name: string, handler: unknown, delegate
 
 const listeners = new WeakMap<Element, Map<string, EventListenerOrEventListenerObject>>();
 
-/** `on:name` / `oncapture:name`: a native listener per element and name, replaced or removed on update. */
-export function setListener(node: Element, name: string, value: unknown, capture: boolean): void {
+/**
+ * `on:name` / `oncapture:name`: a native listener per element and name, replaced or removed on update.
+ * `slot` namespaces the key, so a second owner (a spread's `onX`) never displaces `on:name`.
+ */
+export function setListener(node: Element, name: string, value: unknown, capture: boolean, slot = ''): void {
   let map = listeners.get(node);
-  const key = capture ? `c:${name}` : name;
+  const key = slot + (capture ? `c:${name}` : name);
   const prev = map?.get(key);
   if (prev) {
     node.removeEventListener(name, prev, capture || (typeof prev === 'function' ? undefined : (prev as EventListenerOptions)));

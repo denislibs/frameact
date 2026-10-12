@@ -9,7 +9,7 @@ export { render } from './render';
 export {
   createComponent, effect, memo, getOwner, claimElement, children, type Component, type ChildrenReturn,
 } from './component';
-export { mergeProps, type PropsSource } from './props';
+export { mergeProps, spread, assign, ref, applyRef, readShallow, type PropsSource } from './props';
 export { For, type ForBaseProps, type Accessor, type Each } from './list';
 export {
   className, classList, toggleClassToken, classTokens, addExtraClass, removeExtraClass, toggleExtraClass,
