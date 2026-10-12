@@ -2,7 +2,7 @@ import { createHeavyAnimationScope, createRoot, createSignal, provideHeavyAnimat
 import { setAttribute } from '../../src/dom/attributes';
 import { effect } from '../../src/dom/component';
 import { forceControlledValue } from '../../src/dom';
-import { registerControlledDirectives } from '../../src/dom/controlled';
+import { isForcingControlledValue, registerControlledDirectives } from '../../src/dom/controlled';
 import { delegateEvents, EVENT_KEY } from '../../src/dom/events';
 import { container, useDomHarness } from '../helpers/dom';
 
@@ -924,6 +924,73 @@ describe('forceControlledValue: explicit write-through (Android "Send -> clear")
     setText('zz');
     await frame();
     expect(input.value).toBe('zz');
+  });
+
+  it('R-1: an engine that commits the composition inside blur() (compositionend + input with the old text) cannot resurrect it', async () => {
+    const input = textInput();
+    const { text, setText } = controlled(input, acceptAll, '');
+    const seen: string[] = [];
+    input.addEventListener('input', () => seen.push('input'));
+    input.addEventListener('compositionend', () => seen.push('compositionend'));
+    input.addEventListener('blur', () => {
+      // what Chrome does: the commit fires synchronously inside blur()
+      input.value = 'hello';
+      input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'hello' }));
+      input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    });
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    seen.length = 0;
+    setText('');
+    forceControlledValue(input);
+    expect(input.value).toBe('');
+    expect(text()).toBe('');
+    expect(seen).toEqual([]); // neither element-level nor delegated handlers saw the commit
+    await frame();
+    expect(input.value).toBe('');
+    expect(text()).toBe('');
+    // the window is closed again: ordinary events flow
+    type(input, 'w');
+    expect(text()).toBe('w');
+    expect(seen).toEqual(['input']);
+  });
+
+  it('R-1: the forcing window is closed even when blur throws (finally)', () => {
+    const input = textInput();
+    controlled(input, acceptAll, '');
+    input.addEventListener('blur', () => {
+      throw new Error('boom');
+    });
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    const onerror = (e: ErrorEvent) => e.preventDefault();
+    window.addEventListener('error', onerror);
+    try {
+      forceControlledValue(input, '');
+    } catch {
+      // either way the window must be closed
+    }
+    window.removeEventListener('error', onerror);
+    expect(isForcingControlledValue()).toBe(false);
+  });
+
+  it('R-2: isForcingControlledValue(el?) is true exactly during the blur / write / focus cycle, so app handlers can recognise it', () => {
+    const input = textInput();
+    const other = document.createElement('input');
+    container().appendChild(other);
+    controlled(input, acceptAll, '');
+    const log: boolean[] = [];
+    input.addEventListener('blur', () => log.push(isForcingControlledValue(input)));
+    input.addEventListener('focusout', () => log.push(isForcingControlledValue()));
+    input.addEventListener('focus', () => log.push(isForcingControlledValue(input), isForcingControlledValue(other)));
+    input.addEventListener('focusin', () => log.push(isForcingControlledValue()));
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+    compose(input, 'hello');
+    expect(isForcingControlledValue()).toBe(false);
+    forceControlledValue(input, '');
+    expect(log).toEqual([true, true, true, false, true]);
+    expect(isForcingControlledValue()).toBe(false);
+    expect(isForcingControlledValue(input)).toBe(false);
   });
 
   it('drops a deferred programmatic write: nothing is applied behind the explicit value', async () => {

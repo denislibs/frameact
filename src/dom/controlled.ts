@@ -300,6 +300,23 @@ function targetOf(e: Event): unknown {
   return t !== null && t.shadowRoot ? e.composedPath()[0] : t;
 }
 
+/** The element forceControlledValue is blurring / writing / refocusing right now. */
+let forcing: Element | null = null;
+
+/**
+ * Capture-phase, on the document: the commit an engine fires synchronously inside `blur()` (a
+ * `compositionend` and an `input` with the old text) would otherwise reach the app's handlers and put
+ * the cleared text back into the signal. Nothing below the document sees these events.
+ */
+function swallowWhileForcing(e: Event): void {
+  if (forcing === null || targetOf(e) !== forcing) return;
+  e.stopImmediatePropagation();
+  if (e.type === 'compositionend') {
+    const b = valueKind.bindings.get(forcing);
+    if (b) b.cancelled = false; // the cancelled composition has ended here
+  }
+}
+
 function onInput(e: Event): void {
   const b = lookup(valueKind, targetOf(e));
   if (!b || (e as InputEvent).isComposing || b.composing) return;
@@ -410,6 +427,8 @@ function installListeners(doc: Document): void {
   if (installed.has(doc)) return;
   installed.add(doc);
   delegateEvents(['input'], doc);
+  doc.addEventListener('input', swallowWhileForcing, true);
+  doc.addEventListener('compositionend', swallowWhileForcing, true);
   doc.addEventListener('input', onInput);
   doc.addEventListener('change', onChange);
   doc.addEventListener('compositionstart', onCompositionStart);
@@ -421,6 +440,8 @@ function installListeners(doc: Document): void {
 onClearDelegated((doc) => {
   if (!installed.has(doc)) return;
   installed.delete(doc);
+  doc.removeEventListener('input', swallowWhileForcing, true);
+  doc.removeEventListener('compositionend', swallowWhileForcing, true);
   doc.removeEventListener('input', onInput);
   doc.removeEventListener('change', onChange);
   doc.removeEventListener('compositionstart', onCompositionStart);
@@ -533,7 +554,12 @@ export function registerControlledDirectives(): void {
  * deferred programmatic write and the composition state are dropped. A focused field in the middle of a
  * composition is blurred and focused again (`preventScroll`) to cancel the composition; the caret goes
  * to the end of the new value. The cancelled composition's late `compositionend` cannot bring its text
- * back. An element without a `use:value` binding just gets `el.value = value` (and a DEV warning).
+ * back: while the cycle runs, `input` and `compositionend` aimed at the element are stopped at the
+ * document in the capture phase, so the commit an engine fires inside `blur()` never reaches app
+ * handlers. An element without a `use:value` binding just gets `el.value = value` (and a DEV warning).
+ *
+ * Side effects of the cycle: the app's `blur`, `focusout`, `focus` and `focusin` handlers DO fire
+ * (`relatedTarget` is null, as for any blur); `isForcingControlledValue(el)` tells them apart.
  */
 export function forceControlledValue(el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value?: unknown): void {
   const b = lookup(valueKind, el);
@@ -550,9 +576,15 @@ export function forceControlledValue(el: HTMLInputElement | HTMLTextAreaElement 
   b.cancelled = wasComposing;
   b.delivered = value === undefined ? b.delivered : value;
   b.hasSelection = false;
-  if (wasComposing && focused) el.blur(); // ends the composition: the engine commits or drops its text first
-  el.value = next;
-  if (wasComposing && focused) el.focus({ preventScroll: true });
+  const cycle = wasComposing && focused;
+  forcing = el;
+  try {
+    if (cycle) el.blur(); // ends the composition: the engine commits or drops its text first
+    el.value = next;
+    if (cycle) el.focus({ preventScroll: true });
+  } finally {
+    forcing = null;
+  }
   if (isFocused(el) && 'setSelectionRange' in el) {
     try {
       el.setSelectionRange(next.length, next.length);
@@ -560,4 +592,13 @@ export function forceControlledValue(el: HTMLInputElement | HTMLTextAreaElement 
       // input types without a selection API
     }
   }
+}
+
+/**
+ * True while `forceControlledValue` runs its blur / write / focus cycle (for `el`, when given). An
+ * app `blur` / `focusout` / `focus` / `focusin` handler uses it to tell that synthetic focus cycle
+ * from the user leaving the field (draft saving, "stopped typing", closing a tooltip).
+ */
+export function isForcingControlledValue(el?: Element): boolean {
+  return forcing !== null && (el === undefined || el === forcing);
 }
