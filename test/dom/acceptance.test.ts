@@ -123,16 +123,15 @@ function runModule(body: string): void {
 }
 
 /**
- * DEV lints that fixtures legitimately trigger (they are diagnostics, not failures). Every other
- * `console.error` fails the test: the runtime reports a thrown effect, a broken invariant, a failed
- * scheduler task and so on through `console.error`.
+ * DEV lints that a fixture legitimately triggers, bound to the fixture and to the exact number of
+ * reports per run (the lint fires in prod and dev alike). A lint that stops firing, or fires in
+ * another fixture, fails. Every other `console.error` fails the test: the runtime reports a thrown
+ * effect, a broken invariant, a failed scheduler task and so on through `console.error`.
+ * `attributeExpressions` compiles `className=`.
  */
-const DEV_LINTS = [
-  /className= on an element/, // attributeExpressions compiles `className=`
-  /refused an unsafe URL/,
-  /is an HTML sink/,
-  /string event handlers/,
-];
+const DEV_LINTS: Record<string, { message: RegExp; count: number }[]> = {
+  attributeExpressions: [{ message: /^\[frameact\] className= on an element/, count: 1 }],
+};
 
 /**
  * Fixtures whose own source throws when it is executed as a program against stubs: the compiler output
@@ -168,10 +167,14 @@ describe.each([false, true])('compiler acceptance (dev=%s)', (dev) => {
         dom.clearDelegatedEvents();
         document.body.textContent = '';
       }
-      const exempt = FIXTURE_USER_ERRORS[name];
-      const exempted = errors.filter((message) => exempt?.message.test(message));
-      if (exempt) expect(exempted, `${name}: the documented fixture error must fire exactly ${exempt.count}x`).toHaveLength(exempt.count);
-      expect(errors.filter((message) => !exempted.includes(message) && !DEV_LINTS.some((lint) => lint.test(message)))).toEqual([]);
+      const expected = [...(DEV_LINTS[name] ?? []), ...(FIXTURE_USER_ERRORS[name] ? [FIXTURE_USER_ERRORS[name]] : [])];
+      const unexpected = new Set(errors);
+      for (const { message, count } of expected) {
+        const hits = errors.filter((e) => message.test(e));
+        expect(hits, `${name}: ${message} must fire exactly ${count}x`).toHaveLength(count);
+        for (const e of hits) unexpected.delete(e);
+      }
+      expect([...unexpected]).toEqual([]);
     });
   }
 });

@@ -154,6 +154,7 @@ describe('delegation survives DOM clobbering (forms with named inputs)', () => {
     const formA = document.createElement('form');
     const formB = document.createElement('form');
     const buttonA = document.createElement('button');
+    buttonA.type = 'button'; // a submit button would trigger jsdom's unimplemented form submission
     const inputInB = document.createElement('input');
     const inputInA = document.createElement('input');
     formA.appendChild(buttonA);
