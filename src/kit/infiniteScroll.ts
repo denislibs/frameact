@@ -20,7 +20,7 @@ import { debounce } from '../scheduler/schedulers';
 import { insert } from '../dom/insert';
 import { getNatives } from '../dom/natives';
 import { spread } from '../dom/props';
-import { createScrollAnchor, trackShape } from './scrollAnchor';
+import { createItemsVersion, createScrollAnchor } from './scrollAnchor';
 
 export type LoadMoreDirection = 'forwards' | 'backwards';
 
@@ -59,9 +59,6 @@ const OWN_PROPS = new Set([
   'onLoadMore', 'onScroll', 'children',
 ]);
 const isOwnProp = (key: string) => OWN_PROPS.has(key);
-
-/** What an update is detected by: a store array through its O(1) shape version (one subscription, no copy), anything else by identity. */
-const versionOf = trackShape;
 
 export function InfiniteScroll(props: InfiniteScrollProps): unknown {
   const natives = getNatives();
@@ -147,9 +144,11 @@ export function InfiniteScroll(props: InfiniteScrollProps): unknown {
     natives.addEventListener.call(scroller, 'scroll', onScroll, { passive: true });
   }
 
-  // One tracked read of the list per update; the apply reads layout in the measure phase.
+  // One tracked read of the list per update (a store array by its O(1) shape, anything else by identity),
+  // turned into a fresh number per change: two store arrays can share a shape version, so the effect is
+  // driven by the counter, not by the shape. The apply reads layout in the measure phase.
   createMeasureEffect(
-    () => versionOf(props.items),
+    createItemsVersion(() => props.items),
     () => {
       if (!listening) listen();
       armLoaders();

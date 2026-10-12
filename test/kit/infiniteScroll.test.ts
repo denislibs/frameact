@@ -217,16 +217,48 @@ describe('<InfiniteScroll>', () => {
   });
 });
 
+describe('<InfiniteScroll> switching lists', () => {
+  it('switching between two untouched store arrays (same shape version) preloads again (N1)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const root = container();
+    const [state] = createStore({ a: ids(0, 3), b: ids(10, 12) });
+    const [which, setWhich] = createSignal<'a' | 'b'>('a');
+    const loads: unknown[] = [];
+    let el!: HTMLDivElement;
+    createRoot(() => {
+      insert(
+        root,
+        createComponent(InfiniteScroll, {
+          get items() { return state[which()]; },
+          ref: (e: HTMLDivElement) => { el = e; },
+          onLoadMore: (args: unknown) => loads.push(args),
+          get children() { return createComponent(ForC, { get each() { return state[which()]; }, children: row }); },
+        }),
+      );
+    });
+    fakeLayout(el);
+    await frame();
+    expect(loads.length).toBe(1);
+    setWhich('b'); // both arrays are unchanged: shape version 0 each
+    await frame();
+    expect(loads.length).toBe(2);
+    setWhich('a');
+    await frame();
+    expect(loads.length).toBe(3);
+  });
+});
+
 describe('<InfiniteScroll> tracked reads', () => {
   it('reads the list\'s shape once per update — one tracked read beyond createScrollAnchor\'s own (clean-room finding 7)', async () => {
     // A list whose shape read is observable: a Proxy over a plain array that answers [SHAPE] / [TRACK] like a store array does.
     let shapeReads = 0;
+    let version = 0;
     const shaped = (arr: number[]) =>
       new Proxy(arr, {
         get(target, key, receiver) {
           if (key === SHAPE) {
             shapeReads++;
-            return 1;
+            return ++version; // a fresh version per read, like a store array that changed
           }
           if (key === TRACK) {
             shapeReads++;
@@ -247,11 +279,13 @@ describe('<InfiniteScroll> tracked reads', () => {
     const anchorReads = shapeReads;
     expect(anchorReads).toBeGreaterThan(0);
     // The component (no <For>: a list component reads the shape too, and that is its own read).
-    const { setItems } = mount({ children: undefined }, shaped(ids(0, 50)));
+    const { setItems, loads } = mount({ children: undefined, preloadBackwards: 100 }, shaped(ids(0, 50)));
     await settle();
     shapeReads = 0;
+    loads.length = 0;
     setItems(shaped(ids(0, 60)));
     await settle();
     expect(shapeReads).toBe(anchorReads + 1);
+    expect(loads.length).toBeGreaterThan(0); // the apply ran (loaders re-armed, preload asked)
   });
 });
