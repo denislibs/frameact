@@ -2,6 +2,11 @@ import { createRoot, createSignal } from '../../src/index';
 import { defineDirective } from '../../src/dom/directives';
 import { setAttribute } from '../../src/dom/attributes';
 import { applyRef, assign, mergeProps, readShallow, ref, spread } from '../../src/dom/props';
+import { For } from '../../src/dom/list';
+import { insert } from '../../src/dom/insert';
+import { createComponent } from '../../src/dom/component';
+import { Dynamic } from '../../src/dom/flow';
+import { flushMicrotasks } from '../helpers/micro';
 import { container, useDomHarness } from '../helpers/dom';
 
 const { frame } = useDomHarness();
@@ -690,5 +695,83 @@ describe('is-mode details', () => {
     await frame();
     el.dispatchEvent(new Event('scroll'));
     expect(log).toEqual(['colon']);
+  });
+});
+
+const option = (v: string) => {
+  const o = document.createElement('option');
+  o.value = v;
+  o.textContent = v;
+  return o;
+};
+
+describe('<select value> through spread and Dynamic ends on the value, whatever inserts the options', () => {
+  it('spread: children are inserted before the attribute effect (static options)', async () => {
+    const root = container();
+    const select = document.createElement('select');
+    createRoot(() => spread(select, { value: 'b', children: [option('a'), option('b')] }, false));
+    root.appendChild(select);
+    await flushMicrotasks();
+    expect(select.value).toBe('b');
+  });
+
+  it('spread: options produced by a mapping function child', async () => {
+    const root = container();
+    const select = document.createElement('select');
+    const [opts] = createSignal(['a', 'b', 'c']);
+    createRoot(() => spread(select, { value: 'b', get children() { return opts().map(option); } }, false));
+    root.appendChild(select);
+    await flushMicrotasks();
+    expect(select.value).toBe('b');
+  });
+
+  it('spread: options inserted by <For> as a sibling insert after the spread', async () => {
+    const root = container();
+    const select = document.createElement('select');
+    const [opts] = createSignal(['a', 'b', 'c']);
+    createRoot(() => {
+      spread(select, { value: 'c' }, true); // what the compiler emits for <select {...p}>{children}</select>
+      insert(select, createComponent(() => For({ get each() { return opts(); }, children: (v: string) => option(v) }), {}));
+    });
+    root.appendChild(select);
+    await flushMicrotasks();
+    expect(select.value).toBe('c');
+  });
+
+  it('Dynamic component="select" value="b" with options', async () => {
+    const root = container();
+    createRoot(() => {
+      insert(root, createComponent(Dynamic, { component: 'select', value: 'b', children: [option('a'), option('b')] }));
+    });
+    await flushMicrotasks();
+    expect((root.firstElementChild as HTMLSelectElement).value).toBe('b');
+  });
+
+  it('Dynamic select with options from <For>', async () => {
+    const root = container();
+    const [opts] = createSignal(['a', 'b', 'c']);
+    createRoot(() => {
+      insert(
+        root,
+        createComponent(Dynamic, {
+          component: 'select',
+          value: 'b',
+          get children() {
+            return createComponent(() => For({ get each() { return opts(); }, children: (v: string) => option(v) }), {});
+          },
+        }),
+      );
+    });
+    await flushMicrotasks();
+    expect((root.firstElementChild as HTMLSelectElement).value).toBe('b');
+  });
+
+  it('assign: value on a select whose options arrive later in the same turn is reapplied', async () => {
+    const select = document.createElement('select');
+    container().appendChild(select);
+    createRoot(() => assign(select, { value: 'b' }));
+    select.append(option('a'), option('b'));
+    await flushMicrotasks();
+    expect(select.value).toBe('b');
   });
 });

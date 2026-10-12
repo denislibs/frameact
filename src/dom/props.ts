@@ -13,7 +13,7 @@
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import { createMemo, runWithOwner, untrack } from '../index';
-import { isUnsafeAttribute, setAttribute, setBoolAttribute } from './attributes';
+import { isUnsafeAttribute, setAttribute, setBoolAttribute, setProperty } from './attributes';
 import { className, classList } from './classes';
 import { Aliases, ChildProperties, DelegatedEvents, getPropAlias, Properties, SVG_NS } from './constants';
 import { addEvent, delegateEvents, setListener, tupleListener } from './events';
@@ -139,6 +139,10 @@ export function spread(
   const sources: PropsSource[] = Array.isArray(props) ? props : [props];
   // Function sources are called once per pass; the attribute effect and the children slot share the result.
   const resolved = createMemo(() => sources.map(resolveSource));
+  // Children first, then the attributes (as in Solid): `<select value>` needs its options to exist.
+  if (!skipChildren && !(skip !== undefined && skip('children'))) {
+    insert(node, () => childrenOf(resolved()), undefined, undefined, name === undefined ? undefined : { name: `${name}.children` });
+  }
   createRenderEffect(
     () => collectProps(resolved(), skip),
     (next) => {
@@ -148,9 +152,6 @@ export function spread(
     },
     name === undefined ? undefined : { name: `${name}.spread` },
   );
-  if (!skipChildren && !(skip !== undefined && skip('children'))) {
-    insert(node, () => childrenOf(resolved()), undefined, undefined, name === undefined ? undefined : { name: `${name}.children` });
-  }
   return prevProps;
 }
 
@@ -365,7 +366,9 @@ function assignProp(
   if (ChildProperties.has(prop) || (!isSVG && known) || isCE) {
     if (isCE && !known) assignCustomProp(node, prop, value);
     else if ((propAlias ?? prop) === 'value' || (propAlias ?? prop) === 'defaultValue') {
-      setProp(node, propAlias ?? prop, node.nodeName === 'INPUT' || node.nodeName === 'TEXTAREA' ? (value ?? '') : value);
+      // setProperty: '' for null on INPUT/TEXTAREA, and a <select> value is re-applied in a microtask
+      // when its options are inserted later in the same turn.
+      setProperty(node, propAlias ?? prop, value);
     } else setProp(node, propAlias ?? prop, value);
     return value;
   }
