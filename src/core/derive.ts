@@ -38,16 +38,22 @@ export interface CurrentOrPrevOptions extends PreviousOptions {
 
 /**
  * `source()` while it is not `null`/`undefined`, else the last non-empty value — what a closing
- * panel shows while its data is already gone (teact `useCurrentOrPrev`).
+ * panel shows while its data is already gone (teact `useCurrentOrPrev`). With `skipUndefined: false`
+ * `undefined` is a step like any other and the value shown is the one just before it (teact's
+ * default, one step of memory); the default here is `true`.
  */
 export function currentOrPrev<T>(source: Accessor<T>, options?: CurrentOrPrevOptions): Accessor<T | undefined> {
-  const prev = previous(source, { skipUndefined: options?.skipUndefined ?? true });
+  const skipUndefined = options?.skipUndefined ?? true;
+  const stepBack = skipUndefined ? undefined : previous(source);
   const force = options?.forceCurrent;
+  let lastPresent: T | undefined;
   return createMemo(() => {
     const v = source();
-    const p = prev(); // read on every pass: a memo is lazy, and `previous` must see each value to know the steps
-    if (force?.() || (v !== null && v !== undefined)) return v;
-    return p;
+    const present = v !== null && v !== undefined;
+    if (present) lastPresent = v;
+    const before = stepBack?.(); // read on every pass: a memo is lazy, and `previous` must see each value to know the steps
+    if (force?.() || present) return v;
+    return stepBack ? before : lastPresent;
   });
 }
 

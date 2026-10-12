@@ -53,6 +53,41 @@ describe('currentOrPrev', () => {
   });
 });
 
+describe('currentOrPrev — the last present value', () => {
+  it('A -> B -> undefined shows B (the value before the last present one is never shown)', () => {
+    const [v, setV] = createSignal<string | undefined>('A');
+    const log = observe(currentOrPrev(v));
+    setV('B');
+    flushSync();
+    setV(undefined);
+    flushSync();
+    expect(log).toEqual(['A', 'B']); // undefined is a gap: B stays (memo output unchanged, no extra entry)
+    setV('C');
+    flushSync();
+    setV(undefined);
+    flushSync();
+    expect(log).toEqual(['A', 'B', 'C']);
+  });
+
+  it('null counts as empty too; skipUndefined: false shows the value just before an undefined', () => {
+    const [v, setV] = createSignal<string | null>('A');
+    const log = observe(currentOrPrev(v));
+    setV('B');
+    flushSync();
+    setV(null);
+    flushSync();
+    expect(log).toEqual(['A', 'B']);
+
+    const [w, setW] = createSignal<string | undefined>('A');
+    const stepLog = observe(currentOrPrev(w, { skipUndefined: false }));
+    setW('B');
+    flushSync();
+    setW(undefined);
+    flushSync();
+    expect(stepLog).toEqual(['A', 'B']);
+  });
+});
+
 describe('frozenWhile', () => {
   it('follows the source while not frozen; holds the value seen at the freeze; alwaysFresh keys keep updating', () => {
     const [p, setP] = createSignal({ title: 'a', unread: 0 });
