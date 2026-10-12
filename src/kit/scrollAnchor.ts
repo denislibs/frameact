@@ -75,7 +75,7 @@ export interface ScrollAnchor {
   anchorTop: () => number;
   /** From a scroll handler: make `el` the anchor and remember its position (`top` = its `getBoundingClientRect().top`). */
   track(el: HTMLElement | undefined, top?: number): void;
-  /** The item elements as of the last snapshot/restore (a live query is avoided in scroll handlers). */
+  /** The item elements, listed on first use after each change and cached until the next one (cheap in scroll handlers). */
   items(): HTMLElement[];
   /** True once, right after a restore wrote `scrollTop`: the scroll event it causes is not the user's. */
   consumeRestored(): boolean;
@@ -93,10 +93,18 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
   let restored = false;
   const [scrollTopFix, setScrollTopFix] = createSignal<{ top: number } | undefined>(undefined);
 
-  function query(): HTMLElement[] {
-    const root = untrack(list);
-    elements = root ? Array.from(root.querySelectorAll<HTMLElement>(selector)) : [];
-    return elements;
+  // The list of item elements is built on demand (`items()`, from a scroll handler), once per change:
+  // the snapshot and the restore only need the anchor, and a `querySelectorAll` over a long list costs
+  // ~100 µs per 1000 rows each.
+  let elementsStale = true;
+
+  function firstItem(): HTMLElement | undefined {
+    return untrack(list)?.querySelector<HTMLElement>(selector) ?? undefined;
+  }
+
+  /** The anchor is still one of the list's items. */
+  function isAlive(el: HTMLElement | undefined): el is HTMLElement {
+    return el !== undefined && el.isConnected && untrack(list)?.contains(el) === true;
   }
 
   // One number per change of the list (identity, or shape of a store array), shared by the effects below.
@@ -112,8 +120,8 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
     tracked,
     (change) => {
       snapshotOf = change;
-      const current = query();
-      if (anchor === undefined || !current.includes(anchor)) anchor = current[0];
+      elementsStale = true;
+      if (!isAlive(anchor)) anchor = firstItem();
       if (anchor) anchorTop = anchor.getBoundingClientRect().top;
     },
     { name: 'scrollAnchor.snapshot' },
@@ -123,11 +131,12 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
   createEffect(
     tracked,
     (change) => {
+      elementsStale = true;
       const el = untrack(container);
-      const current = query();
       if (!el) return;
-      if (anchor !== undefined && current.includes(anchor)) {
-        const newTop = anchor.getBoundingClientRect().top;
+      const current = anchor;
+      if (isAlive(current)) {
+        const newTop = current.getBoundingClientRect().top;
         const delta = snapshotOf === change ? newTop - anchorTop : 0; // no snapshot for this change: re-base only
         anchorTop = newTop;
         if (delta !== 0 && !untrack(() => noScrollRestore?.()) && !(untrack(() => noScrollRestoreOnTop?.()) && el.scrollTop === 0)) {
@@ -135,7 +144,7 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
           anchorTop -= delta; // after the write the anchor is back where it was
         }
       } else {
-        anchor = current[0];
+        anchor = firstItem();
         if (anchor) anchorTop = anchor.getBoundingClientRect().top;
       }
     },
@@ -162,7 +171,14 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
       anchor = el;
       if (el) anchorTop = top ?? el.getBoundingClientRect().top;
     },
-    items: () => elements,
+    items() {
+      if (elementsStale) {
+        const root = untrack(list);
+        elements = root ? Array.from(root.querySelectorAll<HTMLElement>(selector)) : [];
+        elementsStale = false;
+      }
+      return elements;
+    },
     consumeRestored() {
       const was = restored;
       restored = false;

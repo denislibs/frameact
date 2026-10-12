@@ -17,7 +17,7 @@ const ids = (from: number, to: number) => Array.from({ length: to - from }, (_, 
 
 function row(id: number) {
   const el = document.createElement('div');
-  el.className = 'ListItem';
+  el.className = 'ListItem Row';
   el.textContent = String(id);
   return el;
 }
@@ -80,5 +80,44 @@ describe('a store array is followed by its shape version, not by copies of its i
     setState('items', produce((list: { id: number }[]) => { list.push({ id: 51 }); }));
     await frame();
     expect(reads).toBe(0);
+  });
+});
+
+// The fake layout lists `.ListItem` rows itself, so the anchor under test uses its own selector.
+const listings = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.filter(([selector]) => selector === '.Row').length;
+const mountRows = (initial: number[]) => mountList(initial, { itemSelector: '.Row' });
+
+describe('the list of item elements', () => {
+
+  it('a change lists nothing; items() builds the list once per change, on demand (scroll handlers), and it is current', async () => {
+    const { root, setItems, anchor, items } = mountRows(ids(0, 20));
+    const all = vi.spyOn(root, 'querySelectorAll');
+    await frame();
+    root.scrollTop = 80;
+    setItems([...ids(-5, 0), ...items()]); // prepend: restored without listing the rows
+    await frame();
+    expect(root.scrollTop).toBe(280);
+    expect(listings(all)).toBe(0);
+    expect(anchor.items().map((el) => el.textContent)).toEqual(ids(-5, 20).map(String));
+    expect(anchor.items()).toBe(anchor.items());
+    expect(listings(all)).toBe(1);
+    setItems([...items(), 99]);
+    await frame();
+    expect(listings(all)).toBe(1);
+    expect(anchor.items().at(-1)?.textContent).toBe('99');
+    expect(listings(all)).toBe(2);
+  });
+
+  it('a removed anchor is replaced by the first item without listing the rows', async () => {
+    const { root, setItems, anchor } = mountRows(ids(0, 10));
+    const all = vi.spyOn(root, 'querySelectorAll');
+    await frame();
+    expect(anchor.anchor()?.textContent).toBe('0');
+    setItems(ids(5, 10));
+    await frame();
+    await frame();
+    expect(anchor.anchor()?.textContent).toBe('5');
+    expect(root.contains(anchor.anchor() ?? null)).toBe(true);
+    expect(listings(all)).toBe(0);
   });
 });
