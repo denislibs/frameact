@@ -3,6 +3,8 @@ import { STATE_DISPOSED } from './core';
 import {
   createEffect,
   isDomWritingSchedule,
+  isDrainGuardedSchedule,
+  markDrainGuarded,
   markWritesDom,
   NOT_APPLIED,
   setApplyCleanupDisposer,
@@ -161,6 +163,10 @@ export const frameMeasure: Schedule = (run, node) => enqueue('measure', run, nod
 export const frameMutation: Schedule = (run, node) => enqueue('mutate', run, node);
 export const frameForcedReflow: Schedule = (run, node) => enqueue('reflow', run, node);
 markWritesDom(frameMutation);
+// Each frame drain has its own per-effect LOOP_LIMIT: the generic self-dirty guard stays out.
+markDrainGuarded(frameMeasure);
+markDrainGuarded(frameMutation);
+markDrainGuarded(frameForcedReflow);
 
 /** Reads layout. First apply is scheduled (after attach), never synchronous. */
 export function createMeasureEffect<T>(
@@ -314,6 +320,7 @@ export function gateOnHeavyAnimation(schedule: Schedule, options: { blocking?: b
     else (blocking ? animating.isBlockingAnimating : animating.isAnimating).once(() => gated(run, node));
   };
   if (isDomWritingSchedule(schedule)) markWritesDom(gated);
+  if (isDrainGuardedSchedule(schedule)) markDrainGuarded(gated);
   return gated;
 }
 

@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src test",
-    "check": "pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "bench:reactivity": "node bench/reactivity/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

@@ -3,6 +3,8 @@ import {
   assertApplyOwner,
   callUnowned,
   computationPrototype,
+  F_INIT,
+  F_THREW,
   handleError,
   initComputationNode,
   isFunction,
@@ -16,7 +18,7 @@ import {
 } from './core';
 import { SCOPE } from './symbols';
 import type { Computation } from './types';
-import { onTickEnd } from '../scheduler/schedulers';
+import { getTickDrainEpoch, isTickDraining, onTickEnd } from '../scheduler/schedulers';
 import { currentHeavyAnimationScope, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
 
 export const NOT_APPLIED: unique symbol = Symbol('frameact.notApplied');
@@ -36,9 +38,9 @@ export interface EffectNode<T = any> extends Computation<T> {
   _selfDirty: number;
   /** @internal its apply writes the live DOM: apply-cleanups on dispose are deferred to the mutate phase */
   _writesDom: boolean;
-  /** @internal tickEnd loop guard: the macrotask epoch `_tickRuns` counts runs in */
+  /** @internal tickEnd loop guard: the flushTickEnd drain epoch `_tickRuns` counts runs in */
   _tickEpoch: number;
-  /** @internal tickEnd loop guard: runs scheduled within `_tickEpoch` */
+  /** @internal tickEnd loop guard: runs scheduled into the drain `_tickEpoch` */
   _tickRuns: number;
   /** @internal frame drain loop guard: the drain `_drainRuns` counts runs in (frame.ts) */
   _drainEpoch: number;
@@ -70,47 +72,59 @@ export function isDomWritingSchedule(schedule: Schedule) {
   return domWritingSchedules.has(schedule);
 }
 
+const drainGuardedSchedules = new WeakSet<Schedule>();
+
+/**
+ * @internal Marks a schedule whose queue has its own per-drain loop guard (tickEnd, the frame
+ * queues, and gateOnHeavyAnimation wrappers of them). The generic self-dirty guard skips effects on
+ * such schedules: it would count the same runs a second time and report the loop twice.
+ */
+export function markDrainGuarded(schedule: Schedule) {
+  drainGuardedSchedules.add(schedule);
+}
+
+/** @internal */
+export function isDrainGuardedSchedule(schedule: Schedule) {
+  return drainGuardedSchedules.has(schedule);
+}
+
 const SELF_DIRTY_LIMIT = 100;
 
 /** The effect whose apply/compute is currently running (dev attribution for stricterdom). */
 export let currentEffect: EffectNode | null = null;
 
-/** Max tickEnd runs of one effect within one macrotask before it is treated as a loop. */
+/** Max tickEnd runs of one effect within one flushTickEnd drain before it is treated as a loop. */
 const TICK_LIMIT = 100;
 
-/** Advanced by a macrotask armed when an effect starts counting in the current epoch. */
-let tickEpoch = 1;
-let tickEpochArmed = false;
-
-function advanceTickEpoch() {
-  tickEpochArmed = false;
-  tickEpoch++;
-}
-
 /**
- * Runs at the end of the current tick (a microtask). Loop guard: effects dirtying each other (or
- * themselves through a third party) would otherwise spin the microtask queue forever and starve
- * the event loop. Each effect may run TICK_LIMIT times per macrotask; further runs are reported
- * and moved to macrotasks, so input, timers and rendering keep running between them.
+ * Runs at the end of the current tick (a microtask). flushTickEnd drains until empty, so a cascade
+ * of effects dirtying each other runs to completion in one drain. Loop guard: a cascade that never
+ * converges (effects re-dirtying each other or themselves with no external input in between) would
+ * otherwise keep that drain going forever and starve the event loop. Each effect may run TICK_LIMIT
+ * times per drain; the next run is reported (once per drain) and moved to a macrotask, so input,
+ * timers and rendering get a turn every TICK_LIMIT runs. Runs caused by external writes (each
+ * flushSync(), each `await` step) start a new drain and therefore a fresh count.
+ *
+ * Counted when the run is *scheduled* (no wrapper allocation per run): inside a drain the run joins
+ * that drain; outside one it is queued for the next drain, whose epoch will be the current one + 1
+ * (an epoch is bumped only by a drain that has work, and every queued run is taken by the next
+ * drain, which runs until empty).
  */
 export const tickEnd: Schedule = (run, node) => {
-  if (node._tickEpoch !== tickEpoch) {
-    node._tickEpoch = tickEpoch;
+  const epoch = isTickDraining() ? getTickDrainEpoch() : getTickDrainEpoch() + 1;
+  if (node._tickEpoch !== epoch) {
+    node._tickEpoch = epoch;
     node._tickRuns = 0;
-    if (!tickEpochArmed) {
-      tickEpochArmed = true;
-      setTimeout(advanceTickEpoch, 0);
-    }
   }
   if (++node._tickRuns > TICK_LIMIT) {
     if (node._tickRuns === TICK_LIMIT + 1) {
       console.error(
-        `[frameact] Potential infinite loop: effect${node._name ? ` "${node._name}"` : ''} ran ${TICK_LIMIT} times on tickEnd within one macrotask. Its further runs are deferred to macrotasks.`,
+        `[frameact] Potential infinite loop: effect${node._name ? ` "${node._name}"` : ''} ran ${TICK_LIMIT} times in one tickEnd drain. Its next run is deferred to a macrotask.`,
       );
     }
     setTimeout(() => {
-      // A macrotask hop breaks the loop: the self-dirty guard restarts its count too (it would
-      // otherwise trip on the very next self-write and add a second hop).
+      // A macrotask hop breaks the loop: the self-dirty guard (used when tickEnd is wrapped by a
+      // custom schedule) restarts its count too, instead of tripping on the very next self-write.
       node._selfDirty = 0;
       run();
     }, 0);
@@ -118,6 +132,7 @@ export const tickEnd: Schedule = (run, node) => {
   }
   onTickEnd(run);
 };
+markDrainGuarded(tickEnd);
 
 export function createEffect<T>(
   compute: (prev: T | undefined) => T,
@@ -128,7 +143,7 @@ export function createEffect<T>(
   if (DEV) assertApplyOwner();
   const node: EffectNode<T> = new (Effect as any)(
     function (this: EffectNode<T>) {
-      return compute(this._init ? this._value : undefined);
+      return compute(this._flags & F_INIT ? this._value : undefined);
     },
     apply,
     schedule,
@@ -138,7 +153,7 @@ export function createEffect<T>(
   // First compute: synchronous, tracked, under the owner that created the effect.
   if (!computeNode(node)) return;
   if (options?.immediateApply) applyEffect(node);
-  else schedule(node._run, node);
+  else bookRun(node); // (a throwing custom schedule is this effect's error, not the creator's)
 }
 
 /**
@@ -177,17 +192,18 @@ Effect.prototype = computationPrototype;
 
 /**
  * Recompute the node's compute half. Returns false if the node died or threw, and also when the
- * first compute failed with the error handled by onError (`_init` still false): then there is no
+ * first compute failed with the error handled by onError (F_INIT still unset): then there is no
  * value to apply. The node stays linked to the sources it read and retries on their next change.
  */
 function computeNode(node: EffectNode): boolean {
   const outer = currentEffect;
   currentEffect = node;
   try {
-    if (node._state === STATE_CLEAN && node._init) return true;
-    if (node._init) updateCheck(node);
+    const init = node._flags & F_INIT;
+    if (node._state === STATE_CLEAN && init) return true;
+    if (init) updateCheck(node);
     else update(node);
-    return node._state !== STATE_DISPOSED && node._init;
+    return node._state !== STATE_DISPOSED && (node._flags & F_INIT) !== 0;
   } catch (error) {
     // update() already offered the error to onError handlers and re-threw: just report.
     logEffectError(node, error);
@@ -293,12 +309,29 @@ function releaseBailed(node: EffectNode) {
   node._bailed = null;
   for (const child of bailed) {
     if (child._state === STATE_DISPOSED) continue;
-    // One throwing custom scheduler must not lose the remaining children.
-    try {
-      child._schedule(child._run, child);
-    } catch (error) {
-      logEffectError(child, error);
+    // One throwing custom scheduler must not lose the remaining children, nor freeze its own.
+    bookRun(child);
+  }
+}
+
+/**
+ * Book the effect's run with its Schedule. A throwing custom Schedule (built-in ones never throw)
+ * is this effect's error: reported, never thrown to the caller — a notify() walk (that would cut it
+ * short, and from a memo's result write surface as that memo's compute error), the compute that
+ * creates the effect, the release of bailed children, the loop guard's macrotask. The node must not
+ * stay dirty with no run booked (only the CLEAN → dirty edge schedules: it would be frozen), so it
+ * goes back to CLEAN with F_THREW: its next change re-runs its compute even if the deps it saw look
+ * unchanged by then (and applies, if it never did).
+ */
+function bookRun(node: EffectNode) {
+  try {
+    node._schedule(node._run, node);
+  } catch (error) {
+    if (node._state !== STATE_DISPOSED) {
+      node._state = STATE_CLEAN;
+      node._flags |= F_THREW;
     }
+    logEffectError(node, error);
   }
 }
 
@@ -310,26 +343,21 @@ function logEffectError(node: EffectNode, error: unknown) {
 
 setEffectScheduler((raw) => {
   const node = raw as EffectNode;
-  if (currentEffect === node) {
-    // Dirtied by a write made inside its own compute or apply (patch 1 made this visible).
-    // Always on: a tickEnd self-loop would otherwise starve the event loop with microtasks.
+  // Dirtied by a write made inside its own compute or apply (patch 1 made this visible). Guards
+  // custom schedules, e.g. a synchronous `(run) => run()` that would otherwise recurse without
+  // bound. tickEnd and the frame queues count runs per drain themselves (drain-guarded): skipped.
+  if (currentEffect === node && !drainGuardedSchedules.has(node._schedule)) {
     if (++node._selfDirty > SELF_DIRTY_LIMIT) {
       console.error(
         `[frameact] Potential infinite loop: effect${node._name ? ` "${node._name}"` : ''} re-dirtied itself ${SELF_DIRTY_LIMIT} times. Its next run is deferred to a macrotask.`,
       );
       node._selfDirty = 0;
       // The node is DIRTY already (notify set it): dropping the run would freeze it forever.
-      setTimeout(() => {
-        try {
-          node._schedule(node._run, node);
-        } catch (error) {
-          logEffectError(node, error);
-        }
-      }, 0);
+      setTimeout(() => bookRun(node), 0);
       return;
     }
   }
-  node._schedule(node._run, node);
+  bookRun(node);
 });
 
 /** How an apply-cleanup runs when its effect is disposed. Task 9 replaces this to defer DOM cleanups to the mutate phase. */
