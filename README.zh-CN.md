@@ -166,13 +166,13 @@ if (import.meta.env.DEV) enableStrict();
 组件名来自编译器的 `sourceNames`（开发模式下开启），绑定名是编译器的标签。游离子树不会被报告（运行时就是这样构建 DOM 的），
 `data-*` 属性、`details[open]`、`contenteditable` 宿主内部的编辑以及 `data-stricterdom-ignore` 之下的一切也不会。逃生口：
 `forceMeasure(cb)` 在 mutate 阶段读取布局（滚动锚定；在其他阶段只是普通调用），`forceMutation(cb, nodes)` 在 measure 阶段写入（挂载——
-`render()` 和 `Portal` 就用它），`suppressStrict(cb)` 为第三方代码关闭两项检查，`setHandler(fn)` 替换 `console.error`（在其中抛出即可让测试失败）。
+`render()` 和 `Portal` 就用它），`suppressStrict(cb)` 为第三方代码关闭两项检查，`setHandler(fn)` 替换 `console.error`。处理器中的抛出会传到读取布局的代码；而变更违规在阶段边界和 apply 之后报告，那里的抛出会被捕获并写入日志：要让测试因它们失败，请在处理器中收集错误再断言（或在 `console.error` 上失败）。
 变更记录在每次阶段切换以及每个 effect apply 的前后判定，因此 `flushSync()` 不会产生误报，报告指出做出写入的 effect。
 
 同一个开关还会开启开发分析器：超过 7 ms 的运行会带路径发出警告（`Slow effect run: 12.3 ms in Message > span.children
 [mutate]`），帧阶段同样（`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`），`getRunStats()` 按路径统计运行次数，
 `enableRunLog({ filter })` 打印每个 effect 为何运行：`run #3 ChatList > li.class [mutate] ← signal "store.title" via memo
-"chatTitle" in ChatList`。在生产构建（`process.env.NODE_ENV === 'production'`）中这些全是死代码：函数退化为 `cb => cb()`。
+"chatTitle" in ChatList`。在生产构建（`process.env.NODE_ENV === 'production'`）中这些全是死代码：`enableStrict`、`setHandler` 和运行日志函数变成空函数，`forceMeasure`、`forceMutation`、`suppressStrict` 只是直接调用 `cb()`。
 
 ## 灵感与致谢
 

@@ -186,7 +186,9 @@ subtrees are never reported (that is how the runtime builds DOM), nor are `data-
 inside `contenteditable` hosts and anything under `data-stricterdom-ignore`. Escapes: `forceMeasure(cb)` reads layout from
 the mutate phase (scroll anchoring; a plain call anywhere else), `forceMutation(cb, nodes)` writes from the measure phase
 (a mount — `render()` and `Portal` use it), `suppressStrict(cb)` turns both checks off for third-party code,
-`setHandler(fn)` replaces `console.error` (throw from it to fail a test). Mutation records are judged at every phase change
+`setHandler(fn)` replaces `console.error`. A throw from the handler reaches the code that read layout, but mutation
+violations are reported at phase boundaries and after applies, where a throw is caught and logged: to fail a test on them,
+collect the errors in the handler and assert (or fail on `console.error`). Mutation records are judged at every phase change
 and around every effect apply, so `flushSync()` never produces a false positive and the report names the effect that made
 the write.
 
@@ -194,7 +196,8 @@ The same switch turns on the DEV profiler: a run slower than 7 ms warns with its
 Message > span.children [mutate]`), so does a frame phase (`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`),
 `getRunStats()` counts runs per path, and `enableRunLog({ filter })` prints why each effect ran:
 `run #3 ChatList > li.class [mutate] ← signal "store.title" via memo "chatTitle" in ChatList`. All of it is dead code in
-production builds (`process.env.NODE_ENV === 'production'`): the functions become `cb => cb()`.
+production builds (`process.env.NODE_ENV === 'production'`): `enableStrict`, `setHandler` and the run-log functions become
+no-ops, `forceMeasure`, `forceMutation` and `suppressStrict` just call `cb()`.
 
 ## Inspiration and credits
 

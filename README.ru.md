@@ -189,14 +189,17 @@ if (import.meta.env.DEV) enableStrict();
 `contenteditable` и всё под `data-stricterdom-ignore`. Эскейпы: `forceMeasure(cb)` читает layout из mutate-фазы (якорь
 скролла; вне mutate-фазы — обычный вызов), `forceMutation(cb, nodes)` пишет из measure-фазы (монтирование — так работают
 `render()` и `Portal`), `suppressStrict(cb)` выключает обе проверки для стороннего кода, `setHandler(fn)` заменяет
-`console.error` (бросьте из него, чтобы уронить тест). Записи мутаций разбираются при каждой смене фазы и вокруг каждого
+`console.error`. Бросок из обработчика доходит до кода, прочитавшего layout, а нарушения-мутации сообщаются на границах
+фаз и после apply, где бросок перехватывается и пишется в лог: чтобы уронить тест на них, собирайте ошибки в обработчике и
+проверяйте их (или падайте на `console.error`). Записи мутаций разбираются при каждой смене фазы и вокруг каждого
 apply эффекта, поэтому `flushSync()` не даёт ложных срабатываний, а отчёт называет эффект, который сделал запись.
 
 Тот же выключатель включает dev-профайлер: прогон дольше 7 мс предупреждает с путём (`Slow effect run: 12.3 ms in
 Message > span.children [mutate]`), фаза кадра — тоже (`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`),
 `getRunStats()` считает прогоны по путям, а `enableRunLog({ filter })` печатает, почему эффект выполнился:
 `run #3 ChatList > li.class [mutate] ← signal "store.title" via memo "chatTitle" in ChatList`. В production-сборке
-(`process.env.NODE_ENV === 'production'`) всё это — мёртвый код: функции превращаются в `cb => cb()`.
+(`process.env.NODE_ENV === 'production'`) всё это — мёртвый код: `enableStrict`, `setHandler` и функции лога прогонов становятся пустыми, а `forceMeasure`, `forceMutation` и
+`suppressStrict` просто вызывают `cb()`.
 
 ## Вдохновение и благодарности
 

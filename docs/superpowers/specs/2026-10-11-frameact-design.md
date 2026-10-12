@@ -761,8 +761,12 @@ measure-/tickEnd-эффекта атрибутируется этому эффе
 `forceMutation(cb, nodes, allowAnyPhase?)` (dev-ошибка в mutate-фазе без `allowAnyPhase`;
 санкционированы записи, чья цель — один из `nodes`; вложенная санкция того же узла не
 снимает внешнюю), `suppressStrict(cb)`,
-`setHandler(handler?)`, класс `StrictViolationError { kind: 'measure' | 'mutation';
-detail; phase; path; target }`, `IGNORE_SUBTREE_ATTR`, `LAYOUT_CAUSES`. Шов
+`setHandler(handler?)` (бросок из обработчика доходит до вызывающего только для
+нарушений-измерений; для мутаций он перехватывается и пишется в `console.error`, потому
+что мутации сообщаются на границах фаз и после apply, а не в точке записи — чтобы
+уронить тест на них, собирайте ошибки в обработчике), класс `StrictViolationError
+{ kind: 'measure' | 'mutation'; detail; phase; path; target }`, `IGNORE_SUBTREE_ATTR`,
+`LAYOUT_CAUSES`. Шов
 `strictHooks.forceMutation` в `src/dom/strict.ts` (его зовут `render()` и `Portal`)
 при `enableStrict()` указывает на санкционирование без проверки фазы.
 
