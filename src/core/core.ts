@@ -1136,49 +1136,40 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
         if (latch || consumed(node, l !== null ? l : via)) node._flags = flags | F_MISSED;
       } else {
         const prev = node._state;
-        if (prev === STATE_CLEAN && storeWalk && flags & (F_LIVE | F_LIVE_PIN)) {
-          // A live reader reached by a store walk is not marked here: it is re-delivered by a plain
-          // walk once this store walk is done, so it and everything below it are never tagged or parked.
-          (liveRelays ??= []).push(node, state);
+        if (!storeWalk) {
+          // Plain walk (the common case): as before the cause tags, plus — it clears F_STORE (and
+          // unparks a parked effect) and descends through a store-tagged node that is already dirty.
+          if (prev < state) {
+            // The state is set BEFORE the scheduler runs: a synchronous schedule runs the effect
+            // right here, and that run must see the node dirty. Scheduled once per dirty period:
+            // only on the CLEAN → dirty edge (or on unpark). (Effects have no subscribers.)
+            node._state = state;
+            if (flags & (F_UNSURE | F_STORE | F_PARKED)) node._flags = flags & ~(F_UNSURE | F_STORE | F_PARKED);
+            if (node._effect && (prev === STATE_CLEAN || flags & F_PARKED)) effectScheduler(node);
+            subs = node._subs;
+          } else if (flags & (F_UNSURE | F_STORE)) {
+            node._flags = flags & ~(F_UNSURE | F_STORE | F_PARKED);
+            if (flags & F_PARKED) effectScheduler(node);
+            subs = node._subs;
+          }
+        } else if (prev === STATE_CLEAN) {
+          // Store walk, CLEAN → dirty: tag. A live reader is not marked: it is re-delivered by a
+          // plain walk once this store walk is done (never tagged or parked, nor anything below it).
+          if (flags & (F_LIVE | F_LIVE_PIN)) (liveRelays ??= []).push(node, state);
+          else {
+            node._state = state;
+            node._flags = (flags & ~F_UNSURE) | F_STORE;
+            if (node._effect) effectScheduler(node);
+            subs = node._subs;
+          }
         } else if (prev < state) {
-          // The state is set BEFORE the scheduler runs: a synchronous schedule runs the effect
-          // right here, and that run must see the node dirty. Scheduled once per dirty period:
-          // only on the CLEAN → dirty edge. (Effects have no subscribers.)
+          // Store walk over a dirty node: no tag change (a mixed node stays untagged).
           node._state = state;
-          let f = flags & ~F_UNSURE; // (descending now)
-          // Cause tags: a store walk tags what it dirties (CLEAN → dirty); a plain walk over a CHECK
-          // node tagged by a store walk makes it mixed (untagged) and unparks a parked effect.
-          let unpark = false;
-          if (prev === STATE_CLEAN) {
-            if (storeWalk) f |= F_STORE;
-          } else if (!storeWalk && f & F_STORE) {
-            f &= ~F_STORE;
-            if (f & F_PARKED) {
-              f &= ~F_PARKED;
-              unpark = true;
-            }
-          }
-          if (f !== flags) node._flags = f;
-          if (node._effect && (prev === STATE_CLEAN || unpark)) effectScheduler(node);
+          if (flags & F_UNSURE) node._flags = flags & ~F_UNSURE;
           subs = node._subs;
-        } else if (flags & (F_UNSURE | F_STORE)) {
-          // Already dirty, but an aborted pull or walk may have left subscribers unmarked — or the
-          // node is dirty because of store writes only and this is a plain walk: it is mixed now, and
-          // the plain change must reach whatever the store walk left parked below it.
-          let f = flags & ~F_UNSURE;
-          let descend = (flags & F_UNSURE) !== 0;
-          let unpark = false;
-          if (!storeWalk && f & F_STORE) {
-            f &= ~F_STORE;
-            descend = true;
-            if (f & F_PARKED) {
-              f &= ~F_PARKED;
-              unpark = true;
-            }
-          }
-          if (f !== flags) node._flags = f;
-          if (unpark) effectScheduler(node);
-          if (descend) subs = node._subs;
+        } else if (flags & F_UNSURE) {
+          node._flags = flags & ~F_UNSURE;
+          subs = node._subs;
         }
       }
       // Next link in pre-order, skipping links confirmed after their level was entered.
