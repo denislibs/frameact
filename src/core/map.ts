@@ -39,13 +39,19 @@ export function computedMap<Item, MappedItem>(
 }
 
 function updateMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[] {
-  let i = 0,
-    newItems = this._list() || [],
-    mapper = () => this._map(read.bind(this._nodes[i]), i);
+  const newItems = this._list() || [];
 
+  // Patch (frameact): transactional + per-row isolation, like the keyed modes. The vendored
+  // version ran the mapper unisolated and committed `_items/_len` last, so one throwing row emptied
+  // the whole list and left the rows created in that pass undisposed. Now a throwing mapper is
+  // reported through its row and maps to `undefined` (mapRow); the pass builds new arrays in locals
+  // and commits them only when it completes.
   scoped(() => {
-    if (newItems.length === 0) {
-      if (this._len !== 0) {
+    const newLen = newItems.length,
+      oldLen = this._len;
+
+    if (newLen === 0) {
+      if (oldLen !== 0) {
         dispose.call(this._scope, false);
         this._items = [];
         this._mappings = [];
@@ -56,23 +62,38 @@ function updateMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[] {
       return;
     }
 
-    for (i = 0; i < newItems.length; i++) {
-      if (i < this._items.length && this._items[i] !== newItems[i]) {
-        write.call(this._nodes[i], newItems[i]);
-      } else if (i >= this._items.length) {
-        this._mappings[i] = compute<MappedItem>(
-          (this._nodes[i] = createComputation(newItems[i], null)),
-          mapper,
-          null,
-        );
+    const oldItems = this._items,
+      mappings: MappedItem[] = new Array(newLen),
+      nodes: Computation<Item>[] = new Array(newLen),
+      created: Computation[] = [];
+
+    try {
+      for (let i = 0; i < newLen; i++) {
+        if (i < oldLen) {
+          const node = (nodes[i] = this._nodes[i]);
+          mappings[i] = this._mappings[i];
+          if (oldItems[i] !== newItems[i]) write.call(node, newItems[i]);
+        } else {
+          const node = createComputation<Item>(newItems[i], null), // owned by this._scope
+            index = i;
+          created.push(node);
+          nodes[i] = node;
+          mappings[i] = mapRow(node, () => this._map(read.bind(node), index)) as MappedItem;
+        }
       }
+    } catch (error) {
+      // Unreachable by design (mappers are isolated, writes never throw); safety net so the rows
+      // created in this pass cannot leak and the previous state stays consistent.
+      disposeChildren(this._scope, created);
+      throw error;
     }
 
-    if (i < this._items.length) disposeChildren(this._scope, this._nodes.slice(i, this._items.length));
+    if (newLen < oldLen) disposeChildren(this._scope, this._nodes.slice(newLen, oldLen));
 
-    this._len = this._nodes.length = newItems.length;
+    this._nodes = nodes;
+    this._mappings = mappings;
     this._items = newItems.slice(0);
-    this._mappings = this._mappings.slice(0, this._len);
+    this._len = newLen;
   }, this._scope);
 
   return this._mappings;
@@ -111,8 +132,7 @@ export function computedKeyedMap<Item, MappedItem>(
 }
 
 function updateKeyedMap<Item, MappedItem>(this: KeyedMapData<Item, MappedItem>): any[] {
-  const newItems = this._list() || [],
-    indexed = this._map.length > 1;
+  const newItems = this._list() || [];
 
   // Patch (frameact): transactional. The pass builds new arrays in locals and commits them only
   // when it completes; a throw disposes the rows created in this pass and keeps the previous state
@@ -188,12 +208,9 @@ function updateKeyedMap<Item, MappedItem>(this: KeyedMapData<Item, MappedItem>):
           node = createComputation(j, null); // owned by this._scope
         created.push(node);
         nodes[j] = node;
-        mappings[j] = mapRow(
-          node,
-          indexed
-            ? () => this._map(item, read.bind(node))
-            : () => (this._map as (value: Item) => MappedItem)(item),
-        );
+        // the index accessor is always passed (one bind per row): the row node already is the index
+        // signal, and a `map.length`-based opt-out breaks `(item, ...rest)` / default-parameter mappers
+        mappings[j] = mapRow(node, () => this._map(item, read.bind(node)));
       }
 
       // 3) moved rows learn their new index
