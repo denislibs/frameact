@@ -5,6 +5,7 @@ import { getOwner, onCleanup, untrack } from '../index';
 import { requestMutation } from '../scheduler/fasterdom';
 import { defineBuiltinDirective } from './directives';
 import { delegateEvents, onClearDelegated } from './events';
+import { getNatives } from './natives';
 
 // ---- built-in controlled inputs (spec §3.3) ---------------------------------
 // Adapted in spirit from teact's processControlled / setAttribute('value') caret logic
@@ -377,7 +378,14 @@ function onFocusOut(e: Event): void {
  */
 function verifyRadioGroup(el: HTMLInputElement): void {
   const form = el.form;
-  const candidates = form ? form.elements : (el.getRootNode() as ParentNode).querySelectorAll('input[type="radio"]');
+  const { formElements, querySelectorAll } = getNatives(); // forms shadow `elements` / `querySelectorAll` by name
+  let candidates: ArrayLike<Element>;
+  if (form) candidates = formElements.call(form);
+  else {
+    const root = el.getRootNode();
+    const query = root.nodeType === 9 ? querySelectorAll.document : root.nodeType === 11 ? querySelectorAll.fragment : querySelectorAll.element;
+    candidates = (query as (this: Node, selectors: string) => NodeListOf<Element>).call(root, 'input[type="radio"]');
+  }
   for (let i = 0; i < candidates.length; i++) {
     const r = candidates[i] as HTMLInputElement;
     if (r.localName !== 'input' || r.type !== 'radio' || r.name !== el.name || r.form !== form) continue;

@@ -536,6 +536,44 @@ describe('I3: radio groups', () => {
     expect([a.checked, b.checked]).toEqual([true, false]);
   });
 
+  it('R-6: DOM clobbering: <input name="elements"> in the form and <form name="querySelectorAll"> in the document do not break the group restore', () => {
+    const form = container().appendChild(document.createElement('form'));
+    const clobber = document.createElement('input');
+    clobber.name = 'elements';
+    form.appendChild(clobber);
+    // jsdom has no named properties on forms: an own property is the same shadowing
+    Object.defineProperty(form, 'elements', { value: clobber, configurable: true });
+    const a = radio('g', form);
+    const b = radio('g', form);
+    const [flagA] = createSignal(true);
+    const [flagB] = createSignal(false);
+    createRoot(() => {
+      setAttribute(a, 'use:checked', flagA);
+      setAttribute(b, 'use:checked', flagB);
+    });
+    b.click();
+    expect([a.checked, b.checked]).toEqual([true, false]);
+
+    // without a form the group is found through the root's querySelectorAll, which a form can shadow on document
+    const shadowing = document.body.appendChild(document.createElement('form'));
+    Object.defineProperty(document, 'querySelectorAll', { value: shadowing, configurable: true });
+    const c = radio('h');
+    const d = radio('h');
+    const [flagC] = createSignal(true);
+    const [flagD] = createSignal(false);
+    createRoot(() => {
+      setAttribute(c, 'use:checked', flagC);
+      setAttribute(d, 'use:checked', flagD);
+    });
+    try {
+      d.click();
+      expect([c.checked, d.checked]).toEqual([true, false]);
+    } finally {
+      delete (document as any).querySelectorAll;
+      shadowing.remove();
+    }
+  });
+
   it('the group is the same name within the same form: a same-named radio in another form is left alone', () => {
     const form1 = container().appendChild(document.createElement('form'));
     const form2 = container().appendChild(document.createElement('form'));
