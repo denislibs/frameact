@@ -2,15 +2,19 @@
 // setExtraStyles mirrors teact (MIT, © 2022 Alexander Zinchuk).
 //
 // Object form: per-property diff against the declarations this binding applied (held on the
-// element), so imperative styles survive. String form: `cssText` — documented as incompatible with
-// `setExtraStyles` (a cssText write replaces everything). The binding's state lives on the element
-// (the object it applied, or the string), so `style(el, null)`, string -> object transitions and a
-// repeated identical string work without the caller's `prev` (spread calls pass it unreliably).
+// element), so imperative styles survive. String form: `cssText` replaces every declaration, so the
+// extra styles set through `setExtraStyles` are kept in a per-element registry and re-applied after
+// every cssText write (teact's `updateStyle` parity): a `<div style={props.style}>` whose
+// `Transition`/`restoreHeight` sets `height` imperatively keeps that height across style updates.
+// The binding's state lives on the element (the object it applied, or the string), so
+// `style(el, null)`, string -> object transitions and a repeated identical string work without the
+// caller's `prev` (spread calls pass it unreliably).
 //
 // Interactions: a property the object form drops is removed from the element even if `style:x` or
 // `setExtraStyles` also set it; and the "unchanged" check compares with what the binding last wrote,
 // not with the DOM, so an imperative overwrite of a bound property lives until the binding's value
-// for it changes. Keep bound and imperative properties disjoint.
+// for it changes. Keep bound and imperative properties disjoint (the registry only guards against
+// cssText, i.e. the string form).
 //
 // Names are CSS property names (kebab-case or `--custom`): `style={{ fontSize }}` is ignored by the
 // CSSOM, as in Solid (DEV hint). `setExtraStyles` is the odd one out and takes camelCase (teact).
@@ -20,6 +24,9 @@ import { DEV } from '../env';
 
 // string = the cssText this binding wrote; object = the declarations it applied.
 const appliedStyles = new WeakMap<Element, string | Record<string, unknown>>();
+// The extra styles in force per element (camelCase or `--custom` → value), re-applied after cssText writes.
+// A Map, not a record: names come from data-driven objects and must not touch a prototype (own keys only, as above).
+const extraStyles = new WeakMap<Element, Map<string, string | number>>();
 
 type Styled = Element & { style: CSSStyleDeclaration };
 
@@ -53,12 +60,27 @@ function writeProperty(nodeStyle: CSSStyleDeclaration, name: string, value: unkn
   else nodeStyle.setProperty(name, text);
 }
 
+function writeExtra(nodeStyle: CSSStyleDeclaration, name: string, v: string | number | null | undefined): void {
+  if (name.startsWith('--')) {
+    if (v == null) nodeStyle.removeProperty(name);
+    else nodeStyle.setProperty(name, String(v));
+  } else (nodeStyle as unknown as Record<string, string>)[name] = v == null ? '' : String(v);
+}
+
+/** `cssText = value`, then the element's extra styles on top (a cssText write drops every declaration). */
+function writeCssText(node: Element, value: string): void {
+  const nodeStyle = (node as Styled).style;
+  nodeStyle.cssText = value;
+  const extra = extraStyles.get(node);
+  if (extra !== undefined) for (const [name, v] of extra) writeExtra(nodeStyle, name, v);
+}
+
 /** Compiler primitive for `style=`. */
 export function style(node: Element, value: unknown, prev?: unknown): void {
   const nodeStyle = (node as Styled).style;
   const applied = appliedStyles.get(node);
   if (!value) {
-    if (typeof applied === 'string' || typeof prev === 'string') nodeStyle.cssText = '';
+    if (typeof applied === 'string' || typeof prev === 'string') writeCssText(node, '');
     if (applied !== undefined) {
       if (typeof applied === 'object') for (const name of Object.keys(applied)) nodeStyle.removeProperty(name);
       appliedStyles.delete(node);
@@ -67,12 +89,12 @@ export function style(node: Element, value: unknown, prev?: unknown): void {
   }
   if (typeof value === 'string') {
     if (applied === value) return;
-    nodeStyle.cssText = value;
+    writeCssText(node, value);
     appliedStyles.set(node, value);
     return;
   }
   const previous = typeof applied === 'object' ? applied : undefined;
-  if (typeof applied === 'string' || typeof prev === 'string') nodeStyle.cssText = '';
+  if (typeof applied === 'string' || typeof prev === 'string') writeCssText(node, '');
   const next: Record<string, unknown> = {};
   const obj = value as Record<string, unknown>;
   if (previous) {
@@ -94,14 +116,22 @@ export function setStyleProperty(node: Element, name: string, value: unknown): v
   else writeProperty(nodeStyle, name, value);
 }
 
-/** Imperative styles (teact API): camelCase properties are assigned, `--custom` ones set; null removes. */
+/**
+ * Imperative styles (teact API): camelCase properties are assigned, `--custom` ones set; null/undefined
+ * removes. The declarations accumulate in a per-element registry (teact replaces the registry on
+ * every call; here `setExtraStyles(el, { transition })` then `setExtraStyles(el, { height })` keeps
+ * both) and are re-applied after every string `style=` write.
+ */
 export function setExtraStyles(el: Element, styles: Record<string, string | number | null | undefined>): void {
   const nodeStyle = (el as Styled).style;
+  let extra = extraStyles.get(el);
   for (const name of Object.keys(styles)) {
     const v = styles[name];
-    if (name.startsWith('--')) {
-      if (v == null) nodeStyle.removeProperty(name);
-      else nodeStyle.setProperty(name, String(v));
-    } else (nodeStyle as unknown as Record<string, string>)[name] = v == null ? '' : String(v);
+    if (v == null) extra?.delete(name);
+    else {
+      if (extra === undefined) extraStyles.set(el, (extra = new Map()));
+      extra.set(name, v);
+    }
+    writeExtra(nodeStyle, name, v);
   }
 }

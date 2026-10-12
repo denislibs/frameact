@@ -26,7 +26,7 @@ it('null removes only the properties the binding applied; imperative extra style
   expect(el.style.marginTop).toBe('2px');
 });
 
-it('string form writes cssText (documented: incompatible with setExtraStyles) and transitions back to objects', () => {
+it('string form writes cssText and transitions back to objects', () => {
   const el = document.createElement('div');
   style(el, 'color: red; margin: 1px');
   expect(el.style.getPropertyValue('color')).toBe('red');
@@ -100,4 +100,39 @@ it('a custom property value with ";" does not set other properties and is DEV-fl
   expect(el.style.background).toBe('');
   expect(err).toHaveBeenCalledTimes(1);
   err.mockRestore();
+});
+
+it('extra styles survive string style= writes (teact parity): set before or between, re-applied after every cssText write, removed on null', () => {
+  const el = document.createElement('div');
+  setExtraStyles(el, { height: '40px', '--x': 1 });
+  style(el, 'color: red');
+  expect(el.style.color).toBe('red');
+  expect(el.style.height).toBe('40px');
+  expect(el.style.getPropertyValue('--x')).toBe('1');
+  setExtraStyles(el, { transition: 'none' }); // accumulates: height stays registered
+  style(el, 'color: blue; margin: 1px');
+  expect(el.style.color).toBe('blue');
+  expect(el.style.height).toBe('40px');
+  expect(el.style.transition).toBe('none');
+  expect(el.style.getPropertyValue('--x')).toBe('1');
+  style(el, null); // cssText cleared: the extras come back
+  expect(el.style.color).toBe('');
+  expect(el.style.height).toBe('40px');
+  style(el, { padding: '2px' }, 'color: blue; margin: 1px'); // string -> object clears cssText too
+  expect(el.style.padding).toBe('2px');
+  expect(el.style.height).toBe('40px');
+  setExtraStyles(el, { height: null, '--x': undefined });
+  expect(el.style.height).toBe('');
+  style(el, 'color: green');
+  expect(el.style.height).toBe(''); // removed from the registry: not re-applied
+  expect(el.style.getPropertyValue('--x')).toBe('');
+  expect(el.style.transition).toBe('none');
+});
+
+it('a bound string style= and the extras of another element do not mix; the registry is per element', () => {
+  const a = document.createElement('div');
+  const b = document.createElement('div');
+  setExtraStyles(a, { height: '1px' });
+  style(b, 'color: red');
+  expect(b.style.height).toBe('');
 });
