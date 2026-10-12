@@ -189,7 +189,11 @@ export function setBoolAttribute(node: Element, name: string, value: unknown): v
   else node.removeAttribute(name);
 }
 
-/** Compiler primitive for property writes it cannot inline (e.g. `<select value>`). */
+/**
+ * Compiler primitive for property writes it cannot inline (e.g. `<select value>`). Property writes
+ * (this, `prop:x`, compiler-inlined `el.href = …`) bypass the attribute checks above: do not feed them
+ * untrusted URLs or HTML.
+ */
 export function setProperty(node: Element, name: string, value: unknown): void {
   const el = node as unknown as Record<string, unknown>;
   const tag = node.nodeName;
