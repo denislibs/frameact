@@ -244,6 +244,11 @@ function runEffect(node: EffectNode) {
       }
     } else if (p._compute && p._state !== STATE_CLEAN) {
       (memos ??= []).push(p);
+    } else if (p._mapMemo !== undefined && p._mapMemo._state !== STATE_CLEAN) {
+      // A list row (map.ts links the rows' scope to its map memo): a dirty map is pulled first, like a
+      // dirty memo ancestor — it may dispose this row (its item or id is gone). Zombie rows: a row
+      // that looks its entity up by id must not run after the entity went but before the list did.
+      (memos ??= []).push(p._mapMemo);
     }
   }
 

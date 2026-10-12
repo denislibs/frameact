@@ -89,6 +89,13 @@ export interface Scope {
   _handlers: ErrorHandler<any>[] | null;
   /** @internal */
   _disposal: Disposable | Disposable[] | null;
+  /**
+   * @internal map.ts: the memo of the mapArray whose rows this scope owns. Set on map scopes only
+   * (never initialised elsewhere: every other node keeps its hidden class). A row's run pulls it
+   * first while it is not CLEAN (effects.ts ancestor rule): a row whose item or id is gone is
+   * disposed by that pull instead of running stale (zombie rows).
+   */
+  _mapMemo?: Computation;
   append(scope: Scope): void;
   dispose(): void;
 }

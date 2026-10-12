@@ -8,6 +8,15 @@ import type { Computation, Maybe, ReadSignal, Scope } from './types';
 export * from './selector';
 
 /**
+ * frameact (zombie rows): the rows' owner scope points at its map memo, so a row's run pulls a dirty
+ * map first (effects.ts, ancestor rule) — a row whose item or id is gone is disposed, not run.
+ */
+function linkMap<T>(scope: Scope, node: Computation<T>): ReadSignal<T> {
+  scope._mapMemo = node;
+  return read.bind(node) as ReadSignal<T>;
+}
+
+/**
  * Reactive map helper that caches each item by index to reduce unnecessary mapping on updates.
  * It only runs the mapping function once per item and adds/removes as needed. In a non-keyed map
  * like this the index is fixed but value can change (opposite of a keyed map).
@@ -21,11 +30,13 @@ export function computedMap<Item, MappedItem>(
   map: (value: ReadSignal<Item>, index: number) => MappedItem,
   options?: { id?: string },
 ): ReadSignal<MappedItem[]> {
-  return read.bind(
+  const scope = createScope();
+  return linkMap(
+    scope,
     createComputation<MappedItem[]>(
       [],
       updateMap.bind({
-        _scope: createScope(),
+        _scope: scope,
         _len: 0,
         _list: list,
         _items: [],
@@ -127,11 +138,13 @@ export function computedKeyedMap<Item, MappedItem>(
   map: (value: Item, index: ReadSignal<number>) => MappedItem,
   options?: { id?: string },
 ): ReadSignal<MappedItem[]> {
-  return read.bind(
+  const scope = createScope();
+  return linkMap(
+    scope,
     createComputation<MappedItem[]>(
       [],
       updateKeyedMap.bind({
-        _scope: createScope(),
+        _scope: scope,
         _len: 0,
         _list: list,
         _items: [],
@@ -324,11 +337,13 @@ export function computedKeyedMapBy<Item, Key, Mapped>(
   map: (item: ReadSignal<Item>, index: ReadSignal<number>) => Mapped,
   options?: { id?: string },
 ): ReadSignal<Mapped[]> {
-  return read.bind(
+  const scope = createScope();
+  return linkMap(
+    scope,
     createComputation<Mapped[]>(
       [],
       (updateKeyedMapBy<Item, Key, Mapped>).bind({
-        _scope: createScope(),
+        _scope: scope,
         _len: 0,
         _list: list,
         _keyFn: keyFn,
