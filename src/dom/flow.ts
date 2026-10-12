@@ -9,6 +9,7 @@ import { createMemo, createRoot, getOwner, runWithOwner, untrack } from '../inde
 import { children, createComponent } from './component';
 import { SVG_NS, SVGElements } from './constants';
 import { insert } from './insert';
+import { getNatives } from './natives';
 import { spread } from './props';
 import { strictHooks } from './strict';
 import { template } from './template';
@@ -174,8 +175,8 @@ export function Dynamic(props: { component?: ((props: any) => unknown) | string 
         component.toLowerCase() === 'script'
           ? inertScript()
           : SVGElements.has(component)
-            ? document.createElementNS(SVG_NS, component)
-            : document.createElement(component);
+            ? getNatives().createElementNS.call(document, SVG_NS, component)
+            : getNatives().createElement.call(document, component);
       spread(node, props, false, isComponentKey);
       return node;
     }
@@ -188,20 +189,23 @@ export function Dynamic(props: { component?: ((props: any) => unknown) | string 
  * `<Portal mount>`: children render into `mount` (default `document.body`) between two markers, in
  * their own root parented to the Portal's owner (context flows, disposal follows the Portal). The
  * attach is a live-DOM write at creation and goes through the stricterdom seam. Delegated events
- * from the content bubble to the Portal's logical position (`host`).
+ * from the content bubble to the Portal's logical position (`host`). The mount is written through
+ * the prototype natives (a `<form>` mount with a descendant named `appendChild` works).
  */
 export function Portal(props: { mount?: Element; children: unknown }): unknown {
-  const treeMarker = document.createTextNode('');
-  const startMarker = document.createTextNode('');
-  const endMarker = document.createTextNode('');
+  const { createTextNode, body } = getNatives();
+  const treeMarker = createTextNode.call(document, '');
+  const startMarker = createTextNode.call(document, '');
+  const endMarker = createTextNode.call(document, '');
   // Compared by identity: a getter that re-runs and returns the same element must not rebuild the portal.
-  const mount = createMemo<Element>(() => props.mount || document.body);
+  const mount = createMemo<Element>(() => props.mount || (body.call(document) as Element));
   const content = createMemo(() => [startMarker, props.children]);
   createRenderEffect<[Element, Scope | null]>(
     () => [mount(), getOwner()],
     ([m, owner]) => {
+      const { nextSibling, parentNode, appendChild, removeChild } = getNatives();
       const dispose = strictHooks.forceMutation(() => {
-        m.appendChild(endMarker);
+        appendChild.call(m, endMarker);
         return runWithOwner(owner, () =>
           createRoot((d) => {
             // `content` goes in as an accessor: a children change is a reconcile inside the mount, not a rebuild.
@@ -216,8 +220,8 @@ export function Portal(props: { mount?: Element; children: unknown }): unknown {
           // remove [startMarker, endMarker] inclusive
           let n: Node | null = startMarker;
           while (n) {
-            const next: Node | null = n.nextSibling;
-            if (n.parentNode === m) m.removeChild(n);
+            const next: Node | null = nextSibling.call(n);
+            if (parentNode.call(n) === m) removeChild.call(m, n);
             if (n === endMarker) break;
             n = next;
           }

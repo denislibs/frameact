@@ -43,7 +43,11 @@ it('a scope initialises the shared scope fields: its key list is the prefix of a
   const nested = root(() => { onError(() => {}); return createScope(); });
   // Object.keys: string keys in creation order (Reflect.ownKeys would list the SCOPE symbol last)
   const comp = Object.keys(signal(0).node!);
-  expect(Object.keys(scope)).toEqual(comp.slice(0, Object.keys(scope).length));
+  // (`_mapMemo` is the one suffix field: set to undefined in the constructor so that a list's scope,
+  // which gets it assigned by linkMap, shares the hidden class of every other scope.)
+  const scopeKeys = Object.keys(scope);
+  expect(scopeKeys[scopeKeys.length - 1]).toBe('_mapMemo');
+  expect(scopeKeys.slice(0, -1)).toEqual(comp.slice(0, scopeKeys.length - 1));
   expect(keysOf(nested)).toEqual(keysOf(scope));
   expect(Reflect.ownKeys(scope)).toContain(SCOPE);
   for (const k of ['_context', '_handlers', '_disposal', '_compute', '_state', '_lastChild', '_prevSibling', '_nextSibling']) {

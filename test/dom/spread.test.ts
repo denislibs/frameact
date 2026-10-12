@@ -1,3 +1,4 @@
+import { getNatives } from '../../src/dom/natives';
 import { createRoot, createSignal } from '../../src/index';
 import { defineDirective } from '../../src/dom/directives';
 import { setAttribute } from '../../src/dom/attributes';
@@ -670,8 +671,7 @@ describe('is-mode details', () => {
 
   it('a failing native-prototype probe routes the name through setAttribute', () => {
     const el = document.createElement('section');
-    const doc = el.ownerDocument;
-    const spy = vi.spyOn(doc, 'createElementNS').mockImplementation(() => {
+    const spy = vi.spyOn(getNatives(), 'createElementNS').mockImplementation(() => {
       throw new Error('probe failed');
     });
     try {

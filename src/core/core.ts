@@ -56,7 +56,62 @@ export const F_INIT = 1,
   F_REENTERED = 8,
   F_UNSURE = 16,
   F_THREW = 32,
-  F_ERRORED = 64;
+  F_ERRORED = 64,
+  /**
+   * Store cause tags (frameact, spec §3.5 "парковка по причине").
+   * F_STORE: the node is dirty ONLY because of store writes — set by a store walk on the CLEAN → dirty
+   * edge, cleared by any plain walk reaching the node (which then descends below it even though it is
+   * already dirty), by update() and when a CHECK node resolves CLEAN.
+   */
+  F_STORE = 128,
+  /** F_PARKED: an effect the store gate parked — dirty, no run booked (effects.ts / store/gate.ts). */
+  F_PARKED = 256,
+  /** F_LIVE: the node's last compute read the store through the live() facade (markLiveRead); set again by each compute that does. */
+  F_LIVE = 512,
+  /** F_LIVE_PIN: the effect is never parked by the store gate, for its lifetime (controlled-input bindings). */
+  F_LIVE_PIN = 1024,
+  /** F_STORE_GATED: the effect's schedule is a frame queue or a gateOnHeavyAnimation wrapper — its store-caused runs wait for heavy animations (set once, in the constructor). */
+  F_STORE_GATED = 2048;
+
+/**
+ * True while the running notify walk comes from a store leaf write (writeStoreNode), or from the
+ * result write of a memo whose recompute was caused by store writes only. A store walk tags what it
+ * dirties with F_STORE; a plain walk clears the tag on its way down and descends through tagged nodes
+ * even when they are already dirty (the plain change must reach whatever the store walk left parked).
+ */
+let storeWalk = false;
+
+/** Live readers a store walk skipped ((node, state) pairs), re-delivered by plain walks right after it. */
+let liveRelays: any[] | null = null;
+
+/** Re-deliver the skipped live readers (after the outermost store walk), as plain walks. */
+function flushLiveRelays() {
+  while (liveRelays !== null) {
+    const r = liveRelays;
+    liveRelays = null;
+    for (let i = 0; i < r.length; i += 2) notify(r[i], r[i + 1], true, null);
+  }
+}
+
+/** The running computation reads the store live: its store-caused runs are never parked (store `live()`). */
+export function markLiveRead() {
+  if (currentObserver !== null) currentObserver._flags |= F_LIVE;
+}
+
+/** Never park this effect (pinned for its lifetime): the compiler effect delivering to a controlled input. */
+export function pinLive(node: Computation) {
+  node._flags |= F_LIVE_PIN;
+}
+
+/** @internal store: whether a computation is running (leaf signals are created and linked only then). */
+export function getObserver(): Computation | null {
+  return currentObserver;
+}
+
+/** @internal store: subscribe the running computation to `node` (a slim signal node) — no value read. */
+export function trackNode(node: Computation) {
+  if (currentObserver !== null) link(node, currentObserver);
+}
 
 // For more information about this graph tracking scheme see Reactively:
 // https://github.com/modderme123/reactively/blob/main/packages/core/src/core.ts#L21
@@ -466,12 +521,64 @@ export function write(this: Computation, newValue: any): any {
     this._writtenAt = ++writeEpoch;
     // Links confirmed after this point belong to computes that read the new value (see notify()).
     const c = cycle;
-    for (let l = this._subs; l !== null; l = l.nextSub) {
-      if (l.version <= c) notify(l.sub, STATE_DIRTY, true, l);
+    if (storeWalk) {
+      // A plain write made from inside a store walk (a synchronous effect): never store-caused.
+      storeWalk = false;
+      try {
+        for (let l = this._subs; l !== null; l = l.nextSub) {
+          if (l.version <= c) notify(l.sub, STATE_DIRTY, true, l);
+        }
+      } finally {
+        storeWalk = true;
+      }
+    } else {
+      for (let l = this._subs; l !== null; l = l.nextSub) {
+        if (l.version <= c) notify(l.sub, STATE_DIRTY, true, l);
+      }
     }
   }
 
   return this._value;
+}
+
+/**
+ * A store leaf write (frameact, spec §3.5). The store has already compared and stored the raw value;
+ * this stamps the node and runs a STORE walk, which tags the nodes it dirties with F_STORE.
+ * `asStore: false` runs a plain walk instead (the store's `ungated()` writes).
+ */
+export function writeStoreNode(node: Computation, value: unknown, asStore: boolean) {
+  node._value = value;
+  node._writtenAt = ++writeEpoch;
+  if (node._subs === null) return;
+  const c = cycle;
+  const prevWalk = storeWalk;
+  storeWalk = asStore;
+  try {
+    for (let l: Link | null = node._subs; l !== null; l = l.nextSub) {
+      if (l.version <= c) notify(l.sub, STATE_DIRTY, true, l);
+    }
+  } finally {
+    storeWalk = false;
+    if (liveRelays !== null) flushLiveRelays();
+    storeWalk = prevWalk;
+  }
+}
+
+/** `notifySubs` as a store walk (a memo recomputed because of store writes only) or a plain one. */
+function notifySubsAs(node: Computation, asStore: boolean) {
+  if (!asStore && !storeWalk) {
+    notifySubs(node); // the common case: a plain recompute outside any store walk
+    return;
+  }
+  const prevWalk = storeWalk;
+  storeWalk = asStore;
+  try {
+    notifySubs(node);
+  } finally {
+    storeWalk = false;
+    if (liveRelays !== null) flushLiveRelays();
+    storeWalk = prevWalk;
+  }
 }
 
 /**
@@ -494,6 +601,7 @@ function initScope(node: Scope) {
 
 const ScopeNode = function Scope(this: Scope) {
   initScope(this);
+  this._mapMemo = undefined; // one hidden class for every ScopeNode (map scopes included)
   if (currentScope) currentScope.append(this);
 };
 
@@ -605,6 +713,25 @@ export function createSignalNode<T>(initialValue: T, options?: SignalOptions<T>)
   return new (SignalNode as any)(initialValue, (options && options.dirty) || isNotEqual, options?.id);
 }
 
+/**
+ * @internal store: a signal node that remembers the table slot it lives in (`owner`, `key`). When its
+ * last subscriber unlinks, the hook set by `setLeafOrphanHook` is called so the store can drop the slot
+ * (the value lives in the raw tree; the next tracked read creates a fresh leaf). Only nodes made here
+ * pay for it, and only at the moment their last reader goes away.
+ */
+export function createLeafNode<T>(initialValue: T, owner: object, key: PropertyKey): Computation<T> {
+  const node = createSignalNode(initialValue) as any;
+  node._leafOwner = owner;
+  node._leafKey = key;
+  return node;
+}
+
+let leafOrphanHook: ((owner: any, key: PropertyKey, leaf: Computation) => void) | null = null;
+/** @internal store: called when a leaf made by `createLeafNode` loses its last subscriber. */
+export function setLeafOrphanHook(hook: ((owner: any, key: PropertyKey, leaf: Computation) => void) | null) {
+  leafOrphanHook = hook;
+}
+
 /** P5: read a createSignal node (the slim read(): no pull, never disposed, never an effect). */
 export function readSignal(this: Computation): any {
   if (currentObserver !== null) link(this, currentObserver);
@@ -705,7 +832,7 @@ export function updateCheck(node: Computation) {
           if (cur._flags & F_THREW) update(cur); // its last run threw: no dep change to rely on
           else {
             cur._state = STATE_CLEAN;
-            cur._flags &= ~F_UNSURE; // (CLEAN: marking it again descends anyway)
+            cur._flags &= ~(F_UNSURE | F_STORE); // (CLEAN: marking it again descends anyway)
           }
         }
         if (checkTop === base) return;
@@ -791,8 +918,11 @@ export function update(node: Computation) {
     node._flags |= F_REENTERED;
     return;
   }
+  // Was this recompute caused by store writes only? It decides the kind of walk the result write runs.
+  // F_STORE and F_PARKED are cleared here; F_LIVE too — the compute sets it again if it reads live.
+  const storeCause = (node._flags & F_STORE) !== 0;
   // (F_ERRORED stays until a compute succeeds: a re-entrant read meanwhile still gets the error)
-  node._flags = (node._flags & (F_INIT | F_ERRORED)) | F_COMPUTING;
+  node._flags = (node._flags & (F_INIT | F_ERRORED | F_LIVE_PIN | F_STORE_GATED)) | F_COMPUTING;
   let computeStarted = false;
   const prevScope = currentScope,
     prevObserver = currentObserver,
@@ -825,7 +955,7 @@ export function update(node: Computation) {
       // pull that reader reads fresh). After an error, any value is a change.
       if (errored || node._changed(node._value, result)) {
         node._value = result;
-        notifySubs(node);
+        notifySubsAs(node, storeCause && !(node._flags & (F_LIVE | F_LIVE_PIN)));
       }
     } else {
       const initial = node._value;
@@ -836,7 +966,7 @@ export function update(node: Computation) {
       // or from an earlier first run that threw (its readers stay linked: `_subs`). Announced if
       // the result differs from it. (`!==`, not the user's `equals`: it never sees `initial`.)
       if ((node._flags & F_REENTERED || node._subs !== null) && (errored || initial !== result)) {
-        notifySubs(node);
+        notifySubsAs(node, storeCause && !(node._flags & (F_LIVE | F_LIVE_PIN)));
       }
     }
   } catch (error) {
@@ -859,16 +989,23 @@ export function update(node: Computation) {
         const changed = !wasErrored || unhandled !== node._value; // value → error, or another error
         node._value = unhandled;
         node._flags |= F_ERRORED;
-        if (changed && node._subs !== null) notifySubs(node);
+        if (changed && node._subs !== null) notifySubsAs(node, false);
       }
     }
   } finally {
     const missed = node._flags & F_MISSED;
-    node._flags &= F_INIT | F_THREW | F_ERRORED;
+    node._flags &= F_INIT | F_THREW | F_ERRORED | F_LIVE | F_LIVE_PIN | F_STORE_GATED;
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;
       if (missed) {
-        notify(node, STATE_DIRTY, true, null); // propagates to observers / schedules an effect
+        // A latched write is re-delivered as a plain walk (never parked: conservative).
+        const prevWalk = storeWalk;
+        storeWalk = false;
+        try {
+          notify(node, STATE_DIRTY, true, null); // propagates to observers / schedules an effect
+        } finally {
+          storeWalk = prevWalk;
+        }
       }
     } else if (node._deps !== null) {
       // Disposed during its own compute: stays DISPOSED, and drops the links it made after that.
@@ -953,7 +1090,12 @@ function unlinkDeps(from: Link) {
     if (nextSub !== null) nextSub.prevSub = prevSub;
     else dep._subsTail = prevSub;
     if (prevSub !== null) prevSub.nextSub = nextSub;
-    else dep._subs = nextSub;
+    else {
+      dep._subs = nextSub;
+      if (nextSub === null && (dep as any)._leafOwner !== undefined && leafOrphanHook !== null) {
+        leafOrphanHook((dep as any)._leafOwner, (dep as any)._leafKey, dep);
+      }
+    }
   }
 }
 
@@ -1021,16 +1163,38 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
         if (latch || consumed(node, l !== null ? l : via)) node._flags = flags | F_MISSED;
       } else {
         const prev = node._state;
-        if (prev < state) {
-          // The state is set BEFORE the scheduler runs: a synchronous schedule runs the effect
-          // right here, and that run must see the node dirty. Scheduled once per dirty period:
-          // only on the CLEAN → dirty edge. (Effects have no subscribers.)
+        if (!storeWalk) {
+          // Plain walk (the common case): as before the cause tags, plus — it clears F_STORE (and
+          // unparks a parked effect) and descends through a store-tagged node that is already dirty.
+          if (prev < state) {
+            // The state is set BEFORE the scheduler runs: a synchronous schedule runs the effect
+            // right here, and that run must see the node dirty. Scheduled once per dirty period:
+            // only on the CLEAN → dirty edge (or on unpark). (Effects have no subscribers.)
+            node._state = state;
+            if (flags & (F_UNSURE | F_STORE | F_PARKED)) node._flags = flags & ~(F_UNSURE | F_STORE | F_PARKED);
+            if (node._effect && (prev === STATE_CLEAN || flags & F_PARKED)) effectScheduler(node);
+            subs = node._subs;
+          } else if (flags & (F_UNSURE | F_STORE)) {
+            node._flags = flags & ~(F_UNSURE | F_STORE | F_PARKED);
+            if (flags & F_PARKED) effectScheduler(node);
+            subs = node._subs;
+          }
+        } else if (prev === STATE_CLEAN) {
+          // Store walk, CLEAN → dirty: tag. A live reader is not marked: it is re-delivered by a
+          // plain walk once this store walk is done (never tagged or parked, nor anything below it).
+          if (flags & (F_LIVE | F_LIVE_PIN)) (liveRelays ??= []).push(node, state);
+          else {
+            node._state = state;
+            node._flags = (flags & ~F_UNSURE) | F_STORE;
+            if (node._effect) effectScheduler(node);
+            subs = node._subs;
+          }
+        } else if (prev < state) {
+          // Store walk over a dirty node: no tag change (a mixed node stays untagged).
           node._state = state;
-          if (flags & F_UNSURE) node._flags = flags & ~F_UNSURE; // (descending now)
-          if (node._effect && prev === STATE_CLEAN) effectScheduler(node);
+          if (flags & F_UNSURE) node._flags = flags & ~F_UNSURE;
           subs = node._subs;
         } else if (flags & F_UNSURE) {
-          // Already dirty, but an aborted pull or walk may have left subscribers unmarked.
           node._flags = flags & ~F_UNSURE;
           subs = node._subs;
         }

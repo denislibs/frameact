@@ -4,6 +4,11 @@ import {
   callUnowned,
   computationPrototype,
   F_INIT,
+  F_LIVE,
+  F_LIVE_PIN,
+  F_PARKED,
+  F_STORE,
+  F_STORE_GATED,
   F_THREW,
   handleError,
   initComputationNode,
@@ -86,6 +91,17 @@ export function markDrainGuarded(schedule: Schedule) {
 /** @internal */
 export function isDrainGuardedSchedule(schedule: Schedule) {
   return drainGuardedSchedules.has(schedule);
+}
+
+const storeGatedSchedules = new WeakSet<Schedule>();
+
+/**
+ * @internal Marks a schedule whose effects the store gate may park (spec §3.5 req. 6): the frame
+ * queues and gateOnHeavyAnimation wrappers (frame.ts). tickEnd and idle effects are never parked —
+ * logic does not wait for animations, and idle waits for them on its own.
+ */
+export function markStoreGated(schedule: Schedule) {
+  storeGatedSchedules.add(schedule);
 }
 
 const SELF_DIRTY_LIMIT = 100;
@@ -202,6 +218,7 @@ function Effect(
   this._tickRuns = 0;
   this._drainEpoch = 0;
   this._drainRuns = 0;
+  if (storeGatedSchedules.has(schedule)) this._flags |= F_STORE_GATED;
 }
 Effect.prototype = computationPrototype;
 
@@ -229,38 +246,62 @@ function computeNode(node: EffectNode): boolean {
   }
 }
 
+/**
+ * The store gate (installed by src/store/gate.ts when `frameact/store` is imported). Called for a run
+ * of a store-gated effect that is dirty because of store writes only and not live; returns true when it
+ * parked the effect (left dirty, no run booked). Without a store nothing carries F_STORE.
+ */
+let storeGate: ((node: EffectNode) => boolean) | null = null;
+export function setStoreGate(fn: (node: EffectNode) => boolean) {
+  storeGate = fn;
+}
+
+/** @internal store gate: mark the effect parked (it stays dirty with no run booked). */
+export function parkEffect(node: EffectNode) {
+  node._flags |= F_PARKED;
+}
+
+/**
+ * @internal store gate: book the run of a parked effect again (release). False when it was unparked
+ * (ran) or disposed meanwhile. F_STORE stays: if another scope in the chain still animates, the run
+ * parks there again.
+ */
+export function rebookParked(node: EffectNode): boolean {
+  if (node._state === STATE_DISPOSED || !(node._flags & F_PARKED)) return false;
+  node._flags &= ~F_PARKED;
+  bookRun(node);
+  return true;
+}
+
+/** @internal store gate: still parked (not disposed, not unparked by a plain walk). */
+export function isParked(node: EffectNode): boolean {
+  return node._state !== STATE_DISPOSED && (node._flags & F_PARKED) !== 0;
+}
+
+/** @internal the heavy-animation scope snapped when the effect was created. */
+export function effectScopeOf(node: EffectNode): HeavyAnimationScope {
+  return node._scope;
+}
+
 function runEffect(node: EffectNode) {
   if (node._state === STATE_DISPOSED) return;
+  // Store gate (spec §3.5): decided when the run executes — once per drain, the gate samples the
+  // scopes — not when the write happens. A parked effect stays dirty; a plain walk unparks it.
+  if ((node._flags & (F_STORE | F_STORE_GATED | F_LIVE | F_LIVE_PIN)) === (F_STORE | F_STORE_GATED) && storeGate !== null && storeGate(node)) return;
 
-  // Ancestor rule (spec §3.2): never run an ancestor effect's compute from here. Check the WHOLE
-  // owner chain for effects first; bail onto the nearest non-CLEAN one — its own run disposes us
-  // (DIRTY) or releases us (CHECK that resolves clean, or a run that throws).
-  let memos: Computation[] | null = null;
+  // Fast path: the whole owner chain is clean (no effect/memo ancestor dirty, no dirty list map).
+  // Two loads per level, as before the zombie-rows rule; anything else goes to settleChain.
   for (let p = node[SCOPE] as Computation | null; p !== null; p = p[SCOPE] as Computation | null) {
-    if (p._effect) {
-      if (p._state !== STATE_CLEAN) {
-        ((p as EffectNode)._bailed ??= []).push(node);
+    if (p._state !== STATE_CLEAN ? p._effect || p._compute !== null : p._mapMemo !== undefined && p._mapMemo._state !== STATE_CLEAN) {
+      if (settleChain(node)) return; // bailed onto an ancestor: this run did not happen
+      if (node._state === STATE_DISPOSED) {
+        releaseBailed(node);
         return;
       }
-    } else if (p._compute && p._state !== STATE_CLEAN) {
-      (memos ??= []).push(p);
+      break;
     }
   }
-
   try {
-    // All effect ancestors are clean: pull dirty memo ancestors top-down like any read (pure);
-    // one of them may dispose us.
-    if (memos) {
-      for (let i = memos.length - 1; i >= 0; i--) {
-        try {
-          updateCheck(memos[i]);
-        } catch (error) {
-          logEffectError(node, error);
-        }
-        if (node._state === STATE_DISPOSED) return;
-      }
-    }
-
     if (!computeNode(node)) return;
     if (node._applied === NOT_APPLIED || node._value !== node._applied) applyEffect(node);
   } finally {
@@ -269,6 +310,61 @@ function runEffect(node: EffectNode) {
     if (node._state === STATE_CLEAN) node._selfDirty = 0;
     // Children that bailed onto us are re-scheduled however this run ended (success or error).
     releaseBailed(node);
+  }
+}
+
+/**
+ * Ancestor rule (spec §3.2), slow path: never run an ancestor effect's compute from here. Check the
+ * WHOLE owner chain for effects first; bail onto the nearest non-CLEAN one (returns true) — its own
+ * run disposes us (DIRTY) or releases us (CHECK that resolves clean, or a run that throws).
+ * Otherwise pull dirty memo / map ancestors top-down (may dispose us) and return false.
+ */
+function settleChain(node: EffectNode): boolean {
+  let pass = 0;
+  for (;;) {
+    let memos: Computation[] | null = null;
+    let pullsMap = false;
+    let maps = 0;
+    for (let p = node[SCOPE] as Computation | null; p !== null; p = p[SCOPE] as Computation | null) {
+      if (p._effect) {
+        if (p._state !== STATE_CLEAN) {
+          ((p as EffectNode)._bailed ??= []).push(node);
+          if (p._flags & F_PARKED) {
+            p._flags &= ~(F_PARKED | F_STORE);
+            bookRun(p as EffectNode);
+          } else if (p._flags & F_STORE) {
+            p._flags &= ~F_STORE;
+          }
+          return true;
+        }
+      } else if (p._compute && p._state !== STATE_CLEAN) {
+        (memos ??= []).push(p);
+      } else if (p._mapMemo !== undefined && p._mapMemo._state !== STATE_CLEAN) {
+        (memos ??= []).push(p._mapMemo);
+        pullsMap = true;
+        maps++;
+      }
+    }
+    if (!memos) return false;
+    let settled = true;
+    for (let i = memos.length - 1; i >= 0; i--) {
+      try {
+        updateCheck(memos[i]);
+      } catch (error) {
+        logEffectError(node, error);
+      }
+      if (node._state === STATE_DISPOSED) return false;
+      if (memos[i]._state !== STATE_CLEAN) settled = false;
+    }
+    if (!pullsMap || !settled) return false;
+    if (++pass > maps) {
+      if (DEV) {
+        console.error(
+          `[frameact] Potential infinite loop: the owner chain of effect${node._name ? ` "${node._name}"` : ''} was still dirty after ${pass} map pulls (${maps} list scope${maps === 1 ? '' : 's'} in the chain). A list mapper probably writes the source of an enclosing list. The re-walk is stopped and the effect runs.`,
+        );
+      }
+      return false;
+    }
   }
 }
 

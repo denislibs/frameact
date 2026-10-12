@@ -17,7 +17,7 @@ export function delegateEvents(eventNames: readonly string[], doc: Document = wi
   for (const name of eventNames) {
     if (!names.has(name)) {
       names.add(name);
-      doc.addEventListener(name, eventHandler);
+      getNatives().addEventListener.call(doc, name, eventHandler);
     }
   }
 }
@@ -26,7 +26,7 @@ export function delegateEvents(eventNames: readonly string[], doc: Document = wi
 export function clearDelegatedEvents(doc: Document = window.document): void {
   const names = delegated.get(doc);
   if (names) {
-    for (const name of names) doc.removeEventListener(name, eventHandler);
+    for (const name of names) getNatives().removeEventListener.call(doc, name, eventHandler);
     delegated.delete(doc);
   }
   for (const hook of clearHooks) hook(doc);
@@ -53,18 +53,37 @@ export function tupleListener(node: Element, tuple: readonly unknown[]): EventLi
   return typeof fn === 'function' ? (e: Event) => fn.call(node, data, e) : undefined;
 }
 
+/**
+ * Write the two delegation expandos. On a `<form>` with a listed control or `<img>` whose id/name is
+ * `_$$click` (or `_$$clickData`) the property is a non-writable named property: the assignment throws
+ * in strict mode (DOM clobbering), which must not cut the spread or the component short. Reported in
+ * DEV with the key that threw: when it is the handler key nothing was stored; when it is the data key
+ * the handler was stored but dispatch skips the clobbered element (see `eventHandler`).
+ */
+function setDelegated(node: Element, name: string, handler: unknown, data: unknown): void {
+  const target = node as unknown as Record<string, unknown>;
+  let key = EVENT_KEY + name;
+  try {
+    target[key] = handler;
+    key += 'Data';
+    target[key] = data;
+  } catch (error) {
+    if (DEV) {
+      const stored = key === EVENT_KEY + name ? 'the handler is not stored' : 'the handler is stored, but dispatch skips this element';
+      console.error(`[frameact] on${name}: could not store the delegated handler on`, node, `("${key}" is shadowed by a form control or <img> of that id/name; ${stored})`, error);
+    }
+  }
+}
+
 /** Compiler primitive: `addEvent(el, name, handler, delegate)`; tuple handlers carry bound data. */
 export function addEvent(node: Element, name: string, handler: unknown, delegate?: boolean): void {
-  const target = node as unknown as Record<string, unknown>;
   if (delegate) {
     if (Array.isArray(handler)) {
       if (!isListener(handler[0])) return refuseHandler('onX=', name, handler);
-      target[EVENT_KEY + name] = handler[0];
-      target[EVENT_KEY + name + 'Data'] = handler[1];
+      setDelegated(node, name, handler[0], handler[1]);
     } else {
       if (handler != null && !isListener(handler)) return refuseHandler('onX=', name, handler);
-      target[EVENT_KEY + name] = handler;
-      target[EVENT_KEY + name + 'Data'] = undefined; // a plain handler replaces a tuple's data
+      setDelegated(node, name, handler, undefined); // a plain handler replaces a tuple's data
     }
     return;
   }
@@ -102,11 +121,29 @@ export function setListener(node: Element, name: string, value: unknown, capture
 
 // Structure is read through the prototype getters (natives.ts); portal hosts live in a WeakMap (insert.ts),
 // so neither a named form control nor an expando can redirect the walk. Only the handler expandos
-// (`_$$click`, `_$$clickData`) must be read off the node and are validated.
+// (`_$$click`, `_$$clickData`) must be read off the node, and on a <form> either may be shadowed by a
+// descendant named like the expando (`<img id="_$$keydownData">`). The shadowing is recognised by its
+// descriptor — a form's named property is an own NON-WRITABLE data property, the runtime's expandos are
+// always writable — so bound data that legitimately is a Node is still delivered.
 const MAX_PORTAL_HOPS = 64;
 
+/** Own, non-writable data property: what `[LegacyOverrideBuiltIns]` presents for a descendant's name/id. */
+function isShadowed(node: object, key: string): boolean {
+  const d = Object.getOwnPropertyDescriptor(node, key);
+  return d !== undefined && d.writable === false;
+}
+
+/** `nodeName` of an HTML form: upper-case in an HTML document, as written (`form`) in an XHTML one. Safe on any node. */
+function isForm(nodeName: string): boolean {
+  return nodeName === 'FORM' || nodeName === 'form';
+}
+
+function reportClobberedHandler(node: unknown, key: string): void {
+  if (DEV) console.error(`[frameact] delegated handler skipped: "${key}" or "${key}Data" on`, node, 'is shadowed by a form control or <img id> of that name (DOM clobbering)');
+}
+
 function eventHandler(e: Event): void {
-  const { parentNode, contains, shadowHost } = getNatives();
+  const { parentNode, contains, shadowHost, nodeName } = getNatives();
   let node: any = e.target;
   const key = EVENT_KEY + e.type;
   const oriCurrentTarget = e.currentTarget;
@@ -123,11 +160,15 @@ function eventHandler(e: Event): void {
   const handleNode = (): boolean => {
     const handler = node[key];
     if (handler && node.disabled !== true) {
-      const data = node[`${key}Data`];
-      if (typeof handler === 'function') {
-        if (data !== undefined) handler.call(node, data, e);
-        else handler.call(node, e);
-      } else if (typeof handler.handleEvent === 'function') handler.handleEvent(e);
+      if (isForm(nodeName.call(node)) && (isShadowed(node, key) || isShadowed(node, `${key}Data`))) {
+        reportClobberedHandler(node, key);
+      } else {
+        const data = node[`${key}Data`];
+        if (typeof handler === 'function') {
+          if (data !== undefined) handler.call(node, data, e);
+          else handler.call(node, e);
+        } else if (typeof handler.handleEvent === 'function') handler.handleEvent(e);
+      }
       if (e.cancelBubble) return false;
     }
     if (node instanceof ShadowRoot) {

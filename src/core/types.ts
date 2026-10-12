@@ -6,7 +6,7 @@ export interface Computation<T = any> extends Scope {
 
   /** @internal */
   _effect: boolean;
-  /** @internal F_INIT | F_COMPUTING | F_MISSED | F_REENTERED | F_UNSURE | F_THREW | F_ERRORED (core.ts) */
+  /** @internal F_INIT | F_COMPUTING | F_MISSED | F_REENTERED | F_UNSURE | F_THREW | F_ERRORED | F_STORE | F_PARKED | F_LIVE | F_LIVE_PIN | F_STORE_GATED (core.ts) */
   _flags: number;
   /** @internal write epoch of this node's last value-changing write (0 = never) */
   _writtenAt: number;
@@ -89,6 +89,16 @@ export interface Scope {
   _handlers: ErrorHandler<any>[] | null;
   /** @internal */
   _disposal: Disposable | Disposable[] | null;
+  /**
+   * @internal map.ts: the memo of the mapArray whose rows this scope owns. Set on map scopes only
+   * (never initialised elsewhere: every other node keeps its hidden class). A row's run pulls it
+   * while it is not CLEAN (effects.ts ancestor rule), top-down at this scope's position among the
+   * memo ancestors and only after the whole chain was checked for effects: a row whose item or id
+   * is gone is disposed by that pull instead of running stale (zombie rows). Unlike a memo
+   * ancestor's pull it also WRITES the item/index nodes of the kept rows, so the run walks its
+   * chain again afterwards.
+   */
+  _mapMemo?: Computation;
   append(scope: Scope): void;
   dispose(): void;
 }

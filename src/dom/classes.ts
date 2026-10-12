@@ -47,7 +47,7 @@ export function classTokens(value: unknown, out: Set<string>): void {
   }
   if (typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    for (const key in record) if (key && key !== 'undefined' && key !== 'null' && record[key]) addTokens(key, out);
+    for (const key of Object.keys(record)) if (key && key !== 'undefined' && key !== 'null' && record[key]) addTokens(key, out);
   }
 }
 

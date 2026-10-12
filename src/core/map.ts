@@ -3,9 +3,19 @@
 
 import { DEV } from '../env';
 import { compute, createComputation, createScope, dispose, disposeChildren, handleError, read, scoped, write } from './core';
+import { TRACK } from './symbols';
 import type { Computation, Maybe, ReadSignal, Scope } from './types';
 
 export * from './selector';
+
+/**
+ * frameact (zombie rows): the rows' owner scope points at its map memo, so a row's run pulls a dirty
+ * map first (effects.ts, ancestor rule) — a row whose item or id is gone is disposed, not run.
+ */
+function linkMap<T>(scope: Scope, node: Computation<T>): ReadSignal<T> {
+  scope._mapMemo = node;
+  return read.bind(node) as ReadSignal<T>;
+}
 
 /**
  * Reactive map helper that caches each item by index to reduce unnecessary mapping on updates.
@@ -21,11 +31,13 @@ export function computedMap<Item, MappedItem>(
   map: (value: ReadSignal<Item>, index: number) => MappedItem,
   options?: { id?: string },
 ): ReadSignal<MappedItem[]> {
-  return read.bind(
+  const scope = createScope();
+  return linkMap(
+    scope,
     createComputation<MappedItem[]>(
       [],
       updateMap.bind({
-        _scope: createScope(),
+        _scope: scope,
         _len: 0,
         _list: list,
         _items: [],
@@ -127,11 +139,13 @@ export function computedKeyedMap<Item, MappedItem>(
   map: (value: Item, index: ReadSignal<number>) => MappedItem,
   options?: { id?: string },
 ): ReadSignal<MappedItem[]> {
-  return read.bind(
+  const scope = createScope();
+  return linkMap(
+    scope,
     createComputation<MappedItem[]>(
       [],
       updateKeyedMap.bind({
-        _scope: createScope(),
+        _scope: scope,
         _len: 0,
         _list: list,
         _items: [],
@@ -324,11 +338,13 @@ export function computedKeyedMapBy<Item, Key, Mapped>(
   map: (item: ReadSignal<Item>, index: ReadSignal<number>) => Mapped,
   options?: { id?: string },
 ): ReadSignal<Mapped[]> {
-  return read.bind(
+  const scope = createScope();
+  return linkMap(
+    scope,
     createComputation<Mapped[]>(
       [],
       (updateKeyedMapBy<Item, Key, Mapped>).bind({
-        _scope: createScope(),
+        _scope: scope,
         _len: 0,
         _list: list,
         _keyFn: keyFn,
@@ -591,6 +607,17 @@ export function mapArray<Item, Mapped>(
   options: MapArrayOptions<Item> = {},
 ): ReadSignal<Mapped[]> {
   const keyed = options.keyed ?? true;
+  // A store array (spec §3.5 req. 10): `list()[TRACK]` subscribes the map to the array's shape only
+  // (one link, fired by any index/length write) and returns a plain array of item proxies, iterated
+  // untracked. Item content changes reach the rows through their own leaf reads, never the map.
+  // A plain array has no such key: the symbol read is a miss.
+  const source = list;
+  list = (() => {
+    const l = source();
+    if (l == null) return l;
+    const items = (l as any)[TRACK];
+    return items !== undefined ? items : l;
+  }) as typeof list;
   if (keyed === true) return computedKeyedMap(list, mapFn, options);
   if (keyed === false) return computedMap(list, mapFn, options);
   return computedKeyedMapBy(list, keyed, mapFn, options);

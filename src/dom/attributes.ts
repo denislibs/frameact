@@ -9,6 +9,7 @@ import { SVGNamespace } from './constants';
 import { registerControlledDirectives } from './controlled';
 import { runDirective } from './directives';
 import { setListener } from './events';
+import { getNatives } from './natives';
 import { setStyleProperty } from './styles';
 
 registerControlledDirectives(); // the built-in use:value / use:checked
@@ -79,7 +80,7 @@ function isUnsafeUrl(value: string): boolean {
 
 /** `<script src="data:…">` runs whatever the URL carries, so no `data:` type is safe there. */
 function isScriptDataSrc(node: Element, name: string, value: unknown): boolean {
-  return typeof value === 'string' && node.nodeName.toUpperCase() === 'SCRIPT' && name.toLowerCase() === 'src' && urlScheme(value).scheme === 'data';
+  return typeof value === 'string' && getNatives().nodeName.call(node).toUpperCase() === 'SCRIPT' && name.toLowerCase() === 'src' && urlScheme(value).scheme === 'data';
 }
 
 function isUnsafeAnimationValue(value: string): boolean {
@@ -183,9 +184,11 @@ export function setAttribute(node: Element, name: string, value: unknown): void 
     if (DEV) console.error('[frameact] className= on an element: use class= (className bypasses the token diff).');
     return className(node, value);
   }
-  // Every path that ends in an attribute write (bare names and `attr:`) is checked here.
+  // Every path that ends in an attribute write (bare names and `attr:`) is checked here. The DOM
+  // methods are the prototype natives: a <form> with a descendant named `setAttribute` is still written.
+  const natives = getNatives();
   if (value == null || value === false) {
-    node.removeAttribute(name);
+    natives.removeAttribute.call(node, name);
     return;
   }
   value = stringifyValue(name, value); // stringified once: what is checked is what is written
@@ -193,15 +196,16 @@ export function setAttribute(node: Element, name: string, value: unknown): void 
   const reason = refusal(name, value) ?? (isScriptDataSrc(node, name, value) ? 'url' : null);
   if (reason) {
     report(name, value, reason);
-    node.removeAttribute(name);
-  } else node.setAttribute(name, text);
+    natives.removeAttribute.call(node, name);
+  } else natives.setAttribute.call(node, name, text);
 }
 
 /** Compiler primitive (`xlink:href`, `xml:lang`). */
 export function setAttributeNS(node: Element, namespace: string, name: string, value: unknown): void {
   const local = name.indexOf(':') > -1 ? name.slice(name.indexOf(':') + 1) : name;
+  const natives = getNatives();
   if (value == null || value === false) {
-    node.removeAttributeNS(namespace, local);
+    natives.removeAttributeNS.call(node, namespace, local);
     return;
   }
   value = stringifyValue(name, value);
@@ -209,14 +213,14 @@ export function setAttributeNS(node: Element, namespace: string, name: string, v
   const reason = refusal(name, value);
   if (reason) {
     report(name, value, reason);
-    node.removeAttributeNS(namespace, local);
-  } else node.setAttributeNS(namespace, name, text);
+    natives.removeAttributeNS.call(node, namespace, local);
+  } else natives.setAttributeNS.call(node, namespace, name, text);
 }
 
 /** `bool:name=` and spread booleans. */
 export function setBoolAttribute(node: Element, name: string, value: unknown): void {
-  if (value) node.setAttribute(name, '');
-  else node.removeAttribute(name);
+  if (value) getNatives().setAttribute.call(node, name, '');
+  else getNatives().removeAttribute.call(node, name);
 }
 
 /**
@@ -226,7 +230,7 @@ export function setBoolAttribute(node: Element, name: string, value: unknown): v
  */
 export function setProperty(node: Element, name: string, value: unknown): void {
   const el = node as unknown as Record<string, unknown>;
-  const tag = node.nodeName;
+  const tag = getNatives().nodeName.call(node);
   if ((name === 'value' || name === 'defaultValue') && (tag === 'INPUT' || tag === 'TEXTAREA')) {
     el[name] = value ?? '';
   } else if (name === 'value' && tag === 'SELECT') {

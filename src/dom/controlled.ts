@@ -1,3 +1,4 @@
+import { markLiveRead, pinLive } from '../core/core';
 import { getRunningEffect, isEffectClean, isEffectDisposed, type EffectNode } from '../core/effects';
 import { createMutationEffect } from '../core/frame';
 import { DEV } from '../env';
@@ -227,7 +228,8 @@ function mapCaret(i: number, prev: string, next: string, suffix: number): number
 
 /** Focus is read from the element's own root (its document, or the shadow root it lives in). */
 function isFocused(el: Element): boolean {
-  return (el.getRootNode() as Document | ShadowRoot).activeElement === el;
+  const root = el.getRootNode() as Document | ShadowRoot;
+  return (root.nodeType === 9 ? getNatives().activeElement.call(root as Document) : (root as ShadowRoot).activeElement) === el;
 }
 
 function writeValue(b: ValueBinding, v: unknown): void {
@@ -328,7 +330,7 @@ function onInput(e: Event): void {
 
 /** The deepest focused element (through open shadow roots). */
 function deepActiveElement(doc: Document): Element | null {
-  let active = doc.activeElement;
+  let active = getNatives().activeElement.call(doc);
   while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
   return active;
 }
@@ -428,27 +430,29 @@ function installListeners(doc: Document): void {
   if (installed.has(doc)) return;
   installed.add(doc);
   delegateEvents(['input'], doc);
-  doc.addEventListener('input', swallowWhileForcing, true);
-  doc.addEventListener('compositionend', swallowWhileForcing, true);
-  doc.addEventListener('input', onInput);
-  doc.addEventListener('change', onChange);
-  doc.addEventListener('compositionstart', onCompositionStart);
-  doc.addEventListener('compositionend', onCompositionEnd);
-  doc.addEventListener('focusout', onFocusOut);
-  doc.addEventListener('selectionchange', onSelectionChange);
+  const { addEventListener: add } = getNatives();
+  add.call(doc, 'input', swallowWhileForcing, true);
+  add.call(doc, 'compositionend', swallowWhileForcing, true);
+  add.call(doc, 'input', onInput);
+  add.call(doc, 'change', onChange);
+  add.call(doc, 'compositionstart', onCompositionStart);
+  add.call(doc, 'compositionend', onCompositionEnd);
+  add.call(doc, 'focusout', onFocusOut);
+  add.call(doc, 'selectionchange', onSelectionChange);
 }
 
 onClearDelegated((doc) => {
   if (!installed.has(doc)) return;
   installed.delete(doc);
-  doc.removeEventListener('input', swallowWhileForcing, true);
-  doc.removeEventListener('compositionend', swallowWhileForcing, true);
-  doc.removeEventListener('input', onInput);
-  doc.removeEventListener('change', onChange);
-  doc.removeEventListener('compositionstart', onCompositionStart);
-  doc.removeEventListener('compositionend', onCompositionEnd);
-  doc.removeEventListener('focusout', onFocusOut);
-  doc.removeEventListener('selectionchange', onSelectionChange);
+  const { removeEventListener: remove } = getNatives();
+  remove.call(doc, 'input', swallowWhileForcing, true);
+  remove.call(doc, 'compositionend', swallowWhileForcing, true);
+  remove.call(doc, 'input', onInput);
+  remove.call(doc, 'change', onChange);
+  remove.call(doc, 'compositionstart', onCompositionStart);
+  remove.call(doc, 'compositionend', onCompositionEnd);
+  remove.call(doc, 'focusout', onFocusOut);
+  remove.call(doc, 'selectionchange', onSelectionChange);
 });
 
 // ---- the directive entry (three forms, shared by value and checked) ----
@@ -505,7 +509,12 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
       if (kind.bindings.get(el) === owned && owned.accessor === accessor) kind.bindings.delete(el);
     });
     createMutationEffect(
-      () => ({ v: accessor() }),
+      () => {
+        // A controlled input never waits for a heavy animation (store gate, spec §3.5 req. 7): a
+        // programmatic write and the rollback of rejected input must reach the DOM now.
+        markLiveRead();
+        return { v: accessor() };
+      },
       ({ v }) => {
         kind.write(owned, v);
       },
@@ -518,6 +527,9 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
     b.accessor = null;
     b.live = false;
     b.effect = applying;
+    // The delivering compiler effect is pinned live: the store gate never parks it (nor the other
+    // attributes of the element it groups into this effect — spec §3.5 req. 7).
+    if (applying !== null) pinLive(applying);
     b.delivered = value;
     kind.write(b, value);
   }

@@ -3,4 +3,5 @@ dist
 coverage
 *.log
 bench/reactivity/.upstream/
+bench/store/.out/
 .DS_Store

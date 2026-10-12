@@ -1,3 +1,4 @@
+import { getNatives } from '../../src/dom/natives';
 import { template } from '../../src/dom/template';
 import { DelegatedEvents, getPropAlias, SVG_NS } from '../../src/dom/constants';
 
@@ -18,7 +19,7 @@ it('flag 2 strips the wrapper element (SVG partials)', () => {
 });
 
 it('flag 1 uses importNode (custom elements)', () => {
-  const spy = vi.spyOn(document, 'importNode');
+  const spy = vi.spyOn(getNatives(), 'importNode'); // (the runtime calls the prototype native, not document.importNode)
   const el = template('<my-element>', 1)();
   expect(el.tagName.toLowerCase()).toBe('my-element');
   expect(spy).toHaveBeenCalledTimes(1);
