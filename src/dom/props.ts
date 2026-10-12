@@ -90,6 +90,32 @@ export function mergeProps(...sources: PropsSource[]): any {
   return target;
 }
 
+/**
+ * Split `props` into one object per key list plus the rest, every value a lazy getter onto `props`
+ * (reads stay reactive, nothing is evaluated here). Keys are the own enumerable keys of `props` at
+ * call time: a `mergeProps` result with a function source (a Proxy whose key set may change) is
+ * split by the keys it has now. Solid's `splitProps` without the Proxy branch.
+ */
+export function splitProps<T extends Record<string, any>, const K extends readonly (readonly (keyof T)[])[]>(
+  props: T,
+  ...keys: K
+): [...{ [I in keyof K]: Pick<T, K[I][number]> }, Omit<T, K[number][number]>] {
+  const own = Reflect.ownKeys(props).filter((key) => isOwnProp(props, key)) as (keyof T)[];
+  const taken = new Set<keyof T>();
+  const pick = (list: readonly (keyof T)[]) => {
+    const out: Record<PropertyKey, unknown> = {};
+    for (const key of list) {
+      if (!own.includes(key) || taken.has(key)) continue;
+      taken.add(key);
+      Object.defineProperty(out, key, { configurable: true, enumerable: true, get: () => props[key] });
+    }
+    return out;
+  };
+  const parts = keys.map(pick);
+  parts.push(pick(own.filter((key) => !taken.has(key))));
+  return parts as any;
+}
+
 /** Compiler primitive: frameact has no store proxies, so a shallow read is the value itself. */
 export function readShallow<T>(value: T): T {
   return value;

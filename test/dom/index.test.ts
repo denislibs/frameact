@@ -9,7 +9,7 @@ it('exports the compiler contract (every name the 2.0 compiler imports from modu
   ];
   const authors = [
     'render', 'children', 'HeavyAnimationScope', 'defineDirective', 'clearDelegatedEvents',
-    'addExtraClass', 'removeExtraClass', 'toggleExtraClass', 'setExtraStyles', 'classList',
+    'addExtraClass', 'removeExtraClass', 'toggleExtraClass', 'setExtraStyles', 'classList', 'lazy', 'splitProps',
   ];
   for (const name of [...compiler, ...authors]) {
     expect(typeof (dom as Record<string, unknown>)[name], name).toBe('function');
