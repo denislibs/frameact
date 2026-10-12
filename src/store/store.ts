@@ -511,8 +511,21 @@ export function merge<P extends object>(partial: P): Merger<P> {
 
 type PathPart = PropertyKey | readonly PropertyKey[] | ((item: any, index: number) => boolean);
 
+/**
+ * A path key is a string, a number or a symbol. Anything else (an array from JSON, an object with a
+ * `toString`) is coerced by `obj[key]` — `[['__proto__']]` or `{ toString: () => '__proto__' }` would
+ * reach the `__proto__` setter past the string comparison of `setProperty`.
+ */
+function checkKey(key: unknown): void {
+  const t = typeof key;
+  if (t !== 'string' && t !== 'number' && t !== 'symbol') {
+    throw new TypeError(`[frameact/store] setState: a path key must be a string, number or symbol (got ${key === null ? 'null' : t})`);
+  }
+}
+
 /** `list[3] = x` on a 1-item list would leave holes (For renders them as undefined rows): append with produce. */
 function checkIndex(parent: any, key: PropertyKey): void {
+  checkKey(key);
   if (!Array.isArray(parent) || key === 'length') return;
   const n = typeof key === 'number' ? key : typeof key === 'string' && String(+key) === key ? +key : -1;
   if (n > parent.length) {
@@ -551,6 +564,7 @@ function fanKeys(current: any, part: PathPart): readonly PropertyKey[] | null {
 
 /** The child object at an OWN key (an inherited `__proto__`, `constructor`… is never descended into). */
 function descend(current: any, key: PropertyKey): any {
+  checkKey(key);
   const child = Object.hasOwn(current, key) ? current[key] : undefined;
   if (child === null || typeof child !== 'object' || child === Object.prototype || child === Array.prototype) {
     throw new TypeError(`[frameact/store] setState: nothing to descend into at "${String(key)}" (${String(child)})`);

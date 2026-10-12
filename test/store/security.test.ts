@@ -2,7 +2,7 @@
 // Object.prototype / Array.prototype, nor change the prototype of a store object; the DOM class/style
 // bindings must not read inherited keys either.
 import { createEffect, createRoot, flushSync } from '../../src/index';
-import { createStore, merge, produce, reconcile, snapshot } from 'frameact/store';
+import { createStore, merge, produce, reconcile, snapshot, unwrap } from 'frameact/store';
 import { classTokens } from '../../src/dom/classes';
 import { style } from '../../src/dom/styles';
 
@@ -232,7 +232,53 @@ it('a store read in an effect is unaffected by the dropped key', () => {
   expect(seen).toEqual(['a', 't2']);
 });
 
-import { unwrap } from 'frameact/store';
 function unwrapRaw<T>(v: T): any {
   return unwrap(v);
 }
+
+// N1: a path key that is not a string/number/symbol but coerces to "__proto__" (an array from JSON, an
+// object with toString / Symbol.toPrimitive) must never reach `raw[key] = value`.
+describe('path keys that coerce to __proto__', () => {
+  const coercing: [string, () => any][] = [
+    ['nested array', () => [['__proto__']]],
+    ['toString', () => ({ toString: () => '__proto__' })],
+    ['Symbol.toPrimitive', () => ({ [Symbol.toPrimitive]: () => '__proto__' })],
+  ];
+  const mk = () => createStore<any>({ x: {}, list: [1], deep: { y: {} } });
+  const intact = (s: any) => {
+    const raw = unwrap(s);
+    expect(Object.getPrototypeOf(raw.x)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(raw.list)).toBe(Array.prototype);
+    expect(Object.getPrototypeOf(raw.deep.y)).toBe(Object.prototype);
+    clean();
+  };
+  it.each(coercing)('%s as the last key (object, array), fanned out, and as a descent key: TypeError', (_n, k) => {
+    const [s, set0] = mk();
+    const set = set0 as (...a: any[]) => void;
+    expect(() => set('x', k(), evil('{"p":1}'))).toThrow(TypeError);
+    expect(() => set('list', k(), evil('{"p":1}'))).toThrow(TypeError);
+    expect(() => set('x', [k()], evil('{"p":1}'))).toThrow(TypeError);
+    expect(() => set('list', [k()], evil('{"p":1}'))).toThrow(TypeError);
+    expect(() => set('x', [0, k()] as any, 1)).toThrow(TypeError);
+    expect(() => set(k(), 'y', 1)).toThrow(TypeError);
+    expect(() => set('deep', [k()], 'p', 1)).toThrow(TypeError);
+    expect(() => set('x', k(), merge({ p: 1 }))).toThrow(TypeError);
+    intact(s);
+    expect((s as any).x.p).toBeUndefined();
+  });
+  it('a bad key in a fan-out applies nothing', () => {
+    const [s, set] = createStore<any>({ a: { v: 0 }, b: { v: 0 } });
+    expect(() => set(['a', ['b'] as any], 'v', 1)).toThrow(TypeError);
+    expect((s as any).a.v).toBe(0);
+  });
+  it('numbers, strings and symbols still work as keys', () => {
+    const sym = Symbol('s');
+    const [s, set] = createStore<any>({ o: {}, l: [1, 2] });
+    set('o', sym, 1);
+    set('o', 'k', 2);
+    set('l', 1, 9);
+    expect((s as any).o[sym]).toBe(1);
+    expect((s as any).o.k).toBe(2);
+    expect((s as any).l[1]).toBe(9);
+  });
+});
