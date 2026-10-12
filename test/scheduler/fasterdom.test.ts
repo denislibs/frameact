@@ -94,3 +94,33 @@ it('flushSync is not reentrant', () => {
   flushSync();
   expect(String(thrown)).toMatch(/reentrant/);
 });
+
+it('flushSync inside a rAF pass segment throws instead of interleaving the phases; the pass completes', async () => {
+  const log: string[] = [];
+  let thrown: unknown;
+  requestMeasure(() => {
+    try { flushSync(); } catch (error) { thrown = error; }
+    log.push('measure:' + getPhase());
+  });
+  requestMutation(() => log.push('mutate:' + getPhase()));
+  await frame();
+  expect(String(thrown)).toMatch(/not reentrant: it was called inside a frame pass/);
+  expect(log).toEqual(['measure:measure', 'mutate:mutate']);
+  expect(getPhase()).toBe('measure');
+});
+
+it('flushSync from a microtask between two rAF segments (a tickEnd drain) is outside the pass: it runs, draining the pending rAF work too', async () => {
+  const log: string[] = [];
+  requestMeasure(() => {
+    // queued during the measure segment: runs before the mutate segment's microtask
+    void Promise.resolve().then(() => {
+      requestMutation(() => log.push('sync-mutate:' + getPhase()));
+      flushSync();
+      log.push('after-sync:' + getPhase());
+    });
+  });
+  requestMutation(() => log.push('raf-mutate:' + getPhase()));
+  await frame();
+  // the rAF's own mutation was still pending: the sync pass took it along (FIFO); the rAF's mutate segment then found an empty queue
+  expect(log).toEqual(['raf-mutate:mutate', 'sync-mutate:mutate', 'after-sync:measure']);
+});

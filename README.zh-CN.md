@@ -77,7 +77,8 @@ createIdleEffect(() => expanded(), () => prefetchDetails());
 - 在 measure 的 apply 中写入的信号，**在同一帧** 内到达 mutation effect；
 - mutate 阶段计算过程中产生的写入（例如带 key 的列表更新其行）会进入 **同一轮处理**；
 - 在 mutate 阶段被弄脏的 measure effect 会在下一帧运行（开发模式下会给出警告）；
-- `frameForcedReflow` 用于少见的 "mutate → measure → mutate"（FLIP）场景，仍然在同一帧内完成。
+- `frameForcedReflow` 用于少见的 "mutate → measure → mutate"（FLIP）场景，仍然在同一帧内完成；
+- `flushSync()` 在当前任务必须立即看到 DOM 时同步提交一帧（iOS 返回手势、View Transition 回调）：可在事件处理器、store action 和 tickEnd effect 中调用；在帧处理过程内部调用会抛出错误。
 
 重动画：
 

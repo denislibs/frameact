@@ -83,7 +83,9 @@ What the frame guarantees:
 - a signal written in a measure apply reaches mutation effects **in the same frame**;
 - writes made while computing in the mutate phase (e.g. a keyed list updating its rows) land **in the same drain**;
 - a measure effect dirtied from the mutate phase runs next frame (and warns in dev);
-- `frameForcedReflow` for the rare "mutate → measure → mutate" (FLIP) case, still inside one frame.
+- `frameForcedReflow` for the rare "mutate → measure → mutate" (FLIP) case, still inside one frame;
+- `flushSync()` commits the frame synchronously when the current task must see the DOM (an iOS swipe-back gesture, a View
+  Transition callback): allowed from event handlers, store actions and tickEnd effects; inside a frame pass it throws.
 
 Heavy animations:
 
