@@ -599,6 +599,7 @@ function initScope(node: Scope) {
 
 const ScopeNode = function Scope(this: Scope) {
   initScope(this);
+  this._mapMemo = undefined; // one hidden class for every ScopeNode (map scopes included)
   if (currentScope) currentScope.append(this);
 };
 
