@@ -16,7 +16,7 @@ import {
 import { getPhase, requestForcedReflow, requestMeasure, requestMutation } from '../scheduler/fasterdom';
 import { closeGateSample, firstAnimatingScope, isAnyScopeBlocking, onFullyIdle, openGateSample, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
 import { computed, signal } from './signals';
-import { describeNode, effectPath } from './debug';
+import { describeNode, effectPath, reportDevHookError } from './debug';
 
 export type FramePhase = 'measure' | 'mutate' | 'reflow';
 
@@ -180,7 +180,13 @@ export function drain(phase: FramePhase) {
     armed[phase] = false;
     if (DEV) {
       drainingPhase = outerDraining;
-      if (drainObserver !== null) drainObserver(phase, performance.now() - t0, runs);
+      if (drainObserver !== null) {
+        try {
+          drainObserver(phase, performance.now() - t0, runs);
+        } catch (error) {
+          reportDevHookError('drain observer', error); // (the overflow below must still move on)
+        }
+      }
     }
   }
   if (overflow !== null) for (let i = 0; i < overflow.length; i++) push(phase, overflow[i]);

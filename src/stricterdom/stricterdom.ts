@@ -6,7 +6,7 @@
 import { DEV } from '../env';
 import { getPhase, onPhaseChange, type Phase } from '../scheduler/fasterdom';
 import { getRunningEffect, setApplyHook } from '../core/effects';
-import { effectPath } from '../core/debug';
+import { effectPath, reportDevHookError } from '../core/debug';
 import { getNatives } from '../dom/natives';
 import { strictHooks } from '../dom/strict';
 import { LAYOUT_CAUSES } from './layoutCauses';
@@ -272,7 +272,7 @@ function drainRecordsAs(phase: Phase) {
     if (records.length) checkRecords(records, phase);
   } catch (error) {
     // Called from a phase listener and around applies: nothing here may throw into fasterdom or the core.
-    console.error('[frameact/stricterdom] checking mutation records failed', error);
+    reportDevHookError('stricterdom: checking mutation records', error);
   }
 }
 
@@ -300,8 +300,8 @@ function checkRecords(records: MutationRecord[], phase: Phase) {
     try {
       onError(new StrictViolationError('mutation', detail, phase, path, target));
     } catch (error) {
-      // A throwing handler must not break a drain or the observer callback.
-      console.error(error);
+      // A throwing handler must not break a drain or the observer callback (nor a throwing console.error under it).
+      reportDevHookError('stricterdom violation handler', error);
     }
   }
 }

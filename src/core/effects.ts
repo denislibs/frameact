@@ -93,9 +93,17 @@ export function setRunObserver(fn: RunObserver | null) {
  * DEV: called twice around every apply — right before it, while `currentEffect` is still the
  * enclosing effect (or null), and at its end, while `currentEffect` is the effect. stricterdom drains
  * mutation records at both points, so a write is attributed to the effect whose apply made it, never
- * to the next apply that happens to drain it. Must not throw (it runs where `currentEffect` is swapped).
+ * to the next apply that happens to drain it. A throw is contained (reported), so `currentEffect` is always restored.
  */
 let applyHook: ((node: EffectNode) => void) | null = null;
+/** DEV: the hook, contained — a throwing hook (or a throwing `console.error` under it) must not leave `currentEffect` swapped. Never throws. */
+function runApplyHook(node: EffectNode) {
+  try {
+    applyHook!(node);
+  } catch (error) {
+    reportDevHookError('apply hook', error);
+  }
+}
 /** @internal stricterdom (DEV only; a no-op in prod). */
 export function setApplyHook(fn: ((node: EffectNode) => void) | null) {
   if (DEV) applyHook = fn;
@@ -455,7 +463,7 @@ function applyEffect(node: EffectNode) {
   const cleanup = node._applyCleanup;
   node._applyCleanup = null;
   const outer = currentEffect;
-  if (DEV && applyHook !== null) applyHook(node); // records made before this apply belong to the context around it
+  if (DEV && applyHook !== null) runApplyHook(node); // records made before this apply belong to the context around it
   currentEffect = node;
   const outerInApply = DEV ? setInEffectApply(true) : false;
   try {
@@ -485,7 +493,7 @@ function applyEffect(node: EffectNode) {
   } finally {
     if (DEV) {
       setInEffectApply(outerInApply);
-      if (applyHook !== null) applyHook(node); // still attributed to this effect
+      if (applyHook !== null) runApplyHook(node); // still attributed to this effect (never throws: the restore below always runs)
     }
     currentEffect = outer;
   }

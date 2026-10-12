@@ -1,3 +1,4 @@
+import { getRunningEffect } from '../../src/core/effects';
 import { createEffect, createMutationEffect, createRoot, createSignal, flushSync, requestMeasure, requestMutation } from '../../src/index';
 import { flushSync as flushFrame } from '../../src/scheduler/fasterdom';
 import { createComponent } from '../../src/dom/component';
@@ -362,4 +363,21 @@ it('document clobbering (content-named `contains` / `body` on document) does not
     delete (document as { contains?: unknown }).contains;
     delete (document as { body?: unknown }).body;
   }
+});
+
+it('a throwing console.error (a "fail on console" setup) with the default handler leaves no effect swapped in and breaks no flush', async () => {
+  const el = attached();
+  setHandler(); // the default handler: console.error(error)
+  vi.spyOn(console, 'error').mockImplementation(() => { throw new Error('console.error is forbidden'); });
+  const [n, setN] = createSignal(0);
+  testRoot(() => {
+    createEffect(() => n(), (v) => { el.className = `c${v}`; }, undefined, { name: 'logic' });
+  });
+  expect(() => flushSync()).not.toThrow(); // the violation is reported inside the apply hook, which must contain a throwing handler
+  expect(getRunningEffect()).toBeNull();
+  setN(1);
+  expect(() => flushSync()).not.toThrow();
+  expect(getRunningEffect()).toBeNull();
+  await flushMicrotasks();
+  expect(el.className).toBe('c1'); // the applies ran
 });
