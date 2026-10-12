@@ -65,16 +65,21 @@ export function currentOrPrev<T>(source: Accessor<T>, options?: CurrentOrPrevOpt
 export function frozenWhile<T>(source: Accessor<T>, frozen: Accessor<boolean>, alwaysFresh?: readonly (keyof T & string)[]): Accessor<T> {
   let held: T;
   let holding = false;
+  // The source as of the last pass that was not frozen: when the freeze and a change of the source
+  // arrive in one write (a modal closes and its data vanishes together), the first frozen pass
+  // already sees the new value, but the one to hold is the value from before that write.
+  let lastUnfrozen: T;
+  let hasUnfrozen = false;
   return createMemo(() => {
     const isFrozen = frozen();
     if (!isFrozen) {
       holding = false;
-      return source();
+      hasUnfrozen = true;
+      return (lastUnfrozen = source());
     }
     if (!holding) {
-      held = source();
+      held = hasUnfrozen ? lastUnfrozen : source();
       holding = true;
-      if (!alwaysFresh?.length) return held;
     }
     if (!alwaysFresh?.length) return held;
     const current = source();

@@ -116,4 +116,27 @@ describe('frozenWhile', () => {
     flushSync();
     expect(plain).toEqual([1, 2]);
   });
+
+  it('a freeze and a change that arrive in the same write keep the value from before that write', () => {
+    const [data, setData] = createSignal<{ title: string } | undefined>({ title: 'chat' });
+    const log = observe(frozenWhile(data, () => data() === undefined));
+    setData(undefined);
+    flushSync();
+    expect(log).toEqual([{ title: 'chat' }]); // the closing modal still shows its data
+    setData({ title: 'other' });
+    flushSync();
+    expect(log.at(-1)).toEqual({ title: 'other' });
+  });
+
+  it('alwaysFresh: the held object is the one from before the write that froze it', () => {
+    const [p, setP] = createSignal({ title: 'a', unread: 0 });
+    const [frozen, setFrozen] = createSignal(false);
+    const log = observe(frozenWhile(p, frozen, ['unread']));
+    setP({ title: 'b', unread: 1 });
+    flushSync();
+    setFrozen(true);
+    setP({ title: 'c', unread: 2 }); // frozen and changed in one go
+    flushSync();
+    expect(log.at(-1)).toEqual({ title: 'b', unread: 2 });
+  });
 });
