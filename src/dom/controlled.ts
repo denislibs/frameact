@@ -2,7 +2,7 @@ import { getRunningEffect, isEffectClean, isEffectDisposed, type EffectNode } fr
 import { createMutationEffect } from '../core/frame';
 import { DEV } from '../env';
 import { getOwner, onCleanup, untrack } from '../index';
-import { requestMutation } from '../scheduler/fasterdom';
+import { getPhase, requestMutation } from '../scheduler/fasterdom';
 import { defineBuiltinDirective } from './directives';
 import { delegateEvents, onClearDelegated } from './events';
 import { getNatives } from './natives';
@@ -558,6 +558,11 @@ export function registerControlledDirectives(): void {
  * document in the capture phase, so the commit an engine fires inside `blur()` never reaches app
  * handlers. An element without a `use:value` binding just gets `el.value = value` (and a DEV warning).
  *
+ * Call it synchronously from a user event handler (click or Enter on "Send"): from an effect apply
+ * (the mutate phase) `focus()` forces a layout, and without user activation iOS Safari and Android
+ * Chrome do not bring the keyboard back after the refocus. DEV warns about both when a composition is
+ * active. Without a composition it is a plain write, fine in any phase.
+ *
  * Side effects of the cycle: the app's `blur`, `focusout`, `focus` and `focusin` handlers DO fire
  * (`relatedTarget` is null, as for any blur); `isForcingControlledValue(el)` tells them apart.
  */
@@ -568,9 +573,26 @@ export function forceControlledValue(el: HTMLInputElement | HTMLTextAreaElement 
     if (value !== undefined) el.value = toText(value);
     return;
   }
-  const next = toText(value === undefined ? current(b) : value);
   const wasComposing = b.composing;
   const focused = isFocused(el);
+  if (DEV) {
+    if (wasComposing && focused) {
+      const inactive = typeof navigator !== 'undefined' && (navigator as { userActivation?: { isActive: boolean } }).userActivation?.isActive === false;
+      if (getPhase() === 'mutate' || inactive) {
+        console.warn(
+          `[frameact] forceControlledValue cancels an IME composition (blur + focus) and must run synchronously inside a user event handler (click or Enter on Send)${getPhase() === 'mutate' ? ', not from an effect apply (the mutate phase)' : ': the page has no active user activation, so a mobile browser may not bring the keyboard back'}.`,
+          el,
+        );
+      }
+    }
+    if (value === undefined && b.accessor === null && b.effect !== null && !isEffectClean(b.effect)) {
+      console.error(
+        '[frameact] forceControlledValue(el) without `value` in the plain form: the compiler effect has not delivered the new value yet, so the stale one would be written. Pass `value` explicitly.',
+        el,
+      );
+    }
+  }
+  const next = toText(value === undefined ? current(b) : value);
   b.composing = false;
   b.deferredWrite = false;
   b.cancelled = wasComposing;

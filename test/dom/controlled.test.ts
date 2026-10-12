@@ -1,4 +1,4 @@
-import { createHeavyAnimationScope, createRoot, createSignal, provideHeavyAnimationScope } from '../../src/index';
+import { createHeavyAnimationScope, createRoot, createSignal, provideHeavyAnimationScope, requestMutation } from '../../src/index';
 import { setAttribute } from '../../src/dom/attributes';
 import { effect } from '../../src/dom/component';
 import { forceControlledValue } from '../../src/dom';
@@ -876,6 +876,22 @@ describe('M9: coverage', () => {
   });
 });
 
+function composingInput() {
+  const input = textInput();
+  const { setText } = controlled(input, acceptAll, '');
+  input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+  compose(input, 'hello');
+  setText('');
+  return input;
+}
+
+function plain() {
+  const input = textInput();
+  const [text, setText] = createSignal('a');
+  createRoot(() => effect(() => text(), (v) => { setAttribute(input, 'use:value', v); }));
+  return { input, setText };
+}
+
 function preventError(e: ErrorEvent) {
   e.preventDefault();
 }
@@ -994,6 +1010,72 @@ describe('forceControlledValue: explicit write-through (Android "Send -> clear")
     expect(log).toEqual([true, true, true, false, true]);
     expect(isForcingControlledValue()).toBe(false);
     expect(isForcingControlledValue(input)).toBe(false);
+  });
+
+  describe('R-3: calling contract (DEV warnings)', () => {
+    it('warns when a composition is cancelled from the mutate phase (an effect, not a user event)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const input = composingInput();
+      requestMutation(() => forceControlledValue(input));
+      await frame();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain('user event');
+      warn.mockRestore();
+    });
+
+    it('warns when the page has no active user activation (iOS / Android would not bring the keyboard back)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      Object.defineProperty(navigator, 'userActivation', { value: { isActive: false }, configurable: true });
+      try {
+        forceControlledValue(composingInput());
+        expect(warn).toHaveBeenCalledTimes(1);
+        Object.defineProperty(navigator, 'userActivation', { value: { isActive: true }, configurable: true });
+        forceControlledValue(composingInput());
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        delete (navigator as any).userActivation;
+        warn.mockRestore();
+      }
+    });
+
+    it('does not warn without a composition: a plain write is fine in any phase', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      Object.defineProperty(navigator, 'userActivation', { value: { isActive: false }, configurable: true });
+      try {
+        const input = textInput();
+        controlled(input, acceptAll, 'ab');
+        requestMutation(() => forceControlledValue(input, 'x'));
+        await frame();
+        expect(input.value).toBe('x');
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        delete (navigator as any).userActivation;
+        warn.mockRestore();
+      }
+    });
+  });
+
+  describe('R-4: plain form without value (DEV error)', () => {
+    it('errors when the compiler effect has not delivered the new value yet', () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { input, setText } = plain();
+      setText('');
+      forceControlledValue(input);
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(String(err.mock.calls[0]![0])).toContain('Pass `value`');
+      err.mockRestore();
+    });
+
+    it('is quiet with an explicit value, or once the effect is clean', async () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { input, setText } = plain();
+      setText('b');
+      forceControlledValue(input, 'b');
+      await frame();
+      forceControlledValue(input);
+      expect(err).not.toHaveBeenCalled();
+      err.mockRestore();
+    });
   });
 
   it('drops a deferred programmatic write: nothing is applied behind the explicit value', async () => {
