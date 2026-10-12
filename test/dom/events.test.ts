@@ -128,6 +128,26 @@ describe('delegation survives DOM clobbering (forms with named inputs)', () => {
     expect(outerCalls).toHaveBeenCalledTimes(1);
   });
 
+  it('an own `_$host` accessor or data property on a node is not a portal host: the walk reaches the real ancestors', () => {
+    const logicalParent = container();
+    const outer = container();
+    const middle = document.createElement('div');
+    const accessorNode = document.createElement('span');
+    const dataNode = document.createElement('b');
+    middle.append(accessorNode, dataNode);
+    outer.appendChild(middle);
+    Object.defineProperty(accessorNode, '_$host', { get: () => logicalParent, configurable: true });
+    (dataNode as any)['_$host'] = logicalParent;
+    const log: string[] = [];
+    addEvent(logicalParent, 'click', () => log.push('logical'), true);
+    addEvent(middle, 'click', () => log.push('middle'), true);
+    addEvent(outer, 'click', () => log.push('outer'), true);
+    delegateEvents(['click']);
+    click(accessorNode);
+    click(dataNode);
+    expect(log).toEqual(['middle', 'outer', 'middle', 'outer']);
+  });
+
   it('cross-linked forms (form= attribute) cannot redirect or loop the walk: named controls are never hosts', () => {
     const rootA = container();
     const rootB = container();

@@ -305,8 +305,15 @@ export function portalHostOf(node: Node): Node | null {
   return tag !== undefined && getNatives().parentNode.call(node) === tag.parent ? tag.host() : null;
 }
 
-/** Test seam: register `node` as portal content hosted by `host` while it is a child of `parent` (default: its current parent). */
-export function tagPortalHost(node: Node, host: () => Node | null, parent: MountableElement = node.parentNode as MountableElement): void {
+/**
+ * @internal Test seam: register `node` as portal content hosted by `host` while it is a child of
+ * `parent` (default: its current native parent).
+ */
+export function tagPortalHost(
+  node: Node,
+  host: () => Node | null,
+  parent: MountableElement = getNatives().parentNode.call(node) as MountableElement,
+): void {
   portalHosts.set(node, { parent, host });
 }
 
