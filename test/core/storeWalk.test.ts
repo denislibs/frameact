@@ -7,6 +7,7 @@ import {
   createSignal, flushSync, provideHeavyAnimationScope, type HeavyAnimationScope,
 } from '../../src/index';
 import { markLiveRead } from '../../src/core/core';
+import { createMeasureEffect, frameForcedReflow, gateOnHeavyAnimation, tickEnd } from '../../src/index';
 import { leaf } from './helpers/storeLeaf';
 import { useDomHarness } from '../helpers/dom';
 import { flushMicrotasks } from '../helpers/micro';
@@ -157,7 +158,7 @@ it('no torn reads: a leaf and a shared memo over another leaf (pulled meanwhile 
     b.set(2);
     await settle();
     expect(outside).toEqual([10, 20]); // the outside reader pulled the shared memo during the animation
-    expect(log).toEqual(['a=1 b*10=10 l=0']); // still parked: the memo's store-caused result write did not wake it
+    expect(log).toEqual(['a=1 b*10=10 l=0']); // still parked: pulling the shared memo from outside only turns the parked effect's dirty state, it books no run
     setL(1);
     await settle();
     expect(log).toEqual(['a=1 b*10=10 l=0', 'a=2 b*10=20 l=1']);
@@ -166,7 +167,7 @@ it('no torn reads: a leaf and a shared memo over another leaf (pulled meanwhile 
   }
 });
 
-it('a memo recomputed for a plain reason writes its result as a plain walk: store-only readers below it run now', async () => {
+it('a plain write below a store-dirtied memo: the plain walk unparks the effect, which reads the store current (store and local changes in one run)', async () => {
   const s = leaf(1);
   const [l, setL] = createSignal(1);
   const scope = createHeavyAnimationScope();
@@ -180,7 +181,7 @@ it('a memo recomputed for a plain reason writes its result as a plain walk: stor
     s.set(2); // store-only: parked at run time
     await settle();
     expect(log).toEqual([2]);
-    setL(2); // plain: descends through the memo, unparks, the effect reads s = 2 too
+    setL(2); // plain: descends through the memo (store-tagged, already dirty), unparks; the effect reads s = 2 too
     await settle();
     expect(log).toEqual([2, 4]);
   } finally {
@@ -421,4 +422,138 @@ it('a write made before the animation started but run after it is parked (decide
   }
   await settle();
   expect(log).toEqual([0, 1]);
+});
+
+it('a gateOnHeavyAnimation(tickEnd) effect is store-gated: a run due at the time the animation began parks, release re-books it', async () => {
+  const n = leaf(0);
+  const scope = createHeavyAnimationScope();
+  const log: number[] = [];
+  const plainLog: number[] = [];
+  inScope(scope, () => {
+    createEffect(() => n.get(), (v) => { log.push(v); }, gateOnHeavyAnimation(tickEnd));
+    createEffect(() => n.get(), (v) => { plainLog.push(v); }, tickEnd); // not opted in: logic is never gated
+  });
+  flushSync();
+  expect(log).toEqual([0]);
+  n.set(1); // booked on the (idle) gated schedule: not animating yet
+  const end = scope.begin(Infinity); // the animation begins before the booked run executes
+  try {
+    await settle();
+    expect(plainLog).toEqual([0, 1]);
+    expect(log).toEqual([0]); // parked
+  } finally {
+    end();
+  }
+  await settle();
+  expect(log).toEqual([0, 1]);
+});
+
+it('measure and forced-reflow effects are store-gated like mutation effects', async () => {
+  const n = leaf(0);
+  const scope = createHeavyAnimationScope();
+  const measure: number[] = [];
+  const reflow: number[] = [];
+  inScope(scope, () => {
+    createMeasureEffect(() => n.get(), (v) => { measure.push(v); });
+    createEffect(() => n.get(), (v) => { reflow.push(v); }, frameForcedReflow);
+  });
+  await settle();
+  expect(measure).toEqual([0]);
+  expect(reflow).toEqual([0]);
+  const end = scope.begin(Infinity);
+  try {
+    n.set(1);
+    await settle();
+    expect(measure).toEqual([0]);
+    expect(reflow).toEqual([0]);
+  } finally {
+    end();
+  }
+  await settle();
+  expect(measure).toEqual([0, 1]);
+  expect(reflow).toEqual([0, 1]);
+});
+
+it('a plain write made by a synchronous effect inside a store walk is a plain walk: the readers below it are not parked', async () => {
+  const n = leaf(0);
+  const [mirror, setMirror] = createSignal(0);
+  const scope = createHeavyAnimationScope();
+  const log: number[] = [];
+  inScope(scope, () => {
+    createEffect(() => n.get(), (v) => { setMirror(v); }, (run) => run()); // runs inside leaf.set's walk
+    view(log, () => mirror());
+  });
+  flushSync();
+  const end = scope.begin(Infinity);
+  try {
+    n.set(1);
+    await settle();
+    expect(log).toEqual([0, 1]); // the mirror's change is a plain one: not held for the animation
+  } finally {
+    end();
+  }
+});
+
+it('a store write latched by the writer itself is re-delivered as a plain walk: the writer re-runs now, not at release', async () => {
+  const n = leaf(9);
+  const [tick, setTick] = createSignal(0);
+  const scope = createHeavyAnimationScope();
+  const log: number[] = [];
+  inScope(scope, () => {
+    createMutationEffect(() => {
+      tick();
+      const v = n.get();
+      if (v > 5) n.set(5); // clamps its own input after reading it: the write lands on the running node
+      log.push(v);
+      return v;
+    }, () => {});
+  });
+  await settle();
+  expect(log[log.length - 1]).toBe(5);
+  const end = scope.begin(Infinity);
+  try {
+    n.set(9);
+    await settle();
+    expect(log[log.length - 1]).toBe(5); // (store-caused: parked, nothing ran)
+    const runs = log.length;
+    setTick(1); // a plain run: reads 9, clamps to 5, is re-delivered
+    await settle();
+    expect(log.slice(runs)).toEqual([9, 5]);
+  } finally {
+    end();
+  }
+});
+
+it('many park / unpark cycles in one animation: the effect is released exactly once, in first-park order, and a disposed one is skipped', async () => {
+  const s = leaf(0);
+  const [l, setL] = createSignal(0);
+  const scope = createHeavyAnimationScope();
+  const order: string[] = [];
+  const mine: string[] = [];
+  const [other, setOther] = createSignal(0);
+  inScope(scope, () => {
+    view(order, () => `first:${s.get()}:${l()}`);
+    view(order, () => `second:${s.get()}`);
+    view(mine, () => `gone:${s.get()}`);
+  });
+  const disposeGone = createRoot((d) => { provideHeavyAnimationScope(scope); view([], () => `x:${s.get()}:${other()}`); return d; });
+  await settle();
+  const base = order.length;
+  const end = scope.begin(Infinity);
+  try {
+    for (let i = 1; i <= 100; i++) {
+      s.set(i); // parks (first, second, the other root's view)
+      await settle();
+      setL(i); // a plain write unparks `first` only: it runs now
+      await settle();
+    }
+    disposeGone();
+    expect(order.length - base).toBe(100); // 100 plain runs of `first`; nothing else ran
+  } finally {
+    end();
+  }
+  setOther(1);
+  await settle();
+  const released = order.slice(base + 100);
+  expect(released).toEqual(['second:100']); // `first` was current (ran plain), `second` runs once; the disposed one is skipped
 });

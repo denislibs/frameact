@@ -8,7 +8,8 @@
 //  3. local updates are never gated: an effect whose local dep changed, and every child whose local
 //     signal changed, is current after the next flush;
 //  4. liveness: an effect whose scope chain is not animating is current after every flush.
-// FUZZ_SEED=<n> runs one seed; FUZZ_N=<n> the first n seeds (default 300; 10 000 were checked once).
+// FUZZ_SEED=<n> runs one seed; FUZZ_N=<n> the first n seeds (default 300; 20 000 take about 5 s — more than
+// the 5 s default test timeout from ~25 000 seeds on, so run bigger ones with `--testTimeout=0`).
 import {
   createHeavyAnimationScope, createMemo, createMutationEffect, createRoot, createSignal, flushSync,
   provideHeavyAnimationScope, untrack, type HeavyAnimationScope,
