@@ -5,10 +5,12 @@
 //   2. a FORCED-REFLOW effect on the same `items` runs after the mutate drain of that frame: it reads
 //      the anchor's new position and writes the corrected scrollTop through a signal, which a mutation
 //      effect applies in the forced-reflow mutate phase of the SAME frame (no flash of the wrong offset).
+// A restore only acts on a snapshot taken for the SAME change (a change written in the mutate phase has
+// no snapshot in its frame: the anchor only re-bases its position then).
 // Under heavy-animation parking the three effects park together and are released in one frame in
 // phase order (the store-gate release goes through a measure task — audit R1): create the anchor under
 // the same heavy-animation scope as the list it anchors, so that they park and release together.
-import { createEffect, createMeasureEffect, createMutationEffect, createSignal, frameForcedReflow, untrack, type Accessor } from '../index';
+import { createEffect, createMeasureEffect, createMemo, createMutationEffect, createSignal, frameForcedReflow, untrack, type Accessor } from '../index';
 import { TRACK } from '../core/symbols';
 
 /**
@@ -70,12 +72,23 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
     return elements;
   }
 
-  const tracked = () => trackItems(items());
+  // One number per change of the list (identity, or shape of a store array), shared by the effects below.
+  let changes = 0;
+  const tracked = createMemo(() => {
+    trackItems(items());
+    return ++changes;
+  });
+  // The change the last snapshot was taken for. A restore is only valid against a snapshot of ITS change:
+  // when the items are written in the mutate phase (an `onStop` run from a mutation task, a store write
+  // from a mutation apply) the measure effect cannot run in that frame (it moves to the next), and
+  // `anchorTop` is the position from some earlier change, with the user's scrolling in between.
+  let snapshotOf = 0;
 
   // 1. Before the update (measure phase of the frame the items change).
   createMeasureEffect(
     tracked,
-    () => {
+    (change) => {
+      snapshotOf = change;
       const current = query();
       if (anchor === undefined || !current.includes(anchor)) anchor = current[0];
       if (anchor) anchorTop = anchor.getBoundingClientRect().top;
@@ -86,13 +99,13 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
   // 2. After the update (forced-reflow phase of the same frame).
   createEffect(
     tracked,
-    () => {
+    (change) => {
       const el = untrack(container);
       const current = query();
       if (!el) return;
       if (anchor !== undefined && current.includes(anchor)) {
         const newTop = anchor.getBoundingClientRect().top;
-        const delta = newTop - anchorTop;
+        const delta = snapshotOf === change ? newTop - anchorTop : 0; // no snapshot for this change: re-base only
         anchorTop = newTop;
         if (delta !== 0 && !untrack(() => noScrollRestore?.()) && !(untrack(() => noScrollRestoreOnTop?.()) && el.scrollTop === 0)) {
           setScrollTopFix({ top: el.scrollTop + delta });

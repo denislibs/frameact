@@ -6,7 +6,7 @@
 // Proxy handler of that object (the traps reach its fields through `this`: no lookup on the read path).
 import { DEV } from '../env';
 import { createLeafNode, getObserver, markLiveRead, setLeafOrphanHook, trackNode, writeStoreNode } from '../core/core';
-import { TRACK } from '../core/symbols';
+import { SHAPE, TRACK } from '../core/symbols';
 import type { Computation } from '../core/types';
 
 /** Read on a store proxy: the raw object behind it (see unwrap). */
@@ -112,6 +112,7 @@ class StoreNode {
       // (the service keys are never on the target)
       if (key === $RAW) return target;
       if (key === $TRACK) return Array.isArray(target) ? trackedItems(this) : undefined;
+      if (key === SHAPE) return Array.isArray(target) ? shapeVersion(this) : undefined;
     }
     const isObj = typeof value === 'object' && value !== null;
     if (isObj && key === PROTO_KEY) return undefined; // never hand out Object.prototype / Array.prototype
@@ -256,6 +257,12 @@ function trackedItems(node: StoreNode): unknown[] {
     out[i] = typeof v === 'object' && v !== null ? wrap(v) : v;
   }
   return out;
+}
+
+/** `SHAPE` read: subscribe to the shape (one link), return its version: O(1), no copy. */
+function shapeVersion(node: StoreNode): number {
+  trackSelf(node);
+  return node.shape;
 }
 
 function wrap(value: object): any {
