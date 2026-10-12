@@ -8,3 +8,7 @@ export {
   type ShowTransitionOptions, type ShowTransitionResult, type ShowTransitionState, type ShowTransitionProps,
   type MediaTransitionOptions,
 } from './showTransition';
+export {
+  Transition, ACTIVE_SLIDE_CLASS_NAME, TO_SLIDE_CLASS_NAME,
+  type TransitionProps, type TransitionSlide, type TransitionDirection,
+} from './transition';
