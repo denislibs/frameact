@@ -16,6 +16,7 @@ import {
 import { getPhase, requestForcedReflow, requestMeasure, requestMutation } from '../scheduler/fasterdom';
 import { closeGateSample, firstAnimatingScope, isAnyScopeBlocking, onFullyIdle, openGateSample, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
 import { computed, signal } from './signals';
+import { describeNode, effectPath, reportDevHookError } from './debug';
 
 export type FramePhase = 'measure' | 'mutate' | 'reflow';
 
@@ -89,9 +90,23 @@ export function enqueue(phase: FramePhase, run: () => void, node: EffectNode | n
   // Only re-dirties warn: a measure effect created during a mutate drain legitimately schedules its first run.
   if (DEV && phase === 'measure' && getPhase() === 'mutate' && node !== null && node._applied !== NOT_APPLIED) {
     console.warn(
-      `[frameact] measure effect${node?._name ? ` "${node._name}"` : ''} was dirtied during the mutate phase — it will run next frame. Write that signal from a measure effect or event handler instead.`,
+      `[frameact] measure effect ${effectPath(node)} [mutate] was dirtied during the mutate phase by ${describeNode(node._dirtyRoot)} — it will run next frame. Write that signal from a measure effect or event handler instead.`,
     );
   }
+}
+
+/** DEV: called after every frame drain with its phase, duration and the number of effect runs (stricterdom's slow-phase warning). */
+export type DrainObserver = (phase: FramePhase, ms: number, runs: number) => void;
+let drainObserver: DrainObserver | null = null;
+/** @internal stricterdom (DEV only; a no-op in prod). */
+export function setDrainObserver(fn: DrainObserver | null) {
+  if (DEV) drainObserver = fn;
+}
+/** DEV: the phase whose drain is running, or null (tickEnd and idle runs happen outside any drain). */
+let drainingPhase: FramePhase | null = null;
+/** @internal stricterdom's run log: which drain an effect run belongs to (always null in prod). */
+export function getDrainingPhase(): FramePhase | null {
+  return drainingPhase;
 }
 
 /** @internal */
@@ -115,6 +130,10 @@ export function drain(phase: FramePhase) {
   let blockCache: Map<HeavyAnimationScope, HeavyAnimationScope | null> | null = null;
   let overflow: QueueItem[] | null = null;
   const prevSample = openGateSample(); // the store gate decides once per drain (heavyAnimation.ts)
+  const t0 = DEV && drainObserver !== null ? performance.now() : 0;
+  const outerDraining = DEV ? drainingPhase : null;
+  if (DEV) drainingPhase = phase;
+  let runs = 0;
   try {
     for (let i = 0; i < queue.length; i++) {
       const item = queue[i];
@@ -148,6 +167,7 @@ export function drain(phase: FramePhase) {
             continue;
           }
         }
+        if (DEV) runs++;
         if (isNode) node!._run();
         else (item as FrameEntry).run();
       } catch (error) {
@@ -158,6 +178,16 @@ export function drain(phase: FramePhase) {
     closeGateSample(prevSample);
     queues[phase] = [];
     armed[phase] = false;
+    if (DEV) {
+      drainingPhase = outerDraining;
+      if (drainObserver !== null) {
+        try {
+          drainObserver(phase, performance.now() - t0, runs);
+        } catch (error) {
+          reportDevHookError('drain observer', error); // (the overflow below must still move on)
+        }
+      }
+    }
   }
   if (overflow !== null) for (let i = 0; i < overflow.length; i++) push(phase, overflow[i]);
 }

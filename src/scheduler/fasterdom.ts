@@ -28,7 +28,13 @@ export function onPhaseChange(listener: (phase: Phase) => void) {
 let pendingMeasureTasks: NoneToVoidFunction[] = [];
 let pendingMutationTasks: NoneToVoidFunction[] = [];
 let pendingForceReflowTasks: ReflowTask[] = [];
-let inSyncPass = false;
+/**
+ * > 0 while a phase segment of a frame pass runs — a rAF segment (measure tasks, then each
+ * microtask: mutations, forced-reflow measures, forced-reflow mutations) or one of the segments
+ * flushSync() runs (the depth is momentarily 0 between them, where no user code runs).
+ * A microtask between two rAF segments (a tickEnd drain) is NOT inside a segment.
+ */
+let passDepth = 0;
 
 function safeExec(fn: NoneToVoidFunction) {
   try {
@@ -39,37 +45,62 @@ function safeExec(fn: NoneToVoidFunction) {
 }
 
 function runMeasureTasks() {
-  setPhase('measure');
-  const current = pendingMeasureTasks;
-  pendingMeasureTasks = [];
-  current.forEach(safeExec);
+  passDepth++;
+  try {
+    setPhase('measure');
+    const current = pendingMeasureTasks;
+    pendingMeasureTasks = [];
+    current.forEach(safeExec);
+  } finally {
+    passDepth--;
+  }
 }
 
 function runMutationTasks() {
-  setPhase('mutate');
-  const current = pendingMutationTasks;
-  pendingMutationTasks = [];
-  current.forEach(safeExec);
+  passDepth++;
+  try {
+    setPhase('mutate');
+    const current = pendingMutationTasks;
+    pendingMutationTasks = [];
+    current.forEach(safeExec);
+  } finally {
+    passDepth--;
+  }
 }
 
 function runForcedReflowTasks(): NoneToVoidFunction[] {
-  setPhase('measure');
-  const mutations: NoneToVoidFunction[] = [];
-  // for..of over the live array: tasks requested during this loop are included (as in teact)
-  for (const task of pendingForceReflowTasks) {
-    safeExec(() => {
-      const mutation = task();
-      if (mutation) mutations.push(mutation);
-    });
+  passDepth++;
+  try {
+    setPhase('measure');
+    const mutations: NoneToVoidFunction[] = [];
+    // for..of over the live array: tasks requested during this loop are included (as in teact)
+    for (const task of pendingForceReflowTasks) {
+      safeExec(() => {
+        const mutation = task();
+        if (mutation) mutations.push(mutation);
+      });
+    }
+    pendingForceReflowTasks = [];
+    return mutations;
+  } finally {
+    passDepth--;
   }
-  pendingForceReflowTasks = [];
-  return mutations;
 }
 
 function runForcedReflowMutations(mutations: NoneToVoidFunction[]) {
-  setPhase('mutate');
-  mutations.forEach(safeExec);
-  setPhase('measure');
+  passDepth++;
+  try {
+    setPhase('mutate');
+    mutations.forEach(safeExec);
+    setPhase('measure');
+  } finally {
+    passDepth--;
+  }
+}
+
+/** @internal True inside a phase segment of a frame pass (see passDepth). */
+export function isInFramePass() {
+  return passDepth > 0;
 }
 
 const runUpdatePassOnRaf = throttleWith(
@@ -111,19 +142,26 @@ export function hasPendingFrameTasks() {
 }
 
 /**
- * Run a whole frame pass synchronously (tests, imperative integration code).
- * Does not bypass heavy-animation gating of the core's run queues. Not reentrant.
- * The already-throttled rAF (if any) will later fire with empty queues — harmless.
+ * Run a whole frame pass synchronously, with the real phase sequence (measure → mutate →
+ * forced-reflow measure → forced-reflow mutate). Production contract (spec §3.1): allowed from
+ * anywhere OUTSIDE a frame pass — an event handler, a store action, a tickEnd effect — for the
+ * cases that need the DOM committed before the current task ends (an iOS swipe-back gesture, the
+ * callback of a View Transition). Inside a pass (a frame effect's compute or apply, a
+ * requestMeasure/requestMutation/requestForcedReflow task, a forceMeasure callback) it throws: the
+ * phases would interleave. Does not bypass heavy-animation gating of the core's run queues. The
+ * already-throttled rAF (if any) later fires with empty queues — harmless.
  */
 export function flushSync() {
-  if (inSyncPass) throw new Error('[frameact] flushSync() is not reentrant');
-  inSyncPass = true;
+  if (passDepth > 0) {
+    throw new Error(
+      '[frameact] flushSync() is not reentrant: it was called inside a frame pass (a frame effect, a requestMeasure/requestMutation/requestForcedReflow task or a forceMeasure callback). Write the signal and let the frame apply it, or call flushSync() from the event handler or action that started this.',
+    );
+  }
   try {
     runMeasureTasks();
     runMutationTasks();
     runForcedReflowMutations(runForcedReflowTasks());
   } finally {
-    inSyncPass = false;
     setPhase('measure');
   }
 }

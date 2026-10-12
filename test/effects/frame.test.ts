@@ -7,6 +7,7 @@ import { installFakeRaf } from '../helpers/raf';
 import { frame } from '../helpers/frame';
 import { flushMicrotasks } from '../helpers/micro';
 import { createHeavyAnimationScope } from '../../src/scheduler/heavyAnimation';
+import { flushSync as flushAll } from '../../src/core/flush';
 
 let raf: ReturnType<typeof installFakeRaf>;
 beforeEach(() => { raf = installFakeRaf(); });
@@ -315,4 +316,63 @@ it('a drain with no blocking animation never consults the gate hook', async () =
   }
   expect(applied).toHaveBeenCalledTimes(400);
   expect(gateCalls).toBe(0);
+});
+
+it('the measure-dirtied warning names the effect path, the phase and the signal that dirtied it', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const $x = signal(0, { id: 'scrollTop' });
+  root(() => {
+    createMeasureEffect(() => $x(), () => {}, { name: 'MessageList > measure' });
+  });
+  await frame(raf); // first measure apply
+  const $t = signal(0);
+  root(() => createMutationEffect(() => $t(), (v) => { if (v) $x.set(9); }));
+  $t.set(1);
+  await frame(raf);
+  expect(warn).toHaveBeenCalledWith(
+    '[frameact] measure effect MessageList > measure [mutate] was dirtied during the mutate phase by signal "scrollTop" — it will run next frame. Write that signal from a measure effect or event handler instead.',
+  );
+  warn.mockRestore();
+});
+
+it('flushSync from a frame effect apply is that effect\'s error (reported, the drain continues); from a tickEnd effect it commits the frame synchronously', () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const $a = signal(0);
+  const applied: string[] = [];
+  root(() => {
+    createMutationEffect(() => $a(), (v) => { if (v) flushSync(); });
+    createMutationEffect(() => $a(), (v) => { applied.push(`mutate:${v}`); });
+  });
+  $a.set(1);
+  flushSync();
+  expect(applied).toEqual(['mutate:0', 'mutate:1']);
+  expect(String(err.mock.calls[0][1])).toMatch(/flushSync\(\) is not reentrant/);
+  err.mockRestore();
+  // an iOS-gesture style commit: a tickEnd effect (outside any pass) flushes the frame work it caused
+  const $b = signal(0);
+  const order: string[] = [];
+  root(() => {
+    createMutationEffect(() => $b(), (v) => { order.push(`mutate:${v}:${getPhase()}`); });
+    createEffect(() => $b(), (v) => { if (v) { order.push('tick'); flushAll(); order.push('committed'); } });
+  });
+  $b.set(1);
+  flushAll(); // the public flushSync: tickEnd effects first, then the frame
+  expect(order).toEqual(['mutate:0:measure', 'tick', 'mutate:1:mutate', 'committed']);
+});
+
+it('the public flushSync inside a frame pass throws before it runs any pending tickEnd effect', () => {
+  const $c = signal(0);
+  const ran: number[] = [];
+  root(() => createEffect(() => $c(), (v) => { ran.push(v); }));
+  flushAll(); // the first (scheduled) tickEnd apply
+  let thrown: unknown;
+  root(() => createMutationEffect(() => $c(), (v) => {
+    if (v) { try { flushAll(); } catch (error) { thrown = error; } }
+  }));
+  $c.set(1);
+  flushSync(); // the frame only: the mutation apply calls the public flushSync; the tickEnd effect stays pending
+  expect(String(thrown)).toMatch(/flushSync\(\) is not reentrant/);
+  expect(ran).toEqual([0]);
+  flushAll();
+  expect(ran).toEqual([0, 1]);
 });

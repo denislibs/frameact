@@ -16,12 +16,11 @@
 //     quiet for a second (or until the next chunk arrives, which re-arms it). The scroll event the
 //     restore itself causes (`consumeRestored`) never asks for anything.
 import { createMeasureEffect, onCleanup } from '../index';
-import { TRACK } from '../core/symbols';
 import { debounce } from '../scheduler/schedulers';
 import { insert } from '../dom/insert';
 import { getNatives } from '../dom/natives';
 import { spread } from '../dom/props';
-import { createScrollAnchor } from './scrollAnchor';
+import { createScrollAnchor, trackShape } from './scrollAnchor';
 
 export type LoadMoreDirection = 'forwards' | 'backwards';
 
@@ -61,14 +60,8 @@ const OWN_PROPS = new Set([
 ]);
 const isOwnProp = (key: string) => OWN_PROPS.has(key);
 
-/** What an update is detected by: a store array through its shape (one subscription), anything else by identity. */
-function versionOf(items: unknown): unknown {
-  if (items !== null && typeof items === 'object') {
-    const shape = (items as { [TRACK]?: unknown })[TRACK];
-    if (shape !== undefined) return shape;
-  }
-  return items;
-}
+/** What an update is detected by: a store array through its O(1) shape version (one subscription, no copy), anything else by identity. */
+const versionOf = trackShape;
 
 export function InfiniteScroll(props: InfiniteScrollProps): unknown {
   const natives = getNatives();

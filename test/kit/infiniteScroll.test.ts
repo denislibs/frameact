@@ -6,7 +6,7 @@ import { createComponent } from '../../src/dom/component';
 import { insert } from '../../src/dom/insert';
 import { For } from '../../src/dom/list';
 import { createScrollAnchor } from '../../src/kit/scrollAnchor';
-import { TRACK } from '../../src/core/symbols';
+import { SHAPE, TRACK } from '../../src/core/symbols';
 import { InfiniteScroll } from '../../src/kit/infiniteScroll';
 import { container, useDomHarness } from '../helpers/dom';
 import { fakeLayout, resetLayout } from '../helpers/layout';
@@ -219,11 +219,15 @@ describe('<InfiniteScroll>', () => {
 
 describe('<InfiniteScroll> tracked reads', () => {
   it('reads the list\'s shape once per update — one tracked read beyond createScrollAnchor\'s own (clean-room finding 7)', async () => {
-    // A list whose shape read is observable: a Proxy over a plain array that answers [TRACK] like a store array does.
+    // A list whose shape read is observable: a Proxy over a plain array that answers [SHAPE] / [TRACK] like a store array does.
     let shapeReads = 0;
     const shaped = (arr: number[]) =>
       new Proxy(arr, {
         get(target, key, receiver) {
+          if (key === SHAPE) {
+            shapeReads++;
+            return 1;
+          }
           if (key === TRACK) {
             shapeReads++;
             return target;
