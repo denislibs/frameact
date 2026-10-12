@@ -153,3 +153,53 @@ describe('read-only view and drafts (L2)', () => {
     expect(state.b.n).toBe(2);
   });
 });
+
+describe('a leaked draft is valid in its own produce() invocation only (N4)', () => {
+  it('a draft kept from produce #1 cannot write while a DIFFERENT produce runs', () => {
+    const [state, setState] = createStore<any>({ chat: { t: 1 }, nest: { a: 1 } });
+    let leaked: any;
+    setState('chat', produce((d: any) => { leaked = d; }));
+    let threw = false;
+    setState('nest', produce(() => {
+      try { leaked.t = 77; } catch (e) { threw = e instanceof TypeError; }
+    }));
+    expect(threw).toBe(true);
+    expect(state.chat.t).toBe(1);
+  });
+  it('...nor delete, nor run an array mutator', () => {
+    const [state, setState] = createStore<any>({ list: [1], nest: { a: 1 }, chat: { t: 1 } });
+    let list: any;
+    let chat: any;
+    setState('list', produce((d: any) => { list = d; }));
+    setState('chat', produce((d: any) => { chat = d; }));
+    const errors: unknown[] = [];
+    setState('nest', produce(() => {
+      for (const f of [() => list.push(2), () => delete chat.t]) {
+        try { f(); } catch (e) { errors.push(e); }
+      }
+    }));
+    expect(errors).toHaveLength(2);
+    expect(state.list).toEqual([1]);
+    expect(state.chat.t).toBe(1);
+  });
+  it('...nor in a later produce() of the SAME object (a new invocation, a new draft)', () => {
+    const [state, setState] = createStore<any>({ chat: { t: 1 } });
+    let leaked: any;
+    setState('chat', produce((d: any) => { leaked = d; }));
+    let threw = false;
+    setState('chat', produce(() => {
+      try { leaked.t = 5; } catch { threw = true; }
+    }));
+    expect(threw).toBe(true);
+    expect(state.chat.t).toBe(1);
+  });
+  it('a produce nested in another (via setState in the callback) keeps both drafts valid while they run', () => {
+    const [state, setState] = createStore<any>({ a: { n: 0 }, b: { n: 0 } });
+    setState('a', produce((da: any) => {
+      setState('b', produce((db: any) => { db.n = 1; da.n = 2; }));
+      da.n++;
+    }));
+    expect(state.a.n).toBe(3);
+    expect(state.b.n).toBe(1);
+  });
+});

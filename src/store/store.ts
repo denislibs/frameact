@@ -623,15 +623,16 @@ function setPath(root: any, path: unknown[]): void {
 
 // ---- produce ------------------------------------------------------------------------------------
 
-/** > 0 while a produce callback runs: a draft kept past it (a closure, an await) cannot write. */
-let draftDepth = 0;
 function staleDraft(): boolean {
   if (DEV) throw new TypeError('[frameact/store] a produce() draft was written after produce() returned (a draft leaked past its callback): write through setState');
   return true; // production: dropped, like a write to a detached object
 }
-const drafts = new WeakMap<object, any>();
+/** `draft[$SCOPE]`: the produce() invocation a draft belongs to (`undefined` on anything else). */
+const $SCOPE: unique symbol = Symbol('frameact.store.draft') as any;
+const scopeOf = (v: any): DraftScope | undefined => (v !== null && typeof v === 'object' ? v[$SCOPE] : undefined);
 
-const asDraft = (v: unknown): unknown => (isWrappable(v) ? draftOf(v) : v);
+/** Back from a raw value (an item a mutator hands out) to a draft of the SAME invocation as `owner`. */
+const asDraft = (owner: DraftScope, v: unknown): unknown => (isWrappable(v) ? owner.of(v) : v);
 const adoptArg = (v: unknown): unknown => (v !== null && typeof v === 'object' ? adopt(v) : v);
 /** `draft.push(…)` and friends: one batched native write (see writeArray). Items come back as drafts. */
 const MUTATORS: Record<string, (this: any, ...args: any[]) => unknown> = Object.assign(Object.create(null), {
@@ -641,11 +642,11 @@ const MUTATORS: Record<string, (this: any, ...args: any[]) => unknown> = Object.
   },
   pop(this: any) {
     const raw = draftTarget(this);
-    return raw && asDraft(writeArray(raw, false, () => raw.pop()));
+    return raw && asDraft(scopeOf(this)!, writeArray(raw, false, () => raw.pop()));
   },
   shift(this: any) {
     const raw = draftTarget(this);
-    return raw && asDraft(writeArray(raw, false, () => raw.shift()));
+    return raw && asDraft(scopeOf(this)!, writeArray(raw, false, () => raw.shift()));
   },
   unshift(this: any, ...items: unknown[]) {
     const raw = draftTarget(this);
@@ -656,13 +657,15 @@ const MUTATORS: Record<string, (this: any, ...args: any[]) => unknown> = Object.
     if (!raw) return undefined;
     const call = args.length > 2 ? [args[0], args[1], ...args.slice(2).map(adoptArg)] : args;
     const removed = writeArray(raw, true, () => (raw.splice as (...a: unknown[]) => unknown[])(...call));
-    return removed.map(asDraft);
+    const owner = scopeOf(this)!;
+    return removed.map((v) => asDraft(owner, v));
   },
   sort(this: any, compare?: (a: unknown, b: unknown) => number) {
     const raw = draftTarget(this);
     if (!raw) return undefined;
+    const owner = scopeOf(this)!;
     // oxlint-disable-next-line unicorn/no-array-sort -- the point is the in-place mutation of the raw array
-    writeArray(raw, true, () => raw.sort(compare === undefined ? undefined : (a, b) => compare(asDraft(a), asDraft(b))));
+    writeArray(raw, true, () => raw.sort(compare === undefined ? undefined : (a, b) => compare(asDraft(owner, a), asDraft(owner, b))));
     return this;
   },
   reverse(this: any) {
@@ -687,49 +690,67 @@ const MUTATORS: Record<string, (this: any, ...args: any[]) => unknown> = Object.
 });
 /** The raw array behind the draft a mutator was called on; `null` for a stale draft (DEV: throws). */
 function draftTarget(draft: any): any[] | null {
-  const raw = draft?.[$RAW];
+  const owner = scopeOf(draft);
+  const raw = owner === undefined ? undefined : draft[$RAW];
   if (!Array.isArray(raw)) throw new TypeError('[frameact/store] an array mutator was called on something that is not a produce() draft of an array');
-  if (draftDepth === 0) {
+  if (!owner!.active) {
     staleDraft();
     return null;
   }
   return raw;
 }
 
-const draftHandler: ProxyHandler<any> = {
-  get(target, key) {
+/**
+ * One produce() invocation: its drafts (one proxy per raw object) are valid while it runs. A draft kept
+ * past the callback — or taken from ANOTHER invocation — cannot write: each invocation has its own
+ * handler, switched off when its callback returns.
+ */
+class DraftScope implements ProxyHandler<any> {
+  active = true;
+  private rawA: object | null = null; // (the drafts of the invocation: the first one in fields, the rest in a map)
+  private draftA: any = null;
+  private more: Map<object, any> | null = null;
+
+  of(raw: object): any {
+    if (raw === this.rawA) return this.draftA;
+    if (this.rawA === null) {
+      this.rawA = raw;
+      return (this.draftA = new Proxy(raw, this));
+    }
+    let d = this.more?.get(raw);
+    if (d === undefined) (this.more ??= new Map()).set(raw, (d = new Proxy(raw, this)));
+    return d;
+  }
+
+  get(target: any, key: PropertyKey) {
     if (key === $RAW) return target;
+    if (key === $SCOPE) return this;
     const v = target[key];
-    if (typeof v === 'object' && v !== null) return key === PROTO_KEY ? undefined : isWrappable(v) ? draftOf(v) : v;
+    if (typeof v === 'object' && v !== null) return key === PROTO_KEY ? undefined : isWrappable(v) ? this.of(v) : v;
     if (typeof v === 'function' && typeof key === 'string' && Array.isArray(target)) {
       const m = MUTATORS[key];
       if (m !== undefined && v === (Array.prototype as any)[key]) return m;
     }
     return v;
-  },
-  set(target, key, value) {
-    if (draftDepth === 0) return staleDraft();
+  }
+  set(target: any, key: PropertyKey, value: unknown) {
+    if (!this.active) return staleDraft();
     if (key === PROTO_KEY) {
       dropProto('produce');
       return true;
     }
     setProperty(target, key, unwrap(value), false); // JS semantics: `draft[k] = undefined` stores undefined
     return true;
-  },
-  deleteProperty(target, key) {
-    if (draftDepth === 0) return staleDraft();
+  }
+  deleteProperty(target: any, key: PropertyKey) {
+    if (!this.active) return staleDraft();
     if (key === PROTO_KEY) return true;
     setProperty(target, key, undefined); // `delete draft[k]`: the key goes (an array gets a hole)
     return true;
-  },
-  defineProperty: readOnly,
-  setPrototypeOf: readOnly,
-  preventExtensions: readOnly,
-};
-function draftOf(raw: object): any {
-  let d = drafts.get(raw);
-  if (d === undefined) drafts.set(raw, (d = new Proxy(raw, draftHandler)));
-  return d;
+  }
+  defineProperty = readOnly;
+  setPrototypeOf = readOnly;
+  preventExtensions = readOnly;
 }
 
 /**
@@ -749,11 +770,11 @@ export function produce<T>(fn: (draft: T) => void): (prev: unknown) => T {
           : '[frameact/store] produce(): the value at the path is not a plain object or array',
       );
     }
-    draftDepth++;
+    const scope = new DraftScope();
     try {
-      fn(draftOf(prev) as T);
+      fn(scope.of(prev) as T);
     } finally {
-      draftDepth--;
+      scope.active = false;
     }
     return prev as unknown as T;
   };
