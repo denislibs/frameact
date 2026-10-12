@@ -169,6 +169,8 @@ if (import.meta.env.DEV) enableStrict();
 `render()` 和 `Portal` 就用它），`suppressStrict(cb)` 为第三方代码关闭两项检查，`setHandler(fn)` 替换 `console.error`。处理器中的抛出会传到读取布局的代码；而变更违规在阶段边界和 apply 之后报告，那里的抛出会被捕获并写入日志：要让测试因它们失败，请在处理器中收集错误再断言（或在 `console.error` 上失败）。
 变更记录在每次阶段切换以及每个 effect apply 的前后判定，因此 `flushSync()` 不会产生误报，报告指出做出写入的 effect。
 
+违规的 `message` 和 `path` 是纯文本，可能包含来自内容的字符串（元素的 `id` 和 `class` 会被加引号并截断到 64 个字符，store 的键同理）：开发覆盖层必须用 `textContent` 显示，绝不能用 `innerHTML`，并把自己挂在 `data-stricterdom-ignore` 之下（处理器自身的读写不会被报告，但覆盖层之后的更新会）。stricterdom 是开发期 linter，不是安全边界。
+
 同一个开关还会开启开发分析器：超过 7 ms 的运行会带路径发出警告（`Slow effect run: 12.3 ms in Message > span.children
 [mutate]`），帧阶段同样（`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`），`getRunStats()` 按路径统计运行次数，
 `enableRunLog({ filter })` 打印每个 effect 为何运行：`run #3 ChatList > li.class [mutate] ← signal "store.title" via memo

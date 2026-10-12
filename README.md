@@ -192,6 +192,11 @@ collect the errors in the handler and assert (or fail on `console.error`). Mutat
 and around every effect apply, so `flushSync()` never produces a false positive and the report names the effect that made
 the write.
 
+A violation's `message` and `path` are plain text that may contain content-derived strings (the element's `id` and
+`class` are quoted and cut to 64 characters, store keys too): a dev overlay must render them with `textContent`, never
+`innerHTML`, and mount itself under `data-stricterdom-ignore` (the handler's own reads and writes are never reported, but
+the overlay's later updates would be). stricterdom is a development linter, not a security boundary.
+
 The same switch turns on the DEV profiler: a run slower than 7 ms warns with its path (`Slow effect run: 12.3 ms in
 Message > span.children [mutate]`), so does a frame phase (`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`),
 `getRunStats()` counts runs per path, and `enableRunLog({ filter })` prints why each effect ran:

@@ -770,6 +770,12 @@ measure-/tickEnd-эффекта атрибутируется этому эффе
 `strictHooks.forceMutation` в `src/dom/strict.ts` (его зовут `render()` и `Portal`)
 при `enableStrict()` указывает на санкционирование без проверки фазы.
 
+Обработчик нарушений не реентерабелен: на время его вызова чтения layout не проверяются, а
+записи, которые он сделал (оверлей в `<body>`), отбрасываются. `message`/`path` — простой
+текст с возможными строками из контента (`id`/`class` целевого элемента, ключи стора):
+они берутся в кавычки (JSON-стиль) и обрезаются до 64 символов; оверлей обязан выводить их
+через `textContent` и монтироваться под `data-stricterdom-ignore`.
+
 **Атрибуция.** Ядро в dev держит `currentEffect` на время `run`. Сообщение:
 `[frameact/stricterdom] Unexpected measurement \`offsetHeight\` in Message > MessageMeta >
 span.style:color [mutate]` — имена компонентов (третий аргумент `createComponent`, из
@@ -784,8 +790,10 @@ span.style:color [mutate]` — имена компонентов (третий �
 пути (`getRunStats()`/`resetRunStats()`); лог «почему выполнился» (`enableRunLog({ filter })`
 / `disableRunLog()`): `run #3 ChatList > li.class [mutate] ← signal "store.title" via memo
 "chatTitle" in ChatList`. Источник записывает `notify()` ядра перед вызовом планировщика
-(`notifyDep`/`notifyRoot`; на эффекте — до конца прогона, чтобы освобождённый лист
-стора не удерживался), листья стора получают dev-id `store.<ключ>` / `store.$TRACK` /
+(`notifyDep`/`notifyRoot`; на эффекте — до начала прогона: на старте метки уходят в локальные
+переменные и передаются наблюдателю, поэтому запись, сделанная самим прогоном, метит
+следующий, а освобождённый лист стора не удерживается; ре-доставки — live-реле и
+защёлкнутая запись — несут причину исходной записи), листья стора получают dev-id `store.<ключ>` / `store.$TRACK` /
 `store.$VALUES`; «самый медленный эффект» дрена — только из этого дрена
 (`getDrainingPhase`). Это замена `debugKey`/dblclick-дампов teact. В production-сборке
 всё перечисленное — мёртвый код; это проверяет тест `production.test.ts` (настоящий

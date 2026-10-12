@@ -31,13 +31,31 @@ export function effectPath(node: Scope): string {
   return path.length === 0 ? 'effect' : path.join(' > ');
 }
 
+/** Longest piece of untrusted text (an id, a class, a store key, an attribute name) that goes into a DEV message. */
+const MAX_UNTRUSTED = 64;
+
+/**
+ * Untrusted text (content-derived ids, classes, store keys) for a DEV message: cut to 64 characters
+ * and JSON-quoted, so quotes and line breaks cannot forge a log line or an attribute. `"count"` for
+ * plain text. Messages are plain text: show them through `textContent`, never `innerHTML`.
+ */
+export function quoteUntrusted(text: string): string {
+  const cut = text.length > MAX_UNTRUSTED ? `${text.slice(0, MAX_UNTRUSTED)}…` : text;
+  return JSON.stringify(cut);
+}
+
+/** A tag or attribute name for a DEV message: cut to 64 characters, anything but name characters replaced. */
+export function safeName(name: string): string {
+  return (name.length > MAX_UNTRUSTED ? name.slice(0, MAX_UNTRUSTED) : name).replace(/[^\w:.-]/g, '?');
+}
+
 /** `signal "count"`, `memo "fullName" in Message`, `effect "div.class" in Message`; null → `an unknown source`. */
 export function describeNode(node: Computation | null): string {
   if (node === null) return 'an unknown source';
   // (a slim signal node has no _compute / owner fields at all: `typeof`, not `!== null`)
   const kind = node._effect === true ? 'effect' : typeof node._compute === 'function' ? 'memo' : 'signal';
   const owner = kind === 'signal' ? [] : ownerPath(node[SCOPE]);
-  return `${kind} "${node.id ?? kind}"${owner.length ? ` in ${owner.join(' > ')}` : ''}`;
+  return `${kind} ${quoteUntrusted(node.id ?? kind)}${owner.length ? ` in ${owner.join(' > ')}` : ''}`;
 }
 
 /** DEV hooks (apply hook, run/drain observers, phase listeners) must never break the core: report, and never throw even from a throwing `console.error`. */

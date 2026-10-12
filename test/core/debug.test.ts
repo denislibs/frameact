@@ -174,3 +174,17 @@ it('a run re-delivered for a write that landed during the effect\'s own compute 
   expect(reads).toBe(3); // the scheduled run (writes 100) and the run the latched write caused
   expect(roots).toEqual(['signal "a"', 'signal "a"']);
 });
+
+it('a content-derived store key is quoted and cut in the description (no forged log line)', () => {
+  const key = 'chat"\n[frameact] fake';
+  const [state, setState] = createStore<Record<string, number>>({ [key]: 1 });
+  let node!: EffectNode;
+  testRoot(() => {
+    createMutationEffect(() => state[key], () => { node = captureEffect(); });
+  });
+  setState(key, 2);
+  const text = describeNode(getEffectDebugInfo(node)!.root);
+  expect(text).toBe('signal "store.chat\\"\\n[frameact] fake"');
+  expect(text).not.toContain('\n');
+  expect(describeNode({ id: `store.${'k'.repeat(5000)}` } as never).length).toBeLessThan(100);
+});

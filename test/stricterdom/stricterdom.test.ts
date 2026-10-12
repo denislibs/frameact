@@ -435,3 +435,19 @@ it('a foreign patch over a stricterdom getter/method (vi.spyOn) is not clobbered
   spy.mockRestore();
   expect(Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')!.get).toBe(getter);
 });
+
+it('untrusted ids, classes and attribute names are quoted and cut in the message: no forged log line, no unbounded text', async () => {
+  const el = attached();
+  el.id = 'm1"\n[frameact] fake line';
+  el.className = '<img src=x onerror=alert(1)>'.padEnd(5000, 'x');
+  el.setAttribute('a'.repeat(5000), '1');
+  await flushMicrotasks();
+  const messages = violations.map((v) => v.message);
+  expect(messages.length).toBeGreaterThanOrEqual(3);
+  for (const message of messages) {
+    expect(message).not.toContain('\n');
+    expect(message.length).toBeLessThan(300);
+  }
+  const forged = messages.find((m) => m.includes('fake line'))!;
+  expect(forged).toContain('id="m1\\"\\n[frameact] fake line"'); // JSON-quoted: the quote and the line break are escaped
+});

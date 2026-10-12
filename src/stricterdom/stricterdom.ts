@@ -6,7 +6,7 @@
 import { DEV } from '../env';
 import { getPhase, onPhaseChange, type Phase } from '../scheduler/fasterdom';
 import { getRunningEffect, setApplyHook } from '../core/effects';
-import { effectPath, reportDevHookError } from '../core/debug';
+import { effectPath, quoteUntrusted, reportDevHookError, safeName } from '../core/debug';
 import { getNatives } from '../dom/natives';
 import { strictHooks } from '../dom/strict';
 import { LAYOUT_CAUSES } from './layoutCauses';
@@ -14,7 +14,12 @@ import { setStrictProfiling } from './runlog';
 
 export type StrictViolationKind = 'measure' | 'mutation';
 
-/** What stricterdom reports: a layout read outside the measure phase, or a live-DOM write outside the mutate phase. */
+/**
+ * What stricterdom reports: a layout read outside the measure phase, or a live-DOM write outside the mutate phase.
+ * `message` and `path` may carry text derived from untrusted content (ids and classes of the mutated element,
+ * store keys): ids and classes are quoted and cut to 64 characters, but the text is still plain text. A dev
+ * overlay must show it with `textContent`, never `innerHTML`, and mount itself under `data-stricterdom-ignore`.
+ */
 export class StrictViolationError extends Error {
   override readonly name: string = 'StrictViolationError';
   constructor(
@@ -45,11 +50,12 @@ function describeTarget(node: Node | null): string {
   const { nodeType, nodeName, localName } = getNatives();
   if (nodeType.call(node) !== 1) return `#${nodeName.call(node).toLowerCase()}`;
   const getAttribute = Element.prototype.getAttribute;
-  let out = `<${localName.call(node as Element)}`;
+  // id / class are content-derived (`id="msg-${m.id}"`): quoted and cut, so they cannot forge a log line
+  let out = `<${safeName(localName.call(node as Element))}`;
   const id = getAttribute.call(node as Element, 'id');
-  if (id) out += ` id="${id}"`;
+  if (id) out += ` id=${quoteUntrusted(id)}`;
   const cls = getAttribute.call(node as Element, 'class');
-  if (cls) out += ` class="${cls}"`;
+  if (cls) out += ` class=${quoteUntrusted(cls)}`;
   return `${out}>`;
 }
 
@@ -330,7 +336,7 @@ function checkRecords(records: MutationRecord[], phase: Phase) {
     if (type === 'childList' && target instanceof HTMLElement && isEditable(target, closest)) continue; // the engine edits a composer
     if (attributeName?.startsWith('data-')) continue; // data-* is state for CSS and scripts, not layout
     if (attributeName === 'open' && target instanceof HTMLDetailsElement) continue; // toggled by the user agent
-    const detail = type === 'attributes' ? attributeName! : type;
+    const detail = type === 'attributes' ? safeName(attributeName!) : type;
     try {
       report(new StrictViolationError('mutation', detail, phase, path, target));
     } catch (error) {
