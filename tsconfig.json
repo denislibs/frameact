@@ -9,7 +9,13 @@
     "noImplicitOverride": true,
     "skipLibCheck": true,
     "types": ["vitest/globals", "node"],
-    "jsx": "preserve"
+    "jsx": "preserve",
+    "jsxImportSource": "frameact",
+    "paths": {
+      "frameact": ["./src/index.ts"],
+      "frameact/dom": ["./src/dom/index.ts"],
+      "frameact/jsx-runtime": ["./src/jsx-runtime.ts"]
+    }
   },
   "include": ["src", "test"]
 }
