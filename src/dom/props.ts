@@ -13,10 +13,12 @@ export function resolveSource(source: PropsSource): Record<PropertyKey, any> | n
   return resolved || null;
 }
 
+const hasOwn = (o: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(o, key);
+
 function getFrom(sources: PropsSource[], key: PropertyKey): unknown {
   for (let i = sources.length - 1; i >= 0; i--) {
     const s = resolveSource(sources[i]);
-    if (s && key in s) {
+    if (s && hasOwn(s, key)) {
       const v = s[key];
       if (v !== undefined) return v;
     }
@@ -27,7 +29,7 @@ function getFrom(sources: PropsSource[], key: PropertyKey): unknown {
 function hasIn(sources: PropsSource[], key: PropertyKey): boolean {
   for (let i = sources.length - 1; i >= 0; i--) {
     const s = resolveSource(sources[i]);
-    if (s && key in s) return true;
+    if (s && hasOwn(s, key)) return true;
   }
   return false;
 }

@@ -99,4 +99,18 @@ describe('mergeProps', () => {
   it('ignores null/false sources', () => {
     expect(Object.keys(mergeProps(null, { a: 1 }, false))).toEqual(['a']);
   });
+
+  it('only own keys count: inherited keys are not props and never override an earlier own value', () => {
+    const inheriting = () => Object.create({ a: 'inherited', toString: 1 });
+    const proto = Object.create({ a: 'inherited' });
+    for (const merged of [
+      mergeProps({ a: 'own' }, proto),
+      mergeProps({ a: 'own' }, inheriting),
+    ]) {
+      expect(merged.a).toBe('own');
+      expect(Object.hasOwn(merged, 'toString')).toBe(false);
+      expect(Object.hasOwn(merged, 'constructor')).toBe(false);
+      expect(Object.keys(merged)).toEqual(['a']);
+    }
+  });
 });
