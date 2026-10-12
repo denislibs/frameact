@@ -136,3 +136,36 @@ it('a bound string style= and the extras of another element do not mix; the regi
   style(b, 'color: red');
   expect(b.style.height).toBe('');
 });
+
+describe('setExtraStyles: names are CSS properties, never JS properties of the declaration', () => {
+  it('cssText, setProperty and removeProperty as keys are inert: no overlay is written, no method is shadowed', () => {
+    const el = document.createElement('div');
+    setExtraStyles(el, { cssText: 'position:fixed;inset:0;background:red', setProperty: 'x', removeProperty: 'y', item: 'z' } as never);
+    style(el, 'color: blue');
+    expect(el.style.cssText).toBe('color: blue;');
+    expect(el.style.position).toBe('');
+    style(el, { width: '1px' }); // would throw "setProperty is not a function" if the method were shadowed
+    expect(el.style.width).toBe('1px');
+    expect(typeof el.style.setProperty).toBe('function');
+    expect(Object.hasOwn(el.style, 'setProperty')).toBe(false);
+  });
+
+  it('__proto__ as a key (JSON) touches no prototype', () => {
+    const el = document.createElement('div');
+    const styles = JSON.parse('{"__proto__": "polluted", "color": "red"}') as Record<string, string>;
+    setExtraStyles(el, styles);
+    expect(el.style.color).toBe('red');
+    expect(Object.getPrototypeOf(el.style)).toBe(Object.getPrototypeOf(document.createElement('p').style));
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+
+  it('camelCase, kebab-case and vendor spellings of one property are one registry entry', () => {
+    const el = document.createElement('div');
+    setExtraStyles(el, { backgroundColor: 'red' });
+    setExtraStyles(el, { 'background-color': null }); // another spelling removes it
+    style(el, 'color: blue');
+    expect(el.style.backgroundColor).toBe('');
+    setExtraStyles(el, { cssFloat: 'left', WebkitTransform: 'none' });
+    expect(el.style.getPropertyValue('float')).toBe('left');
+  });
+});

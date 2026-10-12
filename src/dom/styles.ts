@@ -17,14 +17,15 @@
 // cssText, i.e. the string form).
 //
 // Names are CSS property names (kebab-case or `--custom`): `style={{ fontSize }}` is ignored by the
-// CSSOM, as in Solid (DEV hint). `setExtraStyles` is the odd one out and takes camelCase (teact).
+// CSSOM, as in Solid (DEV hint). `setExtraStyles` is the odd one out and takes camelCase (teact),
+// translated to the CSS name and written with `setProperty`.
 // A trailing `!important` in a value is passed as the priority; numbers get no `px`.
 
 import { DEV } from '../env';
 
 // string = the cssText this binding wrote; object = the declarations it applied.
 const appliedStyles = new WeakMap<Element, string | Record<string, unknown>>();
-// The extra styles in force per element (camelCase or `--custom` → value), re-applied after cssText writes.
+// The extra styles in force per element (CSS property name → value), re-applied after cssText writes.
 // A Map, not a record: names come from data-driven objects and must not touch a prototype (own keys only, as above).
 const extraStyles = new WeakMap<Element, Map<string, string | number>>();
 
@@ -60,11 +61,23 @@ function writeProperty(nodeStyle: CSSStyleDeclaration, name: string, value: unkn
   else nodeStyle.setProperty(name, text);
 }
 
+/**
+ * The CSS property name for a `setExtraStyles` key: camelCase → kebab-case (`WebkitTransform`,
+ * `webkitTransform` → `-webkit-transform`, `cssFloat` → `float`); `--custom` and names that already
+ * have a dash pass through. Names are written with `setProperty`, never assigned as JS properties of
+ * the declaration: a key like `cssText` or `setProperty` from data stays a (rejected) CSS name.
+ */
+function cssName(name: string): string {
+  if (name.startsWith('--') || name.includes('-')) return name;
+  if (name === 'cssFloat') return 'float';
+  if (name === name.toLowerCase()) return name;
+  const kebab = name.replaceAll(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+  return /^(?:webkit|moz|ms)-/.test(kebab) ? `-${kebab}` : kebab;
+}
+
 function writeExtra(nodeStyle: CSSStyleDeclaration, name: string, v: string | number | null | undefined): void {
-  if (name.startsWith('--')) {
-    if (v == null) nodeStyle.removeProperty(name);
-    else nodeStyle.setProperty(name, String(v));
-  } else (nodeStyle as unknown as Record<string, string>)[name] = v == null ? '' : String(v);
+  if (v == null) nodeStyle.removeProperty(name);
+  else nodeStyle.setProperty(name, String(v));
 }
 
 /** `cssText = value`, then the element's extra styles on top (a cssText write drops every declaration). */
@@ -117,16 +130,19 @@ export function setStyleProperty(node: Element, name: string, value: unknown): v
 }
 
 /**
- * Imperative styles (teact API): camelCase properties are assigned, `--custom` ones set; null/undefined
- * removes. The declarations accumulate in a per-element registry (teact replaces the registry on
+ * Imperative styles (teact API): camelCase (or kebab-case, or `--custom`) names, written with
+ * `setProperty` under the CSS property name (so a key that is not a CSS property, `cssText` or
+ * `setProperty` included, does nothing); null/undefined removes. Names are constants of your code,
+ * not data. The declarations accumulate in a per-element registry (teact replaces the registry on
  * every call; here `setExtraStyles(el, { transition })` then `setExtraStyles(el, { height })` keeps
  * both) and are re-applied after every string `style=` write.
  */
 export function setExtraStyles(el: Element, styles: Record<string, string | number | null | undefined>): void {
   const nodeStyle = (el as Styled).style;
   let extra = extraStyles.get(el);
-  for (const name of Object.keys(styles)) {
-    const v = styles[name];
+  for (const key of Object.keys(styles)) {
+    const name = cssName(key);
+    const v = styles[key];
     if (v == null) extra?.delete(name);
     else {
       if (extra === undefined) extraStyles.set(el, (extra = new Map()));
