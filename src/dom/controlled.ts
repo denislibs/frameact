@@ -523,6 +523,14 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
   }
 }
 
+/**
+ * `use:value`. Known limitation: on a `<select>` the value is applied when the signal delivers it. An
+ * `<option>` that is added LATER (a dynamic list that arrives after the value) is not picked up: the
+ * browser has already selected another option and nothing re-applies the last delivered value, so the
+ * DOM diverges from the signal until the signal changes. Options that exist at the first application
+ * are fine (the compiler emits their `insert` before the `use:value` effect). Same as Solid; see
+ * spec §3.3.
+ */
 function valueDirective(el: Element, value: unknown): void {
   if (DEV && !('value' in el)) console.error('[frameact] use:value expects an input, textarea or select', el);
   bind(valueKind, el, value);
