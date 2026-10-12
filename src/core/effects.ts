@@ -8,6 +8,7 @@ import {
   F_LIVE_PIN,
   F_PARKED,
   F_STORE,
+  F_STORE_GATED,
   F_THREW,
   handleError,
   initComputationNode,
@@ -50,8 +51,6 @@ export interface EffectNode<T = any> extends Computation<T> {
   _drainEpoch: number;
   /** @internal frame drain loop guard: runs within `_drainEpoch` */
   _drainRuns: number;
-  /** @internal its schedule is a frame queue or a gateOnHeavyAnimation wrapper: store-caused runs wait for heavy animations (store gate) */
-  _storeGated: boolean;
 }
 
 export interface EffectOptions {
@@ -219,7 +218,7 @@ function Effect(
   this._tickRuns = 0;
   this._drainEpoch = 0;
   this._drainRuns = 0;
-  this._storeGated = storeGatedSchedules.has(schedule);
+  if (storeGatedSchedules.has(schedule)) this._flags |= F_STORE_GATED;
 }
 Effect.prototype = computationPrototype;
 
@@ -274,6 +273,11 @@ export function rebookParked(node: EffectNode): boolean {
   return true;
 }
 
+/** @internal store gate: still parked (not disposed, not unparked by a plain walk). */
+export function isParked(node: EffectNode): boolean {
+  return node._state !== STATE_DISPOSED && (node._flags & F_PARKED) !== 0;
+}
+
 /** @internal the heavy-animation scope snapped when the effect was created. */
 export function effectScopeOf(node: EffectNode): HeavyAnimationScope {
   return node._scope;
@@ -283,7 +287,7 @@ function runEffect(node: EffectNode) {
   if (node._state === STATE_DISPOSED) return;
   // Store gate (spec §3.5): decided when the run executes — once per drain, the gate samples the
   // scopes — not when the write happens. A parked effect stays dirty; a plain walk unparks it.
-  if (node._flags & F_STORE && node._storeGated && !(node._flags & (F_LIVE | F_LIVE_PIN)) && storeGate !== null && storeGate(node)) return;
+  if ((node._flags & (F_STORE | F_STORE_GATED | F_LIVE | F_LIVE_PIN)) === (F_STORE | F_STORE_GATED) && storeGate !== null && storeGate(node)) return;
 
   // Fast path: the whole owner chain is clean (no effect/memo ancestor dirty, no dirty list map).
   // Two loads per level, as before the zombie-rows rule; anything else goes to settleChain.
