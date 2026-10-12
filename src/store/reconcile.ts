@@ -95,7 +95,9 @@ function reconcileArray(prev: any[], next: any[], key: string | null): void {
  * matched by `key` (default `'id'`; keys must be unique — a duplicate puts one raw object at two
  * indexes) and merged into their old raw object — proxies and `For` rows keep their identity; new
  * items are adopted as they are (the store owns them from then on); the order is rewritten by index.
- * A non-object at the path, a type mismatch or a frozen `prev` (an immutable value) is replaced.
+ * A non-object at the path, a type mismatch, a frozen `prev` (an immutable value) or an object whose
+ * `key` differs from the previous one's (another entity) is replaced; at the store root that is an error.
+ * Not atomic when it throws midway (the leaves written so far stay).
  */
 export function reconcile<T>(value: T, options: ReconcileOptions = {}): (prev: unknown) => Mutable<T> {
   const key = options.key === undefined ? 'id' : options.key;
@@ -103,6 +105,8 @@ export function reconcile<T>(value: T, options: ReconcileOptions = {}): (prev: u
   return (prev: any) => {
     if (!isWrappable(prev) || !isWrappable(next)) return next;
     if (Array.isArray(prev) !== Array.isArray(next)) return next;
+    // the same identity rule as for nested objects: another key is another entity — replace, never merge into it
+    if (key !== null && !Array.isArray(next) && (next as any)[key] !== (prev as any)[key]) return next;
     reconcileInto(prev, next, key);
     return prev;
   };

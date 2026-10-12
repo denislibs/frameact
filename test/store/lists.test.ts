@@ -256,3 +256,29 @@ describe('zombie rows through the store (id list + entity lookup)', () => {
     }
   });
 });
+
+describe('reconcile at the top of a path (final review I3)', () => {
+  it('another id replaces the object instead of merging into it (an aliased raw object stays intact)', () => {
+    const [state, setState] = createStore<any>({
+      chats: { a: { id: 'a', title: 'A' }, b: { id: 'b', title: 'B' } },
+      current: null,
+    });
+    setState('current', state.chats.a);
+    expect(unwrap(state.current)).toBe(unwrap(state.chats.a));
+    setState('current', reconcile({ id: 'b', title: 'B2' }));
+    expect(state.chats.a).toEqual({ id: 'a', title: 'A' });
+    expect(state.current).toEqual({ id: 'b', title: 'B2' });
+    // the same id still merges in place
+    const cur = unwrap(state.current);
+    setState('current', reconcile({ id: 'b', title: 'B3' }));
+    expect(unwrap(state.current)).toBe(cur);
+    expect(state.current.title).toBe('B3');
+  });
+  it('key: null merges whatever the ids are', () => {
+    const [state, setState] = createStore<any>({ cur: { id: 1, t: 'x' } });
+    const raw = unwrap(state.cur);
+    setState('cur', reconcile({ id: 2, t: 'y' }, { key: null }));
+    expect(unwrap(state.cur)).toBe(raw);
+    expect(state.cur).toEqual({ id: 2, t: 'y' });
+  });
+});
