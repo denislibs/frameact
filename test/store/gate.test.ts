@@ -3,8 +3,8 @@
 // siblings do not, local changes never wait and read the current store, tickEnd logic is not gated,
 // release re-runs exactly the stale readers, live()/ungated() bypass.
 import {
-  beginHeavyAnimation, createEffect, createHeavyAnimationScope, createMemo, createMutationEffect, createRoot,
-  createSignal, flushSync, provideHeavyAnimationScope, type HeavyAnimationScope,
+  beginHeavyAnimation, createEffect, createHeavyAnimationScope, createMeasureEffect, createMemo, createMutationEffect, createRoot,
+  createSignal, flushSync, provideHeavyAnimationScope, requestMutation, type HeavyAnimationScope,
 } from '../../src/index';
 import { createStore, live, merge, ungated } from 'frameact/store';
 import { useDomHarness } from '../helpers/dom';
@@ -257,4 +257,47 @@ it('a parked effect disposed meanwhile is not run at release; blocking animation
   endBlocking();
   await settle();
   expect(log2).toEqual([1, 2]);
+});
+
+it('R1: an animation that ends inside a requestMutation task releases the parked set as a whole, in the next frame, measure before mutate (no split frame)', async () => {
+  const [state, setState] = createStore({ n: 0 });
+  const [local, setLocal] = createSignal(0);
+  const scope = createHeavyAnimationScope();
+  const order: string[] = [];
+  inScope(scope, () => {
+    createMeasureEffect(() => state.n, (v) => { order.push(`measure:${v}`); });
+    createMutationEffect(() => state.n, (v) => { order.push(`mutate:${v}`); });
+    createMutationEffect(local, () => {});
+  });
+  await settle();
+  order.length = 0;
+  const end = scope.begin(Infinity);
+  setState('n', 1);
+  await settle();
+  expect(order).toEqual([]); // parked
+  requestMutation(() => end()); // the animation ends in the mutate phase (a Transition does exactly this)
+  setLocal(1); // ... and a mutate drain is booked AFTER that task in the same frame (any other mutation effect)
+  await frame();
+  await flushMicrotasks();
+  expect(order).toEqual([]); // nothing of the set ran in the frame that ended the animation
+  await settle();
+  expect(order).toEqual(['measure:1', 'mutate:1']); // together, in phase order
+});
+
+it('R1: an animation that ends from a timer (outside any frame phase) still releases measure before mutate in one frame', async () => {
+  const [state, setState] = createStore({ n: 0 });
+  const scope = createHeavyAnimationScope();
+  const order: string[] = [];
+  inScope(scope, () => {
+    createMeasureEffect(() => state.n, (v) => { order.push(`measure:${v}`); });
+    createMutationEffect(() => state.n, (v) => { order.push(`mutate:${v}`); });
+  });
+  await settle();
+  order.length = 0;
+  const end = scope.begin(Infinity);
+  setState('n', 1);
+  await settle();
+  end();
+  await settle();
+  expect(order).toEqual(['measure:1', 'mutate:1']);
 });

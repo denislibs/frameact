@@ -266,6 +266,22 @@ function releaseParked(scope: HeavyAnimationScope) {
   });
 }
 
+/**
+ * @internal The store gate's release (R1): re-book a set of effects inside a measure task, exactly like
+ * `releaseParked`, so that measure and mutate work of the set land in the SAME next frame in phase
+ * order — a synchronous re-book from an animation that ended in the mutate phase would run the
+ * mutate effects now and the measure ones a frame later (a scroll snapshot taken after the DOM changed).
+ */
+export function releaseInFrame(rebook: () => void) {
+  requestMeasure(() => {
+    rebook();
+    if (queues.measure.length) {
+      armed.measure = true; // drain's finally resets it; a drain booked earlier then finds an empty queue
+      drain('measure');
+    }
+  });
+}
+
 function park(scope: HeavyAnimationScope, entry: FrameEntry) {
   try {
     if (!Array.isArray(scope._parked)) scope._parked = [];

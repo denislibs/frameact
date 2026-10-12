@@ -3,6 +3,7 @@
 // runEffect hook when `frameact/store` is imported; without a store nothing carries F_STORE and the
 // hook is never consulted. The core decides WHETHER a run is a candidate (F_STORE, store-gated schedule,
 // not live); this module decides WHERE it waits and releases it.
+import { releaseInFrame } from '../core/frame';
 import { effectScopeOf, isParked, parkEffect, rebookParked, setStoreGate, type EffectNode } from '../core/effects';
 import { firstAnimatingScopeSampled, isAnyScopeAnimating, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
 
@@ -29,10 +30,13 @@ function release(scope: HeavyAnimationScope) {
   const p = parked.get(scope);
   if (p === undefined) return;
   parked.delete(scope);
-  // Re-booked in park order; each lands in the next frame through its own schedule. An effect that
-  // ran meanwhile (unparked by a plain walk) or was disposed is skipped; one whose chain still
-  // animates (a nested scope) parks there again at its run.
-  for (const node of p.effects) rebookParked(node);
+  // Re-booked in park order inside a measure task (as the blocking release does): the whole set lands
+  // in the next frame, measure effects before mutate ones, even when the animation ends in the mutate
+  // phase. Each goes through its own schedule. An effect that ran meanwhile (unparked by a plain walk)
+  // or was disposed is skipped; one whose chain still animates (a nested scope) parks there again at its run.
+  releaseInFrame(() => {
+    for (const node of p.effects) rebookParked(node);
+  });
 }
 
 setStoreGate((node) => {
