@@ -113,4 +113,17 @@ describe('mergeProps', () => {
       expect(Object.keys(merged)).toEqual(['a']);
     }
   });
+
+  it('symbol keys survive in both branches', () => {
+    const sym = Symbol('marker');
+    const hidden = Symbol('hidden');
+    const src = { a: 1, [sym]: 'x' };
+    Object.defineProperty(src, hidden, { value: 'h', enumerable: false });
+    for (const merged of [mergeProps(src, { b: 2 }), mergeProps(src, () => ({ b: 2 }))]) {
+      expect(merged[sym]).toBe('x');
+      expect(Reflect.ownKeys(merged)).toEqual(expect.arrayContaining(['a', 'b', sym]));
+      expect(Reflect.ownKeys(merged)).not.toContain(hidden);
+      expect(Object.getOwnPropertySymbols(merged)).toEqual([sym]);
+    }
+  });
 });

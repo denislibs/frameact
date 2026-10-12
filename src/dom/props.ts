@@ -34,11 +34,12 @@ function hasIn(sources: PropsSource[], key: PropertyKey): boolean {
   return false;
 }
 
-function keysOf(sources: PropsSource[]): string[] {
-  const keys = new Set<string>();
+/** Own enumerable keys, strings and symbols alike. */
+function keysOf(sources: PropsSource[]): (string | symbol)[] {
+  const keys = new Set<string | symbol>();
   for (const source of sources) {
     const s = resolveSource(source);
-    if (s) for (const key of Object.keys(s)) keys.add(key);
+    if (s) for (const key of Reflect.ownKeys(s)) if (Object.prototype.propertyIsEnumerable.call(s, key)) keys.add(key);
   }
   return [...keys];
 }
@@ -60,7 +61,7 @@ export function mergeProps(...sources: PropsSource[]): any {
           : undefined,
     });
   }
-  const target: Record<string, unknown> = {};
+  const target: Record<PropertyKey, unknown> = {};
   for (const key of keysOf(sources)) {
     Object.defineProperty(target, key, { configurable: true, enumerable: true, get: () => getFrom(sources, key) });
   }
