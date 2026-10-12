@@ -80,3 +80,36 @@ it('works on SVG elements', () => {
   className(el, { on: true });
   expect(el.getAttribute('class')).toBe('on');
 });
+
+it('string -> object -> string transitions, tabs/newlines and duplicate tokens', () => {
+  const el = document.createElement('div');
+  className(el, 'a\tb\nc a');
+  expect(classes(el)).toEqual(new Set(['a', 'b', 'c']));
+  className(el, { b: true, d: true });
+  expect(classes(el)).toEqual(new Set(['b', 'd']));
+  className(el, 'e  e');
+  expect(classes(el)).toEqual(new Set(['e']));
+});
+
+it('only ASCII whitespace separates tokens (NBSP stays inside a token)', () => {
+  const out = new Set<string>();
+  classTokens('a\u00a0b c', out);
+  expect(out).toEqual(new Set(['a\u00a0b', 'c']));
+  const el = document.createElement('div');
+  toggleClassToken(el, 'x\u00a0y', true);
+  expect(classes(el)).toEqual(new Set(['x\u00a0y']));
+});
+
+it("object keys 'undefined' and 'null' are skipped", () => {
+  const out = new Set<string>();
+  classTokens({ undefined: true, null: true, ok: true }, out);
+  expect(out).toEqual(new Set(['ok']));
+});
+
+it('a reactive class drops a token that addExtraClass also added (documented overlap)', () => {
+  const el = document.createElement('div');
+  className(el, 'on');
+  addExtraClass(el, 'on');
+  className(el, '');
+  expect(classes(el)).toEqual(new Set());
+});

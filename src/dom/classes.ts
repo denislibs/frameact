@@ -1,6 +1,8 @@
-// Token-diff class writes (spec §3.3). Class-shape handling adapted from solidjs/solid
-// packages/web/src/client.ts (MIT, © 2016-2025 Ryan Carniato); extra-class helpers mirror teact's
-// addExtraClass/removeExtraClass/toggleExtraClass (MIT, © 2022 Alexander Zinchuk) without its registry.
+// Adapted from solidjs/solid packages/web/src/client.ts (MIT, © 2016-2025 Ryan Carniato);
+// the extra-class helpers mirror teact's addExtraClass/removeExtraClass/toggleExtraClass
+// (MIT, © 2022 Alexander Zinchuk) without its registry.
+//
+// Token-diff class writes (spec §3.3).
 //
 // The set of tokens a binding applied lives on the element (WeakMap). Every write path — `class=`,
 // `classList=`, spreads — adds/removes only the tokens that changed, so imperative classes
@@ -8,6 +10,12 @@
 // independent channels; `class:x` toggles are per token and tracked by neither. The channels share
 // the element's one DOM token list: a token that BOTH channels (or `class:x`) apply is removed as
 // soon as either of them drops it. Keep the tokens of the channels disjoint.
+//
+// The same holds against the imperative helpers: a reactive `class` that drops a token removes it
+// even if `addExtraClass` also added it (there is no registry that re-adds extra classes), so keep
+// extra classes disjoint from the tokens a binding can produce.
+//
+// Tokens are separated by ASCII whitespace only (space, \t, \n, \f, \r), like the `class` attribute.
 
 interface Applied {
   raw: unknown;
@@ -16,8 +24,8 @@ interface Applied {
 
 const classChannel = new WeakMap<Element, Applied>();
 const classListChannel = new WeakMap<Element, Applied>();
-const WHITESPACE = /\s/;
-const SPLIT = /\s+/;
+const WHITESPACE = /[ \t\n\f\r]/;
+const SPLIT = /[ \t\n\f\r]+/;
 
 function addTokens(str: string, out: Set<string>): void {
   if (!str) return;
@@ -39,7 +47,7 @@ export function classTokens(value: unknown, out: Set<string>): void {
   }
   if (typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    for (const key in record) if (key && key !== 'undefined' && record[key]) addTokens(key, out);
+    for (const key in record) if (key && key !== 'undefined' && key !== 'null' && record[key]) addTokens(key, out);
   }
 }
 
