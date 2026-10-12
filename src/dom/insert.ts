@@ -2,6 +2,8 @@
 // dom-expressions packages/dom-expressions/src/client.js (MIT, © 2018-2019 Ryan Carniato).
 // frameact: `insert` is a two-phase render effect — compute = normalize (pure; creates subtrees on
 // detached DOM), apply = insertExpression (the DOM write: synchronous at creation, mutate phase later).
+// Structure is read and written through the prototype natives (natives.ts): a parent or a child that
+// is a <form> with a descendant named `insertBefore`, `firstChild`, `textContent`… must not break a slot.
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import type { EffectOptions } from '../core/effects';
@@ -125,7 +127,7 @@ export function insert(
   }
   if (multi && (initial as unknown[]).length === 0) {
     const placeholder = createOwnText('');
-    parent.insertBefore(placeholder, marker ?? null);
+    getNatives().insertBefore.call(parent, placeholder, marker ?? null);
     initial = [placeholder];
   }
   let current: any = initial;
@@ -164,6 +166,7 @@ export function insert(
  */
 export function insertExpression(parent: MountableElement, value: any, current: any, marker?: Node | null): any {
   if (value === current) return value;
+  const { firstChild, nodeType, parentNode, insertBefore, replaceChild, removeChild, setTextContent } = getNatives();
   const t = typeof value;
   const multi = marker !== undefined;
 
@@ -178,10 +181,10 @@ export function insertExpression(parent: MountableElement, value: any, current: 
       return cleanChildren(parent, current, marker, node);
     }
     const tc = typeof current;
-    const first = parent.firstChild;
-    if ((tc === 'string' || tc === 'number') && current !== '' && first && first.nodeType === 3) {
+    const first = firstChild.call(parent);
+    if ((tc === 'string' || tc === 'number') && current !== '' && first && nodeType.call(first) === 3) {
       (first as Text).data = text;
-    } else parent.textContent = text;
+    } else setTextContent.call(parent, text);
     return value;
   }
   if (value == null || t === 'boolean') return cleanChildren(parent, current, marker);
@@ -225,8 +228,8 @@ export function insertExpression(parent: MountableElement, value: any, current: 
       }
     } else {
       if (current != null && current !== '') {
-        if (!multi) parent.textContent = '';
-        else if (current.nodeType && current.parentNode === parent) current.remove();
+        if (!multi) setTextContent.call(parent, '');
+        else if (current.nodeType && parentNode.call(current) === parent) removeChild.call(parent, current);
       }
       appendNodes(parent, value, marker ?? null);
     }
@@ -236,12 +239,12 @@ export function insertExpression(parent: MountableElement, value: any, current: 
     if (Array.isArray(current)) {
       cleanChildren(parent, current, multi ? marker : null, value);
     } else if (current != null && current.nodeType) {
-      if (current.parentNode === parent) parent.replaceChild(value, current);
-      else parent.insertBefore(value, marker ?? null);
-    } else if (current != null && current !== '' && parent.firstChild) {
+      if (parentNode.call(current) === parent) replaceChild.call(parent, value, current);
+      else insertBefore.call(parent, value, marker ?? null);
+    } else if (current != null && current !== '' && firstChild.call(parent)) {
       // a sole text child holds the previous primitive (`0`/`NaN` are falsy, hence `!= null`)
-      parent.replaceChild(value, parent.firstChild);
-    } else parent.insertBefore(value, marker ?? null);
+      replaceChild.call(parent, value, firstChild.call(parent)!);
+    } else insertBefore.call(parent, value, marker ?? null);
     tagSlot(value, marker);
     return value;
   }
@@ -251,10 +254,11 @@ export function insertExpression(parent: MountableElement, value: any, current: 
 
 /** Remove the slot's nodes (optionally replacing them with one node). Returns the new `current`. */
 function cleanChildren(parent: MountableElement, current: any, marker?: Node | null, replacement?: any): any {
+  const { insertBefore, replaceChild, removeChild, appendChild, setTextContent } = getNatives();
   if (marker === undefined) {
-    parent.textContent = '';
+    setTextContent.call(parent, '');
     if (replacement) {
-      parent.appendChild(replacement);
+      appendChild.call(parent, replacement);
       tagSlot(replacement, marker);
     }
     return replacement ?? '';
@@ -267,20 +271,21 @@ function cleanChildren(parent: MountableElement, current: any, marker?: Node | n
       if (replacement !== el) {
         const owns = ownedBy(el, parent, marker);
         if (replacement && !inserted && !i) {
-          if (owns) parent.replaceChild(replacement, el);
-          else parent.insertBefore(replacement, marker);
-        } else if (owns) el.remove();
+          if (owns) replaceChild.call(parent, replacement, el);
+          else insertBefore.call(parent, replacement, marker);
+        } else if (owns) removeChild.call(parent, el);
       } else inserted = true;
     }
-  } else if (replacement) parent.insertBefore(replacement, marker);
+  } else if (replacement) insertBefore.call(parent, replacement, marker);
   if (replacement) tagSlot(replacement, marker);
   return replacement ? [replacement] : [];
 }
 
 function appendNodes(parent: MountableElement, array: any[], marker: Node | null): void {
+  const { insertBefore } = getNatives();
   for (let i = 0; i < array.length; i++) {
     const n = array[i];
-    parent.insertBefore(n, marker);
+    insertBefore.call(parent, n, marker);
     tagSlot(n, marker);
   }
 }

@@ -18,6 +18,7 @@ import { className, classList } from './classes';
 import { Aliases, ChildProperties, DelegatedEvents, getPropAlias, Properties, SVG_NS } from './constants';
 import { addEvent, delegateEvents, setListener, tupleListener } from './events';
 import { insert, insertExpression, normalize } from './insert';
+import { getNatives } from './natives';
 import { style } from './styles';
 
 export type PropsSource =
@@ -147,7 +148,7 @@ export function spread(
   if (!skipChildren && !(skip !== undefined && skip('children'))) {
     insert(node, () => childrenOf(resolved()), undefined, undefined, name === undefined ? undefined : { name: `${name}.children` });
   }
-  const traits: Traits = { fresh: true, isSVG: node.namespaceURI === SVG_NS, dashed: node.nodeName.includes('-') };
+  const traits: Traits = traitsOf(node, true);
   createRenderEffect(
     () => collectProps(resolved(), keys, skip),
     (next) => {
@@ -225,11 +226,13 @@ export function assign(
   prevProps: Record<string, unknown> = Object.create(null),
   skipRef = false,
 ): void {
-  applyProps(node, props || {}, skipChildren, prevProps, skipRef, {
-    fresh: false,
-    isSVG: node.namespaceURI === SVG_NS,
-    dashed: node.nodeName.includes('-'),
-  });
+  applyProps(node, props || {}, skipChildren, prevProps, skipRef, traitsOf(node, false));
+}
+
+/** Identity is read through the prototype natives: a <form> with a descendant named `nodeName` or `namespaceURI` is still a plain HTML form. */
+function traitsOf(node: Element, fresh: boolean): Traits {
+  const { namespaceURI, nodeName } = getNatives();
+  return { fresh, isSVG: namespaceURI.call(node) === SVG_NS, dashed: nodeName.call(node).includes('-') };
 }
 
 function applyProps(
@@ -319,14 +322,17 @@ const nativePrototypes = new WeakMap<Document, Map<string, object | null>>();
  * `null` when the probe fails; the caller then treats every name as native (the safe path).
  */
 function nativePrototype(node: Element): object | null {
-  const doc = node.ownerDocument;
+  const { ownerDocument, namespaceURI, localName } = getNatives();
+  const doc = ownerDocument.call(node)!;
+  const ns = namespaceURI.call(node);
+  const local = localName.call(node);
   let byTag = nativePrototypes.get(doc);
   if (!byTag) nativePrototypes.set(doc, (byTag = new Map()));
-  const key = `${node.namespaceURI}|${node.localName}`;
+  const key = `${ns}|${local}`;
   let proto = byTag.get(key);
   if (proto === undefined) {
     try {
-      proto = Object.getPrototypeOf(doc.createElementNS(node.namespaceURI, node.localName)) as object;
+      proto = Object.getPrototypeOf(doc.createElementNS(ns, local)) as object;
     } catch {
       proto = null;
     }
@@ -350,11 +356,13 @@ function assignCustomProp(node: Element, prop: string, value: unknown): void {
     if (DEV) console.error(`[frameact] ${prop}= is an HTML sink and is not written as a custom-element property.`);
     return;
   }
-  if (!node.nodeName.includes('-')) {
+  const { nodeName, localName } = getNatives();
+  if (!nodeName.call(node).includes('-')) {
     // A customized built-in: URL-component setters rewrite `href` behind the policy's back
     // (`href="x:…"` + `protocol="javascript"`), so they are refused outright on hyperlinks...
-    if (HYPERLINK_TAGS.has(node.localName) && URL_SETTERS.has(name)) {
-      if (DEV) console.error(`[frameact] ${prop}= is a URL setter and is not written on <${node.localName} is>; set href instead.`);
+    const local = localName.call(node);
+    if (HYPERLINK_TAGS.has(local) && URL_SETTERS.has(name)) {
+      if (DEV) console.error(`[frameact] ${prop}= is a URL setter and is not written on <${local} is>; set href instead.`);
       return;
     }
     // ...and any name the native element already has (reflecting or not) takes the normal path, the
@@ -417,7 +425,7 @@ function assignProp(
         // A refused value (a string, say) must not leave the previous handler behind.
         if (typeof value !== 'function') addEvent(node, event, null, true);
         addEvent(node, event, value, true);
-        delegateEvents([event], node.ownerDocument);
+        delegateEvents([event], getNatives().ownerDocument.call(node)!);
       } else {
         // setListener owns the bookkeeping (options of a handleEvent object, capture on removal); the
         // spread has its own slot, so an explicit `on:<event>` on the same element is independent.
@@ -426,7 +434,7 @@ function assignProp(
       return value;
     }
   }
-  const propAlias = isSVG ? undefined : getPropAlias(prop, node.tagName);
+  const propAlias = isSVG ? undefined : getPropAlias(prop, getNatives().nodeName.call(node));
   const known = ChildProperties.has(prop) || Properties.has(prop) || propAlias !== undefined;
   if (ChildProperties.has(prop) || (!isSVG && known) || isCE) {
     if (isCE && !known) assignCustomProp(node, prop, value);

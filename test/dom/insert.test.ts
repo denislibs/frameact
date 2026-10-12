@@ -3,7 +3,7 @@ import { insert, insertExpression, portalHostOf } from '../../src/dom/insert';
 import { reconcileArrays, SLOT } from '../../src/dom/reconcile';
 import { render } from '../../src/dom/render';
 import { strictHooks } from '../../src/dom/strict';
-import { container, useDomHarness } from '../helpers/dom';
+import { container, spyNodeOps, useDomHarness } from '../helpers/dom';
 
 const { frame } = useDomHarness();
 
@@ -97,7 +97,7 @@ describe('arrays and function values', () => {
     const [list, setList] = createSignal([1, 2, 3]);
     createRoot(() => insert(ul, rowsFor(list)));
     const [a, b, c] = Array.from(ul.children);
-    const spy = vi.spyOn(ul, 'insertBefore');
+    const { insertBefore: spy } = spyNodeOps(ul, 'insertBefore');
     setList([2, 1, 3]);
     await frame();
     expect(Array.from(ul.children)).toEqual([b, a, c]);

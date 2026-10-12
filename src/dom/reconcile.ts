@@ -1,5 +1,8 @@
 // Adapted from solidjs/solid packages/web/src/reconcile.ts (MIT, © 2016-2025 Ryan Carniato),
 // itself a modified https://github.com/WebReflection/udomdiff (ISC, © 2020 Andrea Giammarchi).
+// frameact: structure is read and written through the prototype natives (natives.ts): a row that is
+// a <form> with a descendant named `remove`, `parentNode` or `nextSibling` must not break the diff.
+import { getNatives } from './natives';
 
 /** Nodes inserted under a marker are tagged with it: a node that migrated to another slot of the same parent is not ours. */
 export const SLOT: unique symbol = Symbol('frameact.slot');
@@ -12,15 +15,19 @@ export function tagSlot(n: any, marker: Node | null | undefined): void {
   n[SLOT] = marker ?? null;
 }
 
+/** The native `parentNode` getter, cached on first use: `ownedBy` runs once per kept row in the prefix scan. */
+let parentOf: ((this: Node) => Node | null) | undefined;
+
 /** `undefined` tag = never inserted by a slot (static template nodes): owned by whoever holds it. */
 export function ownedBy(n: any, parentNode: any, marker: any): boolean {
-  if (!n || n.parentNode !== parentNode) return false;
+  if (!n || (parentOf ??= getNatives().parentNode).call(n) !== parentNode) return false;
   const tag = n[SLOT];
   return tag === undefined || tag === (marker ?? null);
 }
 
 /** Diff `a` (current nodes) → `b` (next nodes) inside `parentNode`, minimal moves. `a` must be non-empty. */
 export function reconcileArrays(parentNode: any, a: any[], b: any[], marker?: Node | null): void {
+  const { nextSibling, insertBefore, replaceChild, removeChild } = getNatives();
   const bLength = b.length;
   let aEnd = a.length,
     bEnd = bLength,
@@ -28,7 +35,7 @@ export function reconcileArrays(parentNode: any, a: any[], b: any[], marker?: No
     bStart = 0,
     map: Map<any, number> | null = null;
   const tail = a[aEnd - 1];
-  const after = ownedBy(tail, parentNode, marker) ? tail.nextSibling : marker || null;
+  const after = ownedBy(tail, parentNode, marker) ? nextSibling.call(tail) : marker || null;
 
   while (aStart < aEnd || bStart < bEnd) {
     // common prefix
@@ -48,26 +55,26 @@ export function reconcileArrays(parentNode: any, a: any[], b: any[], marker?: No
       if (bEnd < bLength) {
         if (bStart) {
           const prev = b[bStart - 1];
-          node = ownedBy(prev, parentNode, marker) ? prev.nextSibling : after;
+          node = ownedBy(prev, parentNode, marker) ? nextSibling.call(prev) : after;
         } else node = b[bEnd - bStart];
       } else node = after;
       while (bStart < bEnd) {
         const n = b[bStart++];
-        parentNode.insertBefore(n, node);
+        insertBefore.call(parentNode, n, node);
         tagSlot(n, marker);
       }
     } else if (bEnd === bStart) {
       // remove
       while (aStart < aEnd) {
         const n = a[aStart++];
-        if ((!map || !map.has(n)) && ownedBy(n, parentNode, marker)) n.remove();
+        if ((!map || !map.has(n)) && ownedBy(n, parentNode, marker)) removeChild.call(parentNode, n);
       }
     } else if (a[aStart] === b[bEnd - 1] && b[bStart] === a[aEnd - 1] && ownedBy(a[aStart], parentNode, marker)) {
       // swap backward: walk inward with a stable front anchor
       const anchor = a[aStart];
       do {
         const n = a[--aEnd];
-        parentNode.insertBefore(n, anchor);
+        insertBefore.call(parentNode, n, anchor);
         tagSlot(n, marker);
         bStart++;
         if (aStart >= aEnd - 1 || bStart >= bEnd) break;
@@ -94,20 +101,20 @@ export function reconcileArrays(parentNode: any, a: any[], b: any[], marker?: No
             const node = ownedBy(head, parentNode, marker) ? head : after;
             while (bStart < index) {
               const n = b[bStart++];
-              parentNode.insertBefore(n, node);
+              insertBefore.call(parentNode, n, node);
               tagSlot(n, marker);
             }
           } else {
             const oldNode = a[aStart++];
             const newNode = b[bStart++];
-            if (ownedBy(oldNode, parentNode, marker)) parentNode.replaceChild(newNode, oldNode);
-            else parentNode.insertBefore(newNode, after);
+            if (ownedBy(oldNode, parentNode, marker)) replaceChild.call(parentNode, newNode, oldNode);
+            else insertBefore.call(parentNode, newNode, after);
             tagSlot(newNode, marker);
           }
         } else aStart++;
       } else {
         const n = a[aStart++];
-        if (ownedBy(n, parentNode, marker)) n.remove();
+        if (ownedBy(n, parentNode, marker)) removeChild.call(parentNode, n);
       }
     }
   }
@@ -145,12 +152,13 @@ export function reconcileManual(
   marker: Node | null | undefined,
   moved: ReadonlySet<unknown>,
 ): void {
+  const { insertBefore, removeChild } = getNatives();
   const nextSet = new Set<any>(next);
   const prevIndex = new Map<any, number>();
   for (let i = 0; i < prev.length; i++) {
     const n = prev[i];
     if (!nextSet.has(n)) {
-      if (ownedBy(n, parentNode, marker)) n.remove();
+      if (ownedBy(n, parentNode, marker)) removeChild.call(parentNode, n);
     } else if (ownedBy(n, parentNode, marker)) prevIndex.set(n, i);
   }
   // Stable nodes: already in the DOM, not moved, in increasing DOM order. Walking backwards gives
@@ -176,7 +184,7 @@ export function reconcileManual(
   for (let i = 0; i < length; i++) {
     if (stable[i]) continue;
     const n = next[i];
-    parentNode.insertBefore(n, anchors[i]);
+    insertBefore.call(parentNode, n, anchors[i]);
     tagSlot(n, marker);
   }
 }

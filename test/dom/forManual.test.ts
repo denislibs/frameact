@@ -3,7 +3,7 @@ import { insert } from '../../src/dom/insert';
 import { createComponent } from '../../src/dom/component';
 import { For } from '../../src/dom/list';
 import { reconcileManual } from '../../src/dom/reconcile';
-import { container, useDomHarness } from '../helpers/dom';
+import { container, spyNodeOps, useDomHarness } from '../helpers/dom';
 
 const { frame } = useDomHarness();
 
@@ -46,7 +46,7 @@ it('kept rows do not move when only the list order changes', async () => {
   const [list, setList] = createSignal<Chat[]>([{ id: 1, rank: 1 }, { id: 2, rank: 2 }, { id: 3, rank: 3 }]);
   mount(ul, list, (c) => c.rank);
   expect(ids(ul)).toEqual(['1', '2', '3']);
-  const ins = vi.spyOn(ul, 'insertBefore');
+  const { insertBefore: ins } = spyNodeOps(ul, 'insertBefore');
   const [c1, c2, c3] = list();
   setList([c3, c1, c2]);
   await frame();
@@ -88,7 +88,7 @@ it('prepend/append batches insert new rows around kept ones; removals drop rows'
   const [list, setList] = createSignal<Chat[]>([{ id: 1, rank: 1 }, { id: 2, rank: 2 }, { id: 3, rank: 3 }]);
   mount(ul, list, (c) => c.rank);
   const kept = Array.from(ul.children);
-  const ins = vi.spyOn(ul, 'insertBefore');
+  const { insertBefore: ins } = spyNodeOps(ul, 'insertBefore');
   setList([{ id: 10, rank: 0 }, { id: 11, rank: 0 }, ...list()]);
   await frame();
   expect(ids(ul)).toEqual(['10', '11', '1', '2', '3']);
@@ -191,12 +191,7 @@ it('a row whose mapper threw is skipped without disturbing the order of the othe
 
 /** Counts DOM writes on `ul`; `touched` = nodes that appeared in any childList record (added or removed). */
 function watch(ul: HTMLElement) {
-  const spies = {
-    insertBefore: vi.spyOn(ul, 'insertBefore'),
-    replaceChild: vi.spyOn(ul, 'replaceChild'),
-    removeChild: vi.spyOn(ul, 'removeChild'),
-    appendChild: vi.spyOn(ul, 'appendChild'),
-  };
+  const spies = spyNodeOps(ul, 'insertBefore', 'replaceChild', 'removeChild', 'appendChild');
   const records: MutationRecord[] = [];
   const observer = new MutationObserver((batch) => records.push(...batch));
   observer.observe(ul, { childList: true });
@@ -395,7 +390,7 @@ it('orderKey values are compared with Object.is: a stable NaN key never moves a 
   const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2), chat(3)));
   mount(ul, list, () => NaN);
   const [c1, c2, c3] = list();
-  const ins = vi.spyOn(ul, 'insertBefore');
+  const { insertBefore: ins } = spyNodeOps(ul, 'insertBefore');
   setList([c3, c2, c1]);
   await frame();
   expect(ids(ul)).toEqual(['1', '2', '3']);
@@ -436,7 +431,7 @@ it('reconcileManual moves a kept node that is out of DOM order but not listed as
     return el;
   });
   parent.append(a, b, c);
-  const ins = vi.spyOn(parent, 'insertBefore');
+  const { insertBefore: ins } = spyNodeOps(parent, 'insertBefore');
   reconcileManual(parent, [a, b, c], [b, c, a], null, new Set());
   expect(parent.textContent).toBe('bca');
   expect(ins).toHaveBeenCalledTimes(1);
@@ -523,7 +518,7 @@ describe('fast path: same rows, same order keys', () => {
     const keyFn = vi.fn((c: Chat) => c.rank);
     const { ul, order } = mountRows(list, keyFn);
     const before = order();
-    const spies = (['insertBefore', 'appendChild', 'removeChild', 'replaceChild'] as const).map((m) => vi.spyOn(ul, m));
+    const spies = Object.values(spyNodeOps(ul, 'insertBefore', 'appendChild', 'removeChild', 'replaceChild'));
     const observer = new MutationObserver(() => {});
     observer.observe(ul, { childList: true, subtree: true, characterData: true, attributes: true });
     const [c1, c2, c3] = list();
