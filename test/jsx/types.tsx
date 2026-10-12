@@ -65,6 +65,9 @@ export function rejected() {
   void (<For each={[1]} order="auto">{(n) => <i>{n}</i>}</For>);
   // @ts-expect-error
   void (<div class:active="yes" />);
+  // srcdoc is an HTML sink the runtime always refuses: only prop:srcdoc is typed
+  // @ts-expect-error
+  void (<iframe srcdoc="<p>x</p>" />);
   // the narrowed accessor is an accessor, not the value
   // @ts-expect-error
   void (<Show when={user()}>{(u) => u.title}</Show>);

@@ -134,6 +134,12 @@ reachable by name. It must come from the author, never from content (messages, b
 (`/^[a-zA-Z][a-zA-Z0-9-]*$/`, anything else renders nothing and logs a DEV error) and `script` is created inert
 (cloned from a parsed template, so its text never runs); the rest of the allow-list is yours.
 
+**Outside the policy.** The policy guards attribute *values*. These are explicit sinks or key choices and are not
+checked: `innerHTML=`, `prop:*` (including a compiled `prop:href` or `prop:srcdoc`), `setProperty`, the *keys* of a
+spread bag (`{...bag}` can name `innerHTML`, `prop:*`, `use:*`), a string `component` of `<Dynamic>`, and
+`<script src>` with an untrusted URL (the scheme filter cannot help there; a CSP `script-src` does). Keep their
+inputs under your control. `<iframe srcdoc=…>` is refused and not typed; write `prop:srcdoc` to opt in.
+
 ## Inspiration and credits
 
 - **[teact](https://github.com/Ajaxy/teact)** by Alexander Zinchuk — the frame discipline, fasterdom,

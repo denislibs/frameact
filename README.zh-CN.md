@@ -123,6 +123,11 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 名称会被校验（`/^[a-zA-Z][a-zA-Z0-9-]*$/`，其他情况不渲染任何内容，并在开发模式输出错误），`script` 以惰性方式创建
 （从已解析的模板克隆，其文本不会执行）；其余白名单由你自己负责。
 
+**策略之外。** 该策略只保护属性*值*。以下是显式的写入出口或键的选择，不会被检查：`innerHTML=`、`prop:*`
+（包括编译产生的 `prop:href` 和 `prop:srcdoc`）、`setProperty`、展开对象的*键*（`{...bag}` 可以指定 `innerHTML`、`prop:*`、`use:*`）、
+`<Dynamic>` 的字符串 `component`，以及带有不受信任 URL 的 `<script src>`（协议过滤对此无能为力，需要 CSP `script-src`）。
+请确保它们的输入受你控制。`<iframe srcdoc=…>` 会被拒绝且没有类型定义；如需显式写入，请使用 `prop:srcdoc`。
+
 ## 灵感与致谢
 
 - **[teact](https://github.com/Ajaxy/teact)**（作者 Alexander Zinchuk）—— 帧调度纪律、fasterdom、stricterdom

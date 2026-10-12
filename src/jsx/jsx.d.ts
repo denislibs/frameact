@@ -1349,7 +1349,7 @@ export namespace JSX {
     referrerpolicy?: HTMLReferrerPolicy | undefined;
     sandbox?: HTMLIframeSandbox | string | undefined;
     src?: string | undefined;
-    srcdoc?: string | undefined;
+    // no `srcdoc`: the runtime refuses it as an attribute (an HTML sink); `prop:srcdoc` is the explicit opt-in.
     width?: number | string | undefined;
 
     referrerPolicy?: HTMLReferrerPolicy | undefined;
