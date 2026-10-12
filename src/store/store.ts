@@ -307,7 +307,7 @@ function notifyLeaf(s: Computation, value: unknown) {
  * values — but an object of the tree that was never read has no node, so the walk goes through it too
  * (like Solid's deep unwrap). Iterative, with a visited set: a cyclic or very deep new graph is safe.
  */
-function adopt(v: object): object {
+export function adopt(v: object): object {
   const r = (v as any)[$RAW];
   if (r !== undefined) return r; // a store proxy or a produce draft
   if (nodes.has(v) || !isWrappable(v)) return v;
@@ -389,6 +389,53 @@ export function setProperty(raw: any, key: PropertyKey, value: unknown, deleteOn
   if (self !== null && (isArr || had === del)) notifyLeaf(self, ++node.shape);
   const vals = node.vals;
   if (vals !== null) notifyLeaf(vals, ++node.valsVer);
+}
+
+/**
+ * Batched write into an array: `mutate` writes the raw array natively (no per-index trap, no per-index
+ * notification) and the store notifies ONCE afterwards — the `length` leaf if it changed, every index
+ * leaf whose value changed (only indexes that have a reader are looked at: the table is small, the
+ * array may not be), the shape signal and the values signal. Readers run after the whole write, so
+ * none sees a half-moved array. `always`: notify the shape even if the length is unchanged (sort,
+ * reverse, fill, copyWithin, a same-size splice rewrite the items in place).
+ */
+export function writeArray<R>(raw: any[], always: boolean, mutate: () => R): R {
+  const node = nodes.get(raw);
+  if (node === undefined || (node.sigs === null && node.self === null && node.vals === null)) return mutate();
+  const prevLen = raw.length;
+  let idx: number[] | null = null;
+  let old: unknown[] | null = null;
+  const sigs = node.sigs;
+  if (sigs !== null) {
+    for (const k in sigs) {
+      const n = +k;
+      if (n >= 0 && String(n) === k) {
+        (idx ??= []).push(n);
+        (old ??= []).push(raw[n]);
+      }
+    }
+  }
+  const result = mutate();
+  const len = raw.length;
+  if (sigs !== null) {
+    if (idx !== null) {
+      for (let j = 0; j < idx.length; j++) {
+        const v = raw[idx[j]];
+        if (v !== old![j]) notifyLeaf(sigs[idx[j]], v);
+      }
+    }
+    if (len !== prevLen) {
+      const ls = sigs.length;
+      if (ls !== undefined) notifyLeaf(ls, len);
+    }
+  }
+  if (always || len !== prevLen) {
+    const self = node.self;
+    if (self !== null) notifyLeaf(self, ++node.shape);
+    const vals = node.vals;
+    if (vals !== null) notifyLeaf(vals, ++node.valsVer);
+  }
+  return result;
 }
 
 declare const MERGED: unique symbol;
@@ -528,11 +575,81 @@ function staleDraft(): boolean {
   return true; // production: dropped, like a write to a detached object
 }
 const drafts = new WeakMap<object, any>();
+
+const asDraft = (v: unknown): unknown => (isWrappable(v) ? draftOf(v) : v);
+const adoptArg = (v: unknown): unknown => (v !== null && typeof v === 'object' ? adopt(v) : v);
+/** `draft.push(…)` and friends: one batched native write (see writeArray). Items come back as drafts. */
+const MUTATORS: Record<string, (this: any, ...args: any[]) => unknown> = Object.assign(Object.create(null), {
+  push(this: any, ...items: unknown[]) {
+    const raw = draftTarget(this);
+    return raw && writeArray(raw, false, () => raw.push(...items.map(adoptArg)));
+  },
+  pop(this: any) {
+    const raw = draftTarget(this);
+    return raw && asDraft(writeArray(raw, false, () => raw.pop()));
+  },
+  shift(this: any) {
+    const raw = draftTarget(this);
+    return raw && asDraft(writeArray(raw, false, () => raw.shift()));
+  },
+  unshift(this: any, ...items: unknown[]) {
+    const raw = draftTarget(this);
+    return raw && writeArray(raw, false, () => raw.unshift(...items.map(adoptArg)));
+  },
+  splice(this: any, ...args: unknown[]) {
+    const raw = draftTarget(this);
+    if (!raw) return undefined;
+    const call = args.length > 2 ? [args[0], args[1], ...args.slice(2).map(adoptArg)] : args;
+    const removed = writeArray(raw, true, () => (raw.splice as (...a: unknown[]) => unknown[])(...call));
+    return removed.map(asDraft);
+  },
+  sort(this: any, compare?: (a: unknown, b: unknown) => number) {
+    const raw = draftTarget(this);
+    if (!raw) return undefined;
+    // oxlint-disable-next-line unicorn/no-array-sort -- the point is the in-place mutation of the raw array
+    writeArray(raw, true, () => raw.sort(compare === undefined ? undefined : (a, b) => compare(asDraft(a), asDraft(b))));
+    return this;
+  },
+  reverse(this: any) {
+    const raw = draftTarget(this);
+    if (!raw) return undefined;
+    // oxlint-disable-next-line unicorn/no-array-reverse -- in place, by design
+    writeArray(raw, true, () => raw.reverse());
+    return this;
+  },
+  fill(this: any, value: unknown, start?: number, end?: number) {
+    const raw = draftTarget(this);
+    if (!raw) return undefined;
+    writeArray(raw, true, () => raw.fill(adoptArg(value), start, end));
+    return this;
+  },
+  copyWithin(this: any, target: number, start: number, end?: number) {
+    const raw = draftTarget(this);
+    if (!raw) return undefined;
+    writeArray(raw, true, () => raw.copyWithin(target, start, end));
+    return this;
+  },
+});
+/** The raw array behind the draft a mutator was called on; `null` for a stale draft (DEV: throws). */
+function draftTarget(draft: any): any[] | null {
+  const raw = draft?.[$RAW];
+  if (!Array.isArray(raw)) throw new TypeError('[frameact/store] an array mutator was called on something that is not a produce() draft of an array');
+  if (draftDepth === 0) {
+    staleDraft();
+    return null;
+  }
+  return raw;
+}
+
 const draftHandler: ProxyHandler<any> = {
   get(target, key) {
     if (key === $RAW) return target;
     const v = target[key];
     if (typeof v === 'object' && v !== null) return key === PROTO_KEY ? undefined : isWrappable(v) ? draftOf(v) : v;
+    if (typeof v === 'function' && typeof key === 'string' && Array.isArray(target)) {
+      const m = MUTATORS[key];
+      if (m !== undefined && v === (Array.prototype as any)[key]) return m;
+    }
     return v;
   },
   set(target, key, value) {

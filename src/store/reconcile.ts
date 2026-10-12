@@ -1,6 +1,6 @@
 // reconcile (spec §3.5 req. 3): merge immutable data into the store by diff — matched items (by key)
 // and unchanged branches keep their store identity, only changed leaves notify.
-import { isWrappable, setProperty, unwrap } from './store';
+import { adopt, isWrappable, setProperty, unwrap, writeArray } from './store';
 
 export interface ReconcileOptions {
   /** Identity key of array items (default `'id'`); `null`: arrays are diffed by index. */
@@ -83,9 +83,18 @@ function reconcileArray(prev: any[], next: any[], key: string | null): void {
       if (old !== undefined && old !== item) {
         reconcileInto(old, item, key);
         result[i] = old;
-      } else result[i] = item;
+      } else result[i] = item !== null && typeof item === 'object' ? adopt(item) : item; // (a new item: the store owns it from now on)
     }
-    for (let i = 0; i < n; i++) if (prev[i] !== result[i]) setProperty(prev, i, result[i], false);
+    // The order is rewritten natively and announced once (writeArray), not index by index.
+    let moved = false;
+    for (let i = 0; i < n && !moved; i++) moved = prev[i] !== result[i];
+    if (moved || prev.length !== n) {
+      writeArray(prev, moved, () => {
+        for (let i = 0; i < n; i++) if (prev[i] !== result[i]) prev[i] = result[i];
+        if (prev.length !== n) prev.length = n;
+      });
+    }
+    return;
   }
   if (prev.length !== n) setProperty(prev, 'length', n);
 }
