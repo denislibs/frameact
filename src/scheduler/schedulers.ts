@@ -42,6 +42,32 @@ export function throttle<F extends AnyToVoidFunction>(fn: F, ms: number, shouldR
   };
 }
 
+/**
+ * teact's `debounce`: `shouldRunFirst` calls `fn` at once on the leading edge, `shouldRunLast` once
+ * more `ms` after the last call; a call during the wait restarts it. InfiniteScroll's load-more
+ * uses `debounce(fn, 1000, true, false)`: fire now, then ignore repeats for a second.
+ */
+export function debounce<F extends AnyToVoidFunction>(fn: F, ms: number, shouldRunFirst = true, shouldRunLast = true) {
+  let waitingTimeout: ReturnType<typeof setTimeout> | undefined;
+
+  return (...args: Parameters<F>) => {
+    if (waitingTimeout) {
+      clearTimeout(waitingTimeout);
+      waitingTimeout = undefined;
+    } else if (shouldRunFirst) {
+      fn(...args);
+    }
+
+    waitingTimeout = setTimeout(() => {
+      if (shouldRunLast) {
+        fn(...args);
+      }
+
+      waitingTimeout = undefined;
+    }, ms);
+  };
+}
+
 export function throttleWithTickEnd<F extends AnyToVoidFunction>(fn: F) {
   return throttleWith(onTickEnd, fn);
 }

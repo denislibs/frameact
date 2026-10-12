@@ -5,5 +5,6 @@ export {
   flushSync as flushFrameSync, type Phase,
 } from './fasterdom';
 export {
-  onTickEnd, onIdle, throttleWith, throttle, type NoneToVoidFunction, type Scheduler,
+  onTickEnd, onIdle, throttleWith, throttle, throttleWithTickEnd, debounce, fastRaf,
+  type NoneToVoidFunction, type Scheduler,
 } from './schedulers';

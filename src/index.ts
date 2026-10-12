@@ -73,5 +73,7 @@ export {
   provideHeavyAnimationScope, currentHeavyAnimationScope, onHeavyAnimation, onFullyIdle,
   type HeavyAnimationScope, type OnceSignal,
 } from './scheduler/heavyAnimation';
+export { onMount, onDestroy, watchHeavyAnimation } from './core/lifecycle';
+export { previous, currentOrPrev, frozenWhile, type PreviousOptions, type CurrentOrPrevOptions } from './core/derive';
 export { flushSync } from './core/flush';
 export type { Scope as Owner } from './core/types';

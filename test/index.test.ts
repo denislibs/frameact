@@ -12,6 +12,7 @@ it('exports the public surface', () => {
     'requestMeasure', 'requestMutation', 'requestNextMutation', 'requestForcedReflow', 'getPhase', 'onTickEnd', 'onIdle',
     'beginHeavyAnimation', 'getIsHeavyAnimating', 'getIsBlockingAnimating', 'createHeavyAnimationScope', 'rootScope',
     'provideHeavyAnimationScope', 'currentHeavyAnimationScope', 'onHeavyAnimation', 'onFullyIdle', 'flushSync',
+    'onMount', 'onDestroy', 'watchHeavyAnimation', 'previous', 'currentOrPrev', 'frozenWhile',
   ]) {
     expect(typeof (api as any)[name], name).not.toBe('undefined');
   }
@@ -38,7 +39,7 @@ it('createSignal returns a tuple with equals support; flushSync drains tickEnd a
 it('I6: internal and scheduler-level names are not part of the main entry', () => {
   for (const name of [
     'getRawContext', 'setRawContext', 'computedKeyedMap', 'computedMap', 'computedKeyedMapBy', 'NOT_APPLIED',
-    'peek', 'throttle', 'onPhaseChange',
+    'peek', 'throttle', 'onPhaseChange', 'debounce', 'fastRaf', 'throttleWithTickEnd',
   ]) {
     expect((api as any)[name], name).toBeUndefined();
   }

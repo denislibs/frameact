@@ -1,4 +1,4 @@
-import { fastRaf, onTickEnd, flushTickEnd, onIdle, throttleWith } from '../../src/scheduler/schedulers';
+import { debounce, fastRaf, onTickEnd, flushTickEnd, onIdle, throttleWith, throttleWithTickEnd } from '../../src/scheduler/schedulers';
 import { installFakeRaf } from '../helpers/raf';
 import { flushMicrotasks } from '../helpers/micro';
 
@@ -120,5 +120,46 @@ describe('throttleWith', () => {
     scheduled[0]();
     expect(fn).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledWith(3);
+  });
+});
+
+describe('debounce', () => {
+  it('leading + trailing by default; (true, false) fires once and ignores repeats for the window; the window restarts per call', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const both = vi.fn();
+    const d = debounce(both, 100);
+    d(1);
+    d(2);
+    expect(both).toHaveBeenCalledTimes(1);
+    expect(both).toHaveBeenLastCalledWith(1);
+    vi.advanceTimersByTime(99);
+    d(3); // restarts the window
+    vi.advanceTimersByTime(99);
+    expect(both).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(both).toHaveBeenCalledTimes(2);
+    expect(both).toHaveBeenLastCalledWith(3);
+
+    const first = vi.fn();
+    const loadMore = debounce(first, 1000, true, false);
+    loadMore();
+    loadMore();
+    vi.advanceTimersByTime(1000);
+    expect(first).toHaveBeenCalledTimes(1);
+    loadMore();
+    expect(first).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('throttleWithTickEnd', () => {
+  it('runs once per tick with the last arguments', async () => {
+    const fn = vi.fn();
+    const t = throttleWithTickEnd(fn);
+    t(1);
+    t(2);
+    expect(fn).not.toHaveBeenCalled();
+    await flushMicrotasks();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledWith(2);
   });
 });
