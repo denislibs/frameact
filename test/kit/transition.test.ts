@@ -185,13 +185,13 @@ it('a step started during an animation supersedes it: the first end only release
   await frame();
   expect(classes(s2)).toBe('Transition_slide Transition_slide-to'); // untouched: superseded
   expect(scope.isBlockingAnimating.peek()).toBe(true); // the second step's animation
-  expect(log).toEqual(['start', 'start']);
+  expect(log).toEqual(['start', 'stop', 'start']); // N4: the superseded step is stopped when the next starts
   animationEnd(s2);
   await frame();
   expect(classes(s2)).toBe('Transition_slide Transition_slide-active');
   expect(classes(s1)).toBe('Transition_slide Transition_slide-inactive');
   expect(scope.isBlockingAnimating.peek()).toBe(false);
-  expect(log).toEqual(['start', 'start', 'stop']);
+  expect(log).toEqual(['start', 'stop', 'start', 'stop']);
 });
 
 it('the scope is provided to the slides: a blocking animation parks their frame effects until the end; disposal ends a running animation', async () => {
@@ -401,4 +401,39 @@ it('slide.isActive() is current in the frame of the switch: a measure effect in 
   await frame();
   expect(seen.length).toBe(2);
   expect(warn.mock.calls.filter((c) => String(c[0]).includes('dirtied during the mutate phase'))).toEqual([]);
+});
+
+it('a superseded step whose slide keep-alive removed releases its blocking heavy animation at once, not at the 1 s fallback (N3)', async () => {
+  const { root, scope, setKey } = setup({ isBlockingAnimation: true });
+  const t = root.firstElementChild as HTMLElement;
+  setKey(1);
+  await frame();
+  setKey(2);
+  await frame();
+  const [, s2] = slidesOf(t);
+  setKey(3); // keep-alive keeps {2, 3}: slide 1, the target of the first (still running) step, is gone
+  await frame();
+  const [, s3] = slidesOf(t);
+  expect(slidesOf(t).length).toBe(2);
+  animationEnd(s2); // the second step's end
+  animationEnd(s3); // the last step's end
+  await frame();
+  expect(scope.isAnimating.peek()).toBe(false);
+  expect(scope.isBlockingAnimating.peek()).toBe(false);
+});
+
+it('onStart / onStop are paired under supersede: every start gets exactly one stop, in order (N4)', async () => {
+  const { root, setKey, log } = setup();
+  const t = root.firstElementChild as HTMLElement;
+  setKey(1);
+  await frame();
+  setKey(2);
+  await frame();
+  expect(log).toEqual(['start', 'stop', 'start']); // the first step is over the moment the second starts
+  animationEnd(slidesOf(t)[0]); // the first step's own (late) end: nothing more
+  await frame();
+  expect(log).toEqual(['start', 'stop', 'start']);
+  animationEnd(slidesOf(t)[1]);
+  await frame();
+  expect(log).toEqual(['start', 'stop', 'start', 'stop']);
 });

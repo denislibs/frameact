@@ -16,8 +16,9 @@
 //     the classes settle (`-active` / `-inactive`), `shouldCleanup` drops slides, `shouldRestoreHeight`
 //     measures the active slide in the forced-reflow phase of the same frame and writes the
 //     container's height in its mutate step, and `onStop` runs last.
-//   - A step during a running step supersedes it: the first step's end only releases its own heavy
-//     animation. A non-animated switch (`name: 'none'`, `disableAnimation`) during a running step
+//   - A step during a running step supersedes it: `onStop` runs for the first step as the second
+//     starts (pairs stay balanced), and the first step's end only releases its own heavy animation;
+//     a superseded step whose slide keep-alive removed is released at once. A non-animated switch (`name: 'none'`, `disableAnimation`) during a running step
 //     cancels it (waiter, heavy animation, `onStop`) so nothing stays stuck. Disposal cancels every
 //     in-flight end, releases every heavy animation and disposes the slides; nothing touches the DOM
 //     or calls `onStop` after it.
@@ -85,6 +86,7 @@ export interface TransitionProps {
   disableAnimation?: boolean;
   /** Extra class(es) for every slide. Read once. */
   slideClass?: string;
+  /** An animated step begins. Every `onStart` gets exactly one `onStop` (a step that is superseded is stopped as the next one starts: `start, stop, start, stop`), except when the component is disposed mid-step. */
   onStart?: () => void;
   onStop?: () => void;
   ref?: (el: HTMLDivElement) => void;
@@ -131,6 +133,8 @@ interface Step {
   to: SlideRecord;
   cancelWait: () => void;
   endHeavyAnimation: () => void;
+  /** `onStop` ran for this step (supersede, interrupt, drop or its own end): exactly once per `onStart`. */
+  stopped: boolean;
 }
 
 /** The props the component consumes itself; everything else (`id`, `class`, `ref`, `data-*`, `on*`) is spread onto the container. */
@@ -254,6 +258,8 @@ export function Transition(props: TransitionProps): unknown {
       const record = slides[i];
       if (record.key === currentKey || !drop(record)) continue;
       slides.splice(i, 1);
+      // A step still waiting on the removed slide would hold its heavy animation until the fallback.
+      for (let j = inFlight.length - 1; j >= 0; j--) if (inFlight[j].to === record) interrupt(inFlight[j]);
       record.dispose();
       if (natives.parentNode.call(record.el) === container) natives.removeChild.call(container, record.el);
     }
@@ -307,6 +313,13 @@ export function Transition(props: TransitionProps): unknown {
     if (disposed || step.seq !== stepSeq) return; // superseded: the later step finishes the classes
     settleSlides(step.to);
     settle();
+    stopStep(step);
+  }
+
+  /** `onStop` for `step`, once. */
+  function stopStep(step: Step): void {
+    if (step.stopped) return;
+    step.stopped = true;
     callback(props.onStop, 'onStop');
   }
 
@@ -315,7 +328,7 @@ export function Transition(props: TransitionProps): unknown {
     step.cancelWait();
     step.endHeavyAnimation();
     forget(step);
-    callback(props.onStop, 'onStop');
+    stopStep(step);
   }
 
   function applyStep(key: number, prevKey: number | undefined): void {
@@ -339,8 +352,11 @@ export function Transition(props: TransitionProps): unknown {
       settle();
       return;
     }
-    const step: Step = { seq: ++stepSeq, to: next, cancelWait: () => {}, endHeavyAnimation: () => {} };
-    running = step; // a step still running is superseded: its end only releases its heavy animation
+    // A step still running is superseded: it is over for `onStop` now (so every `onStart` has one `onStop`);
+    // its own end only releases its heavy animation.
+    if (running !== undefined) stopStep(running);
+    const step: Step = { seq: ++stepSeq, to: next, cancelWait: () => {}, endHeavyAnimation: () => {}, stopped: false };
+    running = step;
     inFlight.push(step);
     for (const record of slides) {
       setSlideState(record, record === next ? TO_SLIDE_CLASS_NAME : record === prev ? FROM_SLIDE_CLASS_NAME : INACTIVE_SLIDE_CLASS_NAME);
