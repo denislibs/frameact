@@ -1,11 +1,14 @@
-import { createMemo, mapArray, untrack } from '../index';
+import { createMemo, mapArray, untrack, type Accessor } from '../index';
 
-export type Accessor<T> = () => T;
+export type { Accessor };
 export type Each<T> = readonly T[] | undefined | null | false;
 
 export interface ForBaseProps<T> {
   each: Each<T>;
-  /** Rendered while the list is empty (created under For's owner, disposed when rows arrive). */
+  /**
+   * Rendered while the list is empty. It is read inside For's memo, so the memo owns it: it is
+   * disposed (its `onCleanup`s run) when rows arrive, and recreated when the list empties again.
+   */
   fallback?: unknown;
 }
 
@@ -14,6 +17,10 @@ export interface ForBaseProps<T> {
  * (identity by reference); `false` maps by index (item is an accessor); a function keys by
  * `keyFn(item)` — the pattern for immutable data: a replaced object with the same key updates the
  * row in place and `insert` sees no array change.
+ *
+ * `keyed` and `children` are read once, when the component is created: switching the mode or the
+ * row renderer later is not supported (`each` and `fallback` are reactive).
+ * Every mode passes the index argument to `children` (a number in `keyed: false`, else an accessor).
  */
 export function For<T>(
   props: ForBaseProps<T> & { keyed?: true; children: (item: T, index: Accessor<number>) => unknown },
