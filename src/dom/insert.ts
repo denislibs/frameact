@@ -5,7 +5,7 @@
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import type { EffectOptions } from '../core/effects';
-import { ownedBy, reconcileArrays, tagSlot } from './reconcile';
+import { manualOrderOf, ownedBy, reconcileArrays, reconcileManual, tagManualOrder, tagSlot } from './reconcile';
 
 // No `Document`: lib.dom types its `textContent` as a read-only `null`, and mounting into a Document is meaningless anyway.
 export type MountableElement = Element | ShadowRoot | DocumentFragment;
@@ -47,6 +47,10 @@ export function flatten(children: any, skipNonRendered: boolean, doNotUnwrap: bo
   }
   if (Array.isArray(children)) {
     const results: any[] = [];
+    // The copy keeps the manual-order tag (`For order="manual"`); a For nested inside a larger array
+    // is flattened into it and loses the tag: it then falls back to the ordinary reconcile.
+    const manual = manualOrderOf(children);
+    if (manual) tagManualOrder(results, manual);
     if (flattenArray(children, results, skipNonRendered, doNotUnwrap)) {
       return () => {
         const nested: any[] = [];
@@ -210,7 +214,11 @@ export function insertExpression(parent: MountableElement, value: any, current: 
       cleanChildren(parent, current, marker);
     } else if (currentArray) {
       if (current.length === 0) appendNodes(parent, value, marker ?? null);
-      else reconcileArrays(parent, current, value, marker);
+      else {
+        const manual = manualOrderOf(value);
+        if (manual) reconcileManual(parent, current, value, marker, manual);
+        else reconcileArrays(parent, current, value, marker);
+      }
     } else {
       if (current != null && current !== '') {
         if (!multi) parent.textContent = '';

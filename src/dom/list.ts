@@ -1,6 +1,7 @@
 // Manual order adapted from teact (MIT, © 2022 Alexander Zinchuk) — renderFastListChildren / teactOrderKey.
 import { DEV } from '../env';
 import { createMemo, mapArray, untrack, type Accessor } from '../index';
+import { tagManualOrder } from './reconcile';
 
 export type { Accessor };
 export type Each<T> = readonly T[] | undefined | null | false;
@@ -14,12 +15,13 @@ export interface ForBaseProps<T> {
   fallback?: unknown;
   /**
    * `manual`: the DOM order is not the list order. Kept rows stay where they are, new rows are
-   * inserted at their list index, and a kept row moves only when its `orderKey` changes. For lists
-   * whose visual order is a CSS transform of `index()` (ChatList): zero DOM moves on reorder.
-   * Every row must be a single DOM node.
+   * inserted at their list index (a contiguous run before one anchor), and a kept row moves only when
+   * its `orderKey` changes. For lists whose visual order is a CSS transform of `index()` (ChatList):
+   * zero DOM moves on reorder. Every row must be a single DOM node, and `For` must be the sole
+   * content of its slot (nested in a larger array it falls back to the ordinary diff).
    */
   order?: 'manual';
-  /** Computed per item, untracked, whenever `each` changes (it is not reactive on its own); a changed key moves that row to its list index. */
+  /** Computed per item, untracked, whenever `each` changes (it is not reactive on its own); a changed key moves that row to its list index. Keys are compared with `Object.is`: return a primitive (a fresh object or array counts as a change on every recompute). A throwing `orderKey` is logged and leaves that row where it is. */
   orderKey?: (item: T) => unknown;
 }
 
@@ -59,9 +61,14 @@ export function For<T>(
 
 let warnedManualRow = false;
 
+const isNode = (row: unknown): row is Node => row != null && !!(row as Node).nodeType;
+
 /**
- * The array handed to `insert` is in DOM order. `reconcileArrays` then performs only insertions,
- * removals and the moves caused by an `orderKey` change — never a reorder of kept rows.
+ * The array handed to `insert` is in DOM order (kept rows in their previous order, new rows at
+ * their list index) and tagged as manually ordered, with the set of rows whose `orderKey` changed.
+ * `insertExpression` then applies it with the insert-only `reconcileManual`: kept rows are never
+ * touched, new rows are inserted in batches, a row with a changed `orderKey` moves exactly once.
+ * Non-node rows (a mapper that threw maps to `undefined`) are never "kept": they hold no DOM.
  */
 function manualOrder<T>(
   mapped: () => unknown[],
@@ -77,29 +84,39 @@ function manualOrder<T>(
     // lets the changed row move.
     const items = each() || [];
     const keyFn = untrack(orderKey);
-    const prevSet = new Set(prevOrder);
+    const prevSet = new Set<unknown>();
+    for (const row of prevOrder) if (isNode(row)) prevSet.add(row);
     const nextKeys = new Map<unknown, unknown>();
     const moved = new Set<unknown>();
+    const rowSet = new Set<unknown>();
     for (let j = 0; j < rows.length; j++) {
       const row = rows[j];
-      if (DEV && !warnedManualRow && row != null && !(row as Node).nodeType) {
+      if (isNode(row)) rowSet.add(row);
+      else if (DEV && !warnedManualRow && row != null) {
         warnedManualRow = true;
         console.error('[frameact] <For order="manual">: every row must be a single DOM node', row);
       }
-      if (!keyFn) continue;
-      const key = untrack(() => keyFn(items[j]));
+      if (!keyFn || !isNode(row)) continue;
+      let key: unknown;
+      try {
+        key = untrack(() => keyFn(items[j]));
+      } catch (error) {
+        // a throwing orderKey must not lose the list update: that row keeps its place
+        console.error('[frameact] <For order="manual">: orderKey failed', error);
+        key = prevKeys.has(row) ? prevKeys.get(row) : undefined;
+      }
       nextKeys.set(row, key);
-      if (prevSet.has(row) && prevKeys.get(row) !== key) moved.add(row);
+      if (prevSet.has(row) && !Object.is(prevKeys.get(row), key)) moved.add(row);
     }
-    const rowSet = new Set(rows);
     const kept: unknown[] = [];
-    for (const row of prevOrder) if (rowSet.has(row) && !moved.has(row)) kept.push(row);
+    for (const row of prevOrder) if (isNode(row) && rowSet.has(row) && !moved.has(row)) kept.push(row);
     const out: unknown[] = [];
     let k = 0;
     for (let j = 0; j < rows.length; j++) {
       const row = rows[j];
-      out.push(prevSet.has(row) && !moved.has(row) ? kept[k++] : row);
+      out.push(isNode(row) && prevSet.has(row) && !moved.has(row) ? kept[k++] : row);
     }
+    tagManualOrder(out, moved);
     prevOrder = out;
     prevKeys = nextKeys;
     return out;
