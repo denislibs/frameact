@@ -237,9 +237,17 @@ function runEffect(node: EffectNode) {
   // (DIRTY) or releases us (CHECK that resolves clean, or a run that throws).
   let bailed = false;
   try {
+    // Known limitation: the re-walk below is bounded by the number of list scopes in the chain + 1
+    // passes (each map can be pulled once; the last pass confirms the chain is clean). A loop
+    // through nested lists (an inner mapper writes the outer list's source, so the list grows on
+    // every pass) is invisible to the per-effect loop counters and would spin here without a
+    // bound. On exceeding it the re-walk stops, a DEV error names the cause, and the effect runs
+    // as usual (the run itself is then under the ordinary drain / self-dirty guards).
+    let pass = 0;
     for (;;) {
       let memos: Computation[] | null = null;
       let pullsMap = false;
+      let maps = 0;
       for (let p = node[SCOPE] as Computation | null; p !== null; p = p[SCOPE] as Computation | null) {
         if (p._effect) {
           if (p._state !== STATE_CLEAN) {
@@ -256,6 +264,7 @@ function runEffect(node: EffectNode) {
           // entity went but before the list did.
           (memos ??= []).push(p._mapMemo);
           pullsMap = true;
+          maps++;
         }
       }
       if (!memos) break;
@@ -277,6 +286,14 @@ function runEffect(node: EffectNode) {
       // (nested lists) that the walk above saw clean: walk the chain again. A pulled memo that is
       // still not CLEAN is mid-recompute (a row run from inside its own map): do not loop on it.
       if (!pullsMap || !settled) break;
+      if (++pass > maps) {
+        if (DEV) {
+          console.error(
+            `[frameact] Potential infinite loop: the owner chain of effect${node._name ? ` "${node._name}"` : ''} was still dirty after ${pass} map pulls (${maps} list scope${maps === 1 ? '' : 's'} in the chain). A list mapper probably writes the source of an enclosing list. The re-walk is stopped and the effect runs.`,
+          );
+        }
+        break;
+      }
     }
 
     if (!computeNode(node)) return;

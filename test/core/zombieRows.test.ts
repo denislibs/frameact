@@ -258,7 +258,7 @@ it('a throwing map memo does not break its rows: they run with the current data,
     flushSync();
     expect(titles.slice(2)).toHaveLength(2);
     expect(titles.slice(2)).toEqual(expect.arrayContaining(['1:A', '2:B']));
-    expect(spy.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(spy.mock.calls.length).toBe(0);
     setBoom(false);
     setIds([1]);
     flushSync();
@@ -344,4 +344,51 @@ it('For order="manual": a row looking an entity up by id is disposed, not run, w
   await frame();
   expect(errors).toEqual([]);
   expect(ul.textContent).toBe('A');
+});
+
+// Known limitation (spec §3.2): the re-walk after a map pull is bounded. A loop through nested lists
+// (an inner mapper writes the outer list's source, so the list grows on every pass) is invisible to
+// the per-effect loop counters; without the bound it would spin synchronously inside one runEffect.
+it('a runaway loop through nested lists stops: the re-walk is bounded and a DEV error names the cause', () => {
+  const [groups, setGroups] = createSignal<{ id: number; ids: number[] }[]>([{ id: 1, ids: [0] }]);
+  const [kick, setKick] = createSignal(0);
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  let mapperCalls = 0;
+  let armed = false;
+  try {
+    createRoot(() => {
+      const outer = mapArray(
+        groups,
+        (g: () => { id: number; ids: number[] }) => {
+          const inner = mapArray(
+            () => g().ids,
+            (id: number) => {
+              mapperCalls++;
+              // The test's own guard: the runaway stops by itself after 1000 passes, so a missing
+              // bound fails the assertion below instead of hanging the suite.
+              if (armed && mapperCalls < 1000) setGroups((gs) => [{ id: 1, ids: [...gs[0].ids, id + 1] }]);
+              // One effect only (the first row's): the loop must not escape the per-effect counters
+              // by spawning ever new effects.
+              if (id === 0) createEffect(() => `${id}:${kick()}`, () => {});
+              return id;
+            },
+          );
+          inner(); // created eagerly; no effect reads the lists: only the rows' ancestor walk pulls them
+          return g().id;
+        },
+        { keyed: false },
+      );
+      outer();
+    });
+    flushSync();
+    mapperCalls = 0;
+    armed = true;
+    setKick(1);
+    setGroups((gs) => [{ id: 1, ids: [...gs[0].ids, 100] }]);
+    flushSync();
+    expect(mapperCalls).toBeLessThan(100);
+    expect(spy.mock.calls.some((c) => /map pulls/.test(String(c[0])))).toBe(true);
+  } finally {
+    spy.mockRestore();
+  }
 });
