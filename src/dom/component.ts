@@ -36,8 +36,8 @@ export function effect<T>(
 }
 
 /**
- * Compiler primitive: `memo(fn)` — a plain memo (`===` equality). The compiler's optional second
- * argument (`equal`) is ignored for now; what rc.14 actually emits is verified in Task 13.
+ * Compiler primitive: `memo(fn)` — a plain memo (`===` equality). The compiler (rc.14) always calls
+ * it with one argument, so there is no `equal` parameter.
  */
 export function memo<T>(fn: () => T): () => T {
   return createMemo(fn);
