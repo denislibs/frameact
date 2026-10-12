@@ -1,5 +1,6 @@
-// Adapted from dom-expressions (MIT, © 2017 Ryan Carniato) — packages/dom-expressions/src/jsx.d.ts
-// frameact patches: FunctionElement in Element, ElementType, ClassValue for class=, Directives value/checked.
+// Adapted from dom-expressions (MIT, © 2018-2019 Ryan Carniato) — packages/dom-expressions/src/jsx.d.ts
+// frameact patches: FunctionElement in Element, ElementType, ClassValue for class=, per-element use:value/use:checked,
+// no lowercase on* keys (the runtime refuses them), index signatures for class:/style:/on:/oncapture:/attr:/bool:/prop:.
 
 import * as csstype from "csstype";
 
@@ -147,12 +148,8 @@ export namespace JSX {
     $ServerOnly?: boolean | undefined;
   }
   type Accessor<T> = () => T;
-  interface Directives {
-    /** `use:value={accessor}` — controlled text input/textarea/select (frameact). */
-    value: (() => unknown) | string | number | null | undefined;
-    /** `use:checked={accessor}` — controlled checkbox/radio (frameact). */
-    checked: (() => unknown) | boolean | null | undefined;
-  }
+  // Built-in `use:value` / `use:checked` are typed per element (Input/Textarea/Select, Input), not here.
+  interface Directives {}
   interface DirectiveFunctions {
     [x: string]: (el: DOMElement, accessor: Accessor<any>) => void;
   }
@@ -231,28 +228,8 @@ export namespace JSX {
     onUnhandledRejection?: EventHandlerUnion<T, PromiseRejectionEvent> | undefined;
     onUnload?: EventHandlerUnion<T, Event> | undefined;
 
-    onafterprint?: EventHandlerUnion<T, Event> | undefined;
-    onbeforeprint?: EventHandlerUnion<T, Event> | undefined;
-    onbeforeunload?: EventHandlerUnion<T, BeforeUnloadEvent> | undefined;
-    ongamepadconnected?: EventHandlerUnion<T, GamepadEvent> | undefined;
-    ongamepaddisconnected?: EventHandlerUnion<T, GamepadEvent> | undefined;
-    onhashchange?: EventHandlerUnion<T, HashChangeEvent> | undefined;
-    onlanguagechange?: EventHandlerUnion<T, Event> | undefined;
-    onmessage?: EventHandlerUnion<T, MessageEvent> | undefined;
-    onmessageerror?: EventHandlerUnion<T, MessageEvent> | undefined;
-    onoffline?: EventHandlerUnion<T, Event> | undefined;
-    ononline?: EventHandlerUnion<T, Event> | undefined;
-    onpagehide?: EventHandlerUnion<T, PageTransitionEvent> | undefined;
     // TODO `PageRevealEvent` is currently undefined in TS
-    onpagereveal?: EventHandlerUnion<T, Event> | undefined;
-    onpageshow?: EventHandlerUnion<T, PageTransitionEvent> | undefined;
     // TODO `PageSwapEvent` is currently undefined in TS
-    onpageswap?: EventHandlerUnion<T, Event> | undefined;
-    onpopstate?: EventHandlerUnion<T, PopStateEvent> | undefined;
-    onrejectionhandled?: EventHandlerUnion<T, PromiseRejectionEvent> | undefined;
-    onstorage?: EventHandlerUnion<T, StorageEvent> | undefined;
-    onunhandledrejection?: EventHandlerUnion<T, PromiseRejectionEvent> | undefined;
-    onunload?: EventHandlerUnion<T, Event> | undefined;
 
     "on:afterprint"?: EventHandlerWithOptionsUnion<T, Event> | undefined;
     "on:beforeprint"?: EventHandlerWithOptionsUnion<T, Event> | undefined;
@@ -404,126 +381,6 @@ export namespace JSX {
     onVolumeChange?: EventHandlerUnion<T, Event> | undefined;
     onWaiting?: EventHandlerUnion<T, Event> | undefined;
     onWheel?: EventHandlerUnion<T, WheelEvent> | undefined;
-  }
-  /** @type {GlobalEventHandlers} */
-  interface CustomEventHandlersLowerCase<T> {
-    onabort?: EventHandlerUnion<T, UIEvent> | undefined;
-    onanimationcancel?: EventHandlerUnion<T, AnimationEvent> | undefined;
-    onanimationend?: EventHandlerUnion<T, AnimationEvent> | undefined;
-    onanimationiteration?: EventHandlerUnion<T, AnimationEvent> | undefined;
-    onanimationstart?: EventHandlerUnion<T, AnimationEvent> | undefined;
-    onauxclick?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onbeforecopy?: EventHandlerUnion<T, ClipboardEvent> | undefined;
-    onbeforecut?: EventHandlerUnion<T, ClipboardEvent> | undefined;
-    onbeforeinput?: InputEventHandlerUnion<T, InputEvent> | undefined;
-    onbeforematch?: EventHandlerUnion<T, Event> | undefined;
-    onbeforepaste?: EventHandlerUnion<T, ClipboardEvent> | undefined;
-    onbeforetoggle?: EventHandlerUnion<T, ToggleEvent> | undefined;
-    onbeforexrselect?: EventHandlerUnion<T, Event> | undefined;
-    onblur?: FocusEventHandlerUnion<T, FocusEvent> | undefined;
-    oncancel?: EventHandlerUnion<T, Event> | undefined;
-    oncanplay?: EventHandlerUnion<T, Event> | undefined;
-    oncanplaythrough?: EventHandlerUnion<T, Event> | undefined;
-    onchange?: ChangeEventHandlerUnion<T, Event> | undefined;
-    onclick?: EventHandlerUnion<T, MouseEvent> | undefined;
-    onclose?: EventHandlerUnion<T, Event> | undefined;
-    // TODO `CommandEvent` is currently undefined in TS
-    oncommand?: EventHandlerUnion<T, Event> | undefined;
-    oncompositionend?: EventHandlerUnion<T, CompositionEvent> | undefined;
-    oncompositionstart?: EventHandlerUnion<T, CompositionEvent> | undefined;
-    oncompositionupdate?: EventHandlerUnion<T, CompositionEvent> | undefined;
-    oncontentvisibilityautostatechange?:
-      | EventHandlerUnion<T, ContentVisibilityAutoStateChangeEvent>
-      | undefined;
-    oncontextlost?: EventHandlerUnion<T, Event> | undefined;
-    oncontextmenu?: EventHandlerUnion<T, PointerEvent> | undefined;
-    oncontextrestored?: EventHandlerUnion<T, Event> | undefined;
-    oncopy?: EventHandlerUnion<T, ClipboardEvent> | undefined;
-    oncuechange?: EventHandlerUnion<T, Event> | undefined;
-    oncut?: EventHandlerUnion<T, ClipboardEvent> | undefined;
-    ondblclick?: EventHandlerUnion<T, MouseEvent> | undefined;
-    ondrag?: EventHandlerUnion<T, DragEvent> | undefined;
-    ondragend?: EventHandlerUnion<T, DragEvent> | undefined;
-    ondragenter?: EventHandlerUnion<T, DragEvent> | undefined;
-    ondragexit?: EventHandlerUnion<T, DragEvent> | undefined;
-    ondragleave?: EventHandlerUnion<T, DragEvent> | undefined;
-    ondragover?: EventHandlerUnion<T, DragEvent> | undefined;
-    ondragstart?: EventHandlerUnion<T, DragEvent> | undefined;
-    ondrop?: EventHandlerUnion<T, DragEvent> | undefined;
-    ondurationchange?: EventHandlerUnion<T, Event> | undefined;
-    onemptied?: EventHandlerUnion<T, Event> | undefined;
-    onended?: EventHandlerUnion<T, Event> | undefined;
-    onerror?: EventHandlerUnion<T, ErrorEvent> | undefined;
-    onfocus?: FocusEventHandlerUnion<T, FocusEvent> | undefined;
-    onfocusin?: FocusEventHandlerUnion<T, FocusEvent> | undefined;
-    onfocusout?: FocusEventHandlerUnion<T, FocusEvent> | undefined;
-    onformdata?: EventHandlerUnion<T, FormDataEvent> | undefined;
-    onfullscreenchange?: EventHandlerUnion<T, Event> | undefined;
-    onfullscreenerror?: EventHandlerUnion<T, Event> | undefined;
-    ongotpointercapture?: EventHandlerUnion<T, PointerEvent> | undefined;
-    oninput?: InputEventHandlerUnion<T, InputEvent> | undefined;
-    oninvalid?: EventHandlerUnion<T, Event> | undefined;
-    onkeydown?: EventHandlerUnion<T, KeyboardEvent> | undefined;
-    onkeypress?: EventHandlerUnion<T, KeyboardEvent> | undefined;
-    onkeyup?: EventHandlerUnion<T, KeyboardEvent> | undefined;
-    onload?: EventHandlerUnion<T, Event> | undefined;
-    onloadeddata?: EventHandlerUnion<T, Event> | undefined;
-    onloadedmetadata?: EventHandlerUnion<T, Event> | undefined;
-    onloadstart?: EventHandlerUnion<T, Event> | undefined;
-    onlostpointercapture?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onmousedown?: EventHandlerUnion<T, MouseEvent> | undefined;
-    onmouseenter?: EventHandlerUnion<T, MouseEvent> | undefined;
-    onmouseleave?: EventHandlerUnion<T, MouseEvent> | undefined;
-    onmousemove?: EventHandlerUnion<T, MouseEvent> | undefined;
-    onmouseout?: EventHandlerUnion<T, MouseEvent> | undefined;
-    onmouseover?: EventHandlerUnion<T, MouseEvent> | undefined;
-    onmouseup?: EventHandlerUnion<T, MouseEvent> | undefined;
-    onpaste?: EventHandlerUnion<T, ClipboardEvent> | undefined;
-    onpause?: EventHandlerUnion<T, Event> | undefined;
-    onplay?: EventHandlerUnion<T, Event> | undefined;
-    onplaying?: EventHandlerUnion<T, Event> | undefined;
-    onpointercancel?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onpointerdown?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onpointerenter?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onpointerleave?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onpointermove?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onpointerout?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onpointerover?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onpointerrawupdate?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onpointerup?: EventHandlerUnion<T, PointerEvent> | undefined;
-    onprogress?: EventHandlerUnion<T, ProgressEvent> | undefined;
-    onratechange?: EventHandlerUnion<T, Event> | undefined;
-    onreset?: EventHandlerUnion<T, Event> | undefined;
-    onresize?: EventHandlerUnion<T, UIEvent> | undefined;
-    onscroll?: EventHandlerUnion<T, Event> | undefined;
-    onscrollend?: EventHandlerUnion<T, Event> | undefined;
-    // todo `SnapEvent` is currently undefined in TS
-    onscrollsnapchange?: EventHandlerUnion<T, Event> | undefined;
-    // todo `SnapEvent` is currently undefined in TS
-    onscrollsnapchanging?: EventHandlerUnion<T, Event> | undefined;
-    onsecuritypolicyviolation?: EventHandlerUnion<T, SecurityPolicyViolationEvent> | undefined;
-    onseeked?: EventHandlerUnion<T, Event> | undefined;
-    onseeking?: EventHandlerUnion<T, Event> | undefined;
-    onselect?: EventHandlerUnion<T, Event> | undefined;
-    onselectionchange?: EventHandlerUnion<T, Event> | undefined;
-    onselectstart?: EventHandlerUnion<T, Event> | undefined;
-    onslotchange?: EventHandlerUnion<T, Event> | undefined;
-    onstalled?: EventHandlerUnion<T, Event> | undefined;
-    onsubmit?: EventHandlerUnion<T, SubmitEvent> | undefined;
-    onsuspend?: EventHandlerUnion<T, Event> | undefined;
-    ontimeupdate?: EventHandlerUnion<T, Event> | undefined;
-    ontoggle?: EventHandlerUnion<T, ToggleEvent> | undefined;
-    ontouchcancel?: EventHandlerUnion<T, TouchEvent> | undefined;
-    ontouchend?: EventHandlerUnion<T, TouchEvent> | undefined;
-    ontouchmove?: EventHandlerUnion<T, TouchEvent> | undefined;
-    ontouchstart?: EventHandlerUnion<T, TouchEvent> | undefined;
-    ontransitioncancel?: EventHandlerUnion<T, TransitionEvent> | undefined;
-    ontransitionend?: EventHandlerUnion<T, TransitionEvent> | undefined;
-    ontransitionrun?: EventHandlerUnion<T, TransitionEvent> | undefined;
-    ontransitionstart?: EventHandlerUnion<T, TransitionEvent> | undefined;
-    onvolumechange?: EventHandlerUnion<T, Event> | undefined;
-    onwaiting?: EventHandlerUnion<T, Event> | undefined;
-    onwheel?: EventHandlerUnion<T, WheelEvent> | undefined;
   }
 
   interface CustomEventHandlersNamespaced<T> {
@@ -677,10 +534,18 @@ export namespace JSX {
       OnAttributes<T>,
       OnCaptureAttributes<T>,
       CustomEventHandlersCamelCase<T>,
-      CustomEventHandlersLowerCase<T>,
       CustomEventHandlersNamespaced<T>,
       AriaAttributes {
-    // [key: ClassKeys]: boolean;
+    // Namespaced forms the compiler lowers to setAttribute(el, "<ns>:<name>", v) (frameact).
+    [k: `class:${string}`]: boolean | null | undefined;
+    [k: `style:${string}`]: string | number | null | undefined;
+    [k: `on:${string}`]: EventHandlerWithOptionsUnion<T, any> | undefined;
+    [k: `oncapture:${string}`]: EventHandler<T, any> | undefined;
+    [k: `attr:${string}`]: string | number | boolean | null | undefined;
+    /** `attr:on*` would write an event-handler attribute; the runtime refuses it, so only removal is typed. */
+    [k: `attr:on${string}`]: null | undefined | false;
+    [k: `bool:${string}`]: boolean | null | undefined;
+    [k: `prop:${string}`]: unknown;
 
     // properties
     innerHTML?: string;
@@ -1571,6 +1436,10 @@ export namespace JSX {
     vspace?: number | string | undefined;
   }
   interface InputHTMLAttributes<T> extends HTMLAttributes<T> {
+    /** Controlled value (frameact): an accessor, or a plain value inside a compiler effect. */
+    "use:value"?: (() => unknown) | string | number | null | undefined;
+    /** Controlled checked state of a checkbox/radio (frameact). */
+    "use:checked"?: (() => unknown) | boolean | null | undefined;
     accept?: string | undefined;
     alpha?: boolean | undefined;
     alt?: string | undefined;
@@ -1881,6 +1750,8 @@ export namespace JSX {
     language?: string | undefined;
   }
   interface SelectHTMLAttributes<T> extends HTMLAttributes<T> {
+    /** Controlled value (frameact). */
+    "use:value"?: (() => unknown) | string | number | null | undefined;
     autocomplete?: HTMLAutocomplete | undefined;
     disabled?: boolean | undefined;
     form?: string | undefined;
@@ -1952,6 +1823,8 @@ export namespace JSX {
     shadowrootserializable?: boolean | undefined;
   }
   interface TextareaHTMLAttributes<T> extends HTMLAttributes<T> {
+    /** Controlled value (frameact). */
+    "use:value"?: (() => unknown) | string | number | null | undefined;
     autocomplete?: HTMLAutocomplete | undefined;
     cols?: number | string | undefined;
     dirname?: string | undefined;
