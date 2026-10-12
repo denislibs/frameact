@@ -669,13 +669,12 @@ export function updateCheck(node: Computation) {
       }
     } catch (error) {
       // A pull threw: `cur` and the nodes on the stack stay CHECK with their scan unfinished, and
-      // the reader that started it ends CLEAN (the error is handled above). Let the next walk
-      // reaching them descend to their subscribers.
-      if (cur._state === STATE_CHECK) cur._flags |= F_UNSURE;
-      for (let i = base; i < checkTop; i += 3) {
-        const n = checkStack[i] as Computation;
-        if (n._state === STATE_CHECK) n._flags |= F_UNSURE;
-      }
+      // the reader that started it ends CLEAN (the error is handled above). So does every dirty
+      // node below them that the scan never reached. Let the next walk reaching any of them
+      // descend to their subscribers.
+      const roots: Computation[] = [cur];
+      for (let i = base; i < checkTop; i += 3) roots.push(checkStack[i] as Computation);
+      markUnsure(roots);
       throw error;
     } finally {
       // Normally already at `base`; after a throw, drop this call's frames.
@@ -683,6 +682,36 @@ export function updateCheck(node: Computation) {
     }
   }
   if (node._state === STATE_DIRTY) update(node);
+}
+
+/**
+ * After an aborted pull (only then): mark F_UNSURE on the CHECK `roots` and, transitively, on
+ * every CHECK/DIRTY node below them — the dirty cone the scan left unverified. A write landing
+ * anywhere in it would otherwise stop at an already-dirty node and never reach the CLEAN reader.
+ * Costs at most what the pull would have walked. (A SignalNode is always CLEAN: never touched.)
+ */
+function markUnsure(roots: Computation[]) {
+  const seen = new Set<Computation>();
+  const todo: Computation[] = [];
+  for (const n of roots) {
+    if (n._state === STATE_CHECK && !seen.has(n)) {
+      seen.add(n);
+      n._flags |= F_UNSURE;
+      todo.push(n);
+    }
+  }
+  while (todo.length > 0) {
+    const n = todo.pop()!;
+    for (let l = n._deps; l !== null; l = l.nextDep) {
+      const dep = l.dep;
+      const ds = dep._state;
+      if ((ds === STATE_CHECK || ds === STATE_DIRTY) && !seen.has(dep)) {
+        seen.add(dep);
+        dep._flags |= F_UNSURE;
+        todo.push(dep);
+      }
+    }
+  }
 }
 
 /**

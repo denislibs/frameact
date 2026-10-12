@@ -153,3 +153,53 @@ it('shallow marking: a computing reader that consumed the memo was latched by th
   expect(spy).toHaveBeenCalledTimes(2);
   expect($w()).toBe(10);
 });
+
+describe('stage-3 review: an aborted pull leaves other dirty deps of the reader unchecked', () => {
+  it('P1: the reader still hears from a CHECK dep the aborted pull never reached (another reader pulls its source)', () => {
+    const { schedule, flush } = queue();
+    const $s1 = signal(0);
+    const $s2 = signal(0);
+    const $y1 = computed(() => {
+      if ($s1() === 1) throw new Error('boom');
+      return $s1();
+    });
+    const $y2 = computed(() => $s2());
+    const $x1 = computed(() => $y1() * 10);
+    const $x2 = computed(() => $y2() * 100);
+    const seen: number[] = [];
+    root(() => createEffect(() => $x1() + $x2(), (v) => { seen.push(v); }, schedule));
+    const $r = computed(() => $y2() + 1);
+    $r();
+    flush();
+    $s1.set(1);
+    $s2.set(1);
+    flush(); // the effect's pull: $y1 throws before $x2 is checked; the effect ends CLEAN
+    expect(seen).toEqual([0]);
+    $r(); // recomputes $y2: its result write reaches $x2 (CHECK) — must reach the effect too
+    flush();
+    expect(seen).toEqual([0, 100]); // $x1 keeps its last value (0)
+  });
+
+  it('P1b: the reader still hears from a source behind a DIRTY memo the aborted pull never reached', () => {
+    const { schedule, flush } = queue();
+    const $s1 = signal(0);
+    const $s2 = signal(0);
+    const $y1 = computed(() => {
+      if ($s1() === 1) throw new Error('boom');
+      return $s1();
+    });
+    const $y2 = computed(() => $s2());
+    const $x1 = computed(() => $y1() * 10);
+    const $x2 = computed(() => $y2() * 100);
+    const seen: number[] = [];
+    root(() => createEffect(() => $x1() + $x2(), (v) => { seen.push(v); }, schedule));
+    flush();
+    $s1.set(1);
+    $s2.set(1);
+    flush(); // aborted: $x2 CHECK, $y2 DIRTY, neither reached
+    expect(seen).toEqual([0]);
+    $s2.set(2); // the walk stops at $y2 (already DIRTY) unless it is marked unsure
+    flush();
+    expect(seen).toEqual([0, 200]);
+  });
+});
