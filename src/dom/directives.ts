@@ -1,7 +1,7 @@
-import { getRunningEffect, isEffectClean, type EffectNode } from '../core/effects';
+import { getRunningEffect, isEffectClean, isEffectDisposed, type EffectNode } from '../core/effects';
 import { createMutationEffect } from '../core/frame';
 import { DEV } from '../env';
-import { getOwner, untrack } from '../index';
+import { getOwner, onCleanup, untrack } from '../index';
 import { requestMutation } from '../scheduler/fasterdom';
 import { delegateEvents, onClearDelegated } from './events';
 
@@ -66,7 +66,10 @@ interface Binding<E extends Element = Element> {
   live: boolean;
   /** A deferred check is already queued for this frame (several events share it). */
   pending: boolean;
-  /** Plain-value form: the compiler's effect whose apply delivers values (null if called outside any effect). */
+  /**
+   * The effect whose apply delivered to us (plain form, or an accessor inside an apply), else null.
+   * Plain form: the check waits while it is not CLEAN. Both: its disposal releases the element.
+   */
   effect: EffectNode | null;
   /** The deferred check, bound once per binding (no closure per event). */
   readonly runDeferred: () => void;
@@ -102,11 +105,22 @@ function check(b: Binding<any>): void {
   b.kind.write(b, current(b));
 }
 
+/** The element's live binding of this kind; a binding whose delivering effect was disposed is dropped. */
+function lookup<B extends Binding<any>>(kind: Kind<B>, el: unknown): B | undefined {
+  const b = kind.bindings.get(el as Element);
+  if (b && b.effect !== null && isEffectDisposed(b.effect)) {
+    kind.bindings.delete(b.el);
+    return undefined;
+  }
+  return b;
+}
+
 function runDeferred(b: Binding<any>): void {
   b.pending = false;
+  if (lookup(b.kind, b.el) !== b) return; // released or replaced since the check was queued
   // A dirty, queued or gating-parked compiler effect still has a delivery to make, and that
   // delivery is authoritative (for an accepted input it equals the DOM, so nothing is written).
-  if (b.effect === null || isEffectClean(b.effect)) check(b);
+  if (b.live || b.effect === null || isEffectClean(b.effect)) check(b);
 }
 
 /**
@@ -204,19 +218,19 @@ const checkedKind: Kind<CheckedBinding> = {
 // ---- document listeners ----
 
 function onInput(e: Event): void {
-  const b = valueKind.bindings.get(e.target as Element);
+  const b = lookup(valueKind, e.target);
   if (!b || (e as InputEvent).isComposing || b.composing) return;
   snapshot(b);
   verify(b);
 }
 
 function onCompositionStart(e: Event): void {
-  const b = valueKind.bindings.get(e.target as Element);
+  const b = lookup(valueKind, e.target);
   if (b) b.composing = true;
 }
 
 function onCompositionEnd(e: Event): void {
-  const b = valueKind.bindings.get(e.target as Element);
+  const b = lookup(valueKind, e.target);
   if (!b) return;
   b.composing = false;
   snapshot(b);
@@ -224,12 +238,12 @@ function onCompositionEnd(e: Event): void {
 }
 
 function onFocusOut(e: Event): void {
-  const b = valueKind.bindings.get(e.target as Element);
+  const b = lookup(valueKind, e.target);
   if (b) b.hasSelection = false;
 }
 
 function onChange(e: Event): void {
-  const b = checkedKind.bindings.get(e.target as Element);
+  const b = lookup(checkedKind, e.target);
   if (b) verify(b);
 }
 
@@ -287,7 +301,7 @@ function reportUnownedAccessor(name: keyof typeof APPLY_HINTS, inApply: boolean)
 
 function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown): void {
   installListeners(el.ownerDocument);
-  let b = kind.bindings.get(el);
+  let b = lookup(kind, el);
   if (!b) kind.bindings.set(el, (b = kind.create(el)));
   const applying = applyingEffect();
   if (typeof value === 'function') {
@@ -295,7 +309,7 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
     const owned = b;
     owned.accessor = accessor; // the document-level rollback check always reads the live accessor
     owned.live = true;
-    owned.effect = null;
+    owned.effect = applying; // inside an apply: that effect's disposal releases the element
     if (getOwner() === null) {
       // No owner: inside an effect apply (the compiler wrapped `use:value={props.text}` where
       // `props.text` is itself an accessor) or imperative code outside any root. An effect created
@@ -309,6 +323,9 @@ function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown
     // compute returns a fresh box so the apply runs on every change and compares with the DOM: input
     // the user already typed ('abc', accepted) followed by a programmatic change back to the last
     // applied value ('ab') in the same frame must still be written.
+    onCleanup(() => {
+      if (kind.bindings.get(el) === owned && owned.accessor === accessor) kind.bindings.delete(el);
+    });
     createMutationEffect(
       () => ({ v: accessor() }),
       ({ v }) => {

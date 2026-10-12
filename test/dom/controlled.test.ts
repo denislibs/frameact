@@ -4,7 +4,7 @@ import { effect } from '../../src/dom/component';
 import { delegateEvents, EVENT_KEY } from '../../src/dom/events';
 import { container, useDomHarness } from '../helpers/dom';
 
-const { frame } = useDomHarness();
+const { frame, pending } = useDomHarness();
 
 function textInput() {
   const input = document.createElement('input');
@@ -318,4 +318,55 @@ it('M1: a plain value written from a parent compute (subtree creation) is not ti
   await frame();
   expect(input.value).toBe('x');
   end();
+});
+
+describe('M3: disposing the binding releases the element', () => {
+  it('accessor form: after the owner is disposed, input is no longer rolled back', () => {
+    const input = textInput();
+    const [text] = createSignal('ab');
+    let dispose!: () => void;
+    createRoot((d) => {
+      dispose = d;
+      setAttribute(input, 'use:value', text);
+    });
+    dispose();
+    type(input, 'ab1');
+    expect(input.value).toBe('ab1');
+  });
+
+  it('accessor inside an apply: disposing the delivering effect releases the element', () => {
+    const input = textInput();
+    const [text] = createSignal('ab');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let dispose!: () => void;
+    createRoot((d) => {
+      dispose = d;
+      effect(() => text, (accessor) => { setAttribute(input, 'use:value', accessor); });
+    });
+    err.mockRestore();
+    dispose();
+    type(input, 'ab1');
+    expect(input.value).toBe('ab1');
+  });
+
+  it('plain form: after the compiler effect is disposed the element is released (no check, nothing left queued), and can be bound again', async () => {
+    const input = textInput();
+    const [text, setText] = createSignal('ab');
+    let dispose!: () => void;
+    createRoot((d) => {
+      dispose = d;
+      effect(() => text(), (v) => { setAttribute(input, 'use:value', v); });
+    });
+    dispose();
+    type(input, 'ab1');
+    await frame();
+    expect(input.value).toBe('ab1');
+    await frame();
+    expect(pending()).toBe(0);
+    createRoot(() => setAttribute(input, 'use:value', text)); // a fresh binding works normally
+    expect(input.value).toBe('ab');
+    setText('zz');
+    await frame();
+    expect(input.value).toBe('zz');
+  });
 });

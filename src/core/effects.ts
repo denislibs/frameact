@@ -103,6 +103,11 @@ export function isEffectClean(node: EffectNode): boolean {
   return node._state === STATE_CLEAN;
 }
 
+/** @internal for dom directives: true once the effect is disposed (its bindings must let go of their elements). */
+export function isEffectDisposed(node: EffectNode): boolean {
+  return node._state === STATE_DISPOSED;
+}
+
 /** Max tickEnd runs of one effect within one flushTickEnd drain before it is treated as a loop. */
 const TICK_LIMIT = 100;
 
