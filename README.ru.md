@@ -178,6 +178,10 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
   через CSS-трансформации, тяжёлые переходы, задержка ввода на мобильных.
 - **[maverick-js/signals](https://github.com/maverick-js/signals)** Рахима Алвера — реактивный граф
   (вендорен и доработан), построенный на алгоритме Reactively.
+- **[alien-signals](https://github.com/stackblitz/alien-signals)** Джонсона Чу (StackBlitz) — граф зависимостей
+  ядра переделан по его образцу: ребро — один объект `Link` в двух двусвязных списках, переиспользование связей
+  при перезапуске, итеративное распространение и поверхностная пометка. Это ускорило ядро frameact в 1,5–2 раза
+  на js-reactivity-benchmark.
 - **[SolidJS](https://github.com/solidjs/solid)** и **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
   Райана Карниато — модель компонентов, JSX-компилятор и устройство DOM-рантайма.
 
