@@ -500,3 +500,88 @@ it('DEV: For order="manual" nested in a larger array warns once and still render
   expect(Array.from(ul.children).map((e) => (e as HTMLElement).dataset.id ?? e.tagName)).toEqual(['H1', '3', '1']);
   expect(warn.mock.calls.filter((c) => String(c[0]).includes('nested in a larger array'))).toHaveLength(1);
 });
+
+function mountRows(list: () => Chat[], orderKey: ((c: Chat) => unknown) | undefined) {
+  const ul = container();
+  let order!: () => unknown[];
+  createRoot(() => {
+    order = For({
+      get each() { return list(); },
+      keyed: (c: Chat) => c.id,
+      order: 'manual',
+      orderKey,
+      children: row,
+    }) as () => unknown[];
+    insert(ul, order);
+  });
+  return { ul, order };
+}
+
+describe('fast path: same rows, same order keys', () => {
+  it('editing a non-order field of one item hands insert the very same array and touches no DOM', async () => {
+    const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2), chat(3)));
+    const keyFn = vi.fn((c: Chat) => c.rank);
+    const { ul, order } = mountRows(list, keyFn);
+    const before = order();
+    const spies = (['insertBefore', 'appendChild', 'removeChild', 'replaceChild'] as const).map((m) => vi.spyOn(ul, m));
+    const observer = new MutationObserver(() => {});
+    observer.observe(ul, { childList: true, subtree: true, characterData: true, attributes: true });
+    const [c1, c2, c3] = list();
+    setList([c1, { ...c2 }, c3]);
+    await frame();
+    expect(order()).toBe(before);
+    expect(observer.takeRecords()).toEqual([]);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    expect(ids(ul)).toEqual(['1', '2', '3']);
+    observer.disconnect();
+  });
+
+  it('without an orderKey the array identity is kept too', async () => {
+    const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2)));
+    const { order } = mountRows(list, undefined);
+    const before = order();
+    const [c1, c2] = list();
+    setList([c1, { ...c2 }]);
+    await frame();
+    expect(order()).toBe(before);
+  });
+
+  it('a changed orderKey is not the fast path: a new array, the row moves', async () => {
+    const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2), chat(3)));
+    const { ul, order } = mountRows(list, (c) => c.rank);
+    const before = order();
+    const [c1, c2, c3] = list();
+    setList([c1, c2, { ...c3, rank: 0 }]);
+    await frame();
+    expect(order()).not.toBe(before);
+    expect(ids(ul)).toEqual(['1', '2', '3']); // kept rows stay; only a MOVE to its list index is (re)applied
+  });
+
+  it('a new array after a structural change, then the fast path again on the next edit', async () => {
+    const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2)));
+    const { ul, order } = mountRows(list, (c) => c.rank);
+    const [c1, c2] = list();
+    setList([c1, c2, chat(3)]);
+    await frame();
+    const before = order();
+    expect(ids(ul)).toEqual(['1', '2', '3']);
+    setList([c1, { ...c2 }, list()[2]]);
+    await frame();
+    expect(order()).toBe(before);
+  });
+
+  it('a throwing orderKey on an unchanged row keeps the fast path and is reported each time it is evaluated', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2)));
+    const { order } = mountRows(list, (c) => {
+      if (c.rank === 2) throw new Error('bad key');
+      return c.rank;
+    });
+    const before = order();
+    const [c1, c2] = list();
+    setList([c1, { ...c2 }]);
+    await frame();
+    expect(order()).toBe(before);
+    expect(err.mock.calls.filter((c) => String(c[0]).includes('orderKey failed')).length).toBeGreaterThanOrEqual(2);
+  });
+});
