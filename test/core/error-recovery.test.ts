@@ -502,4 +502,23 @@ describe('re-review Minor 2-3: every call of a custom Schedule follows the f5455
     expect(runs.length).toBeGreaterThan(before);
     expect(runs.at(-1)).toBe(1000);
   });
+
+  it('N5: a scheduler throwing at creation is an error of the effect, not of the creating compute; its next change applies', () => {
+    const { schedule, flush } = queue();
+    const { ctl, schedule: throwing } = armedSchedule(schedule);
+    const $a = signal(1);
+    const seen: number[] = [];
+    ctl.armed = true;
+    const $parent = computed(() => {
+      createEffect(() => $a(), (v) => { seen.push(v); }, throwing);
+      return 'parent ok';
+    });
+    expect(root(() => $parent())).toBe('parent ok');
+    expect(errorSpy).toHaveBeenCalled();
+    flush();
+    expect(seen).toEqual([]);
+    $a.set(2);
+    flush();
+    expect(seen).toEqual([2]);
+  });
 });

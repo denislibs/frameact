@@ -153,7 +153,7 @@ export function createEffect<T>(
   // First compute: synchronous, tracked, under the owner that created the effect.
   if (!computeNode(node)) return;
   if (options?.immediateApply) applyEffect(node);
-  else schedule(node._run, node);
+  else bookRun(node); // (a throwing custom schedule is this effect's error, not the creator's)
 }
 
 /**
