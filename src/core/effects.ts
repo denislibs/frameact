@@ -3,6 +3,8 @@ import {
   assertApplyOwner,
   callUnowned,
   computationPrototype,
+  F_INIT,
+  F_THREW,
   handleError,
   initComputationNode,
   isFunction,
@@ -141,7 +143,7 @@ export function createEffect<T>(
   if (DEV) assertApplyOwner();
   const node: EffectNode<T> = new (Effect as any)(
     function (this: EffectNode<T>) {
-      return compute(this._init ? this._value : undefined);
+      return compute(this._flags & F_INIT ? this._value : undefined);
     },
     apply,
     schedule,
@@ -151,7 +153,7 @@ export function createEffect<T>(
   // First compute: synchronous, tracked, under the owner that created the effect.
   if (!computeNode(node)) return;
   if (options?.immediateApply) applyEffect(node);
-  else schedule(node._run, node);
+  else bookRun(node); // (a throwing custom schedule is this effect's error, not the creator's)
 }
 
 /**
@@ -190,17 +192,18 @@ Effect.prototype = computationPrototype;
 
 /**
  * Recompute the node's compute half. Returns false if the node died or threw, and also when the
- * first compute failed with the error handled by onError (`_init` still false): then there is no
+ * first compute failed with the error handled by onError (F_INIT still unset): then there is no
  * value to apply. The node stays linked to the sources it read and retries on their next change.
  */
 function computeNode(node: EffectNode): boolean {
   const outer = currentEffect;
   currentEffect = node;
   try {
-    if (node._state === STATE_CLEAN && node._init) return true;
-    if (node._init) updateCheck(node);
+    const init = node._flags & F_INIT;
+    if (node._state === STATE_CLEAN && init) return true;
+    if (init) updateCheck(node);
     else update(node);
-    return node._state !== STATE_DISPOSED && node._init;
+    return node._state !== STATE_DISPOSED && (node._flags & F_INIT) !== 0;
   } catch (error) {
     // update() already offered the error to onError handlers and re-threw: just report.
     logEffectError(node, error);
@@ -306,12 +309,29 @@ function releaseBailed(node: EffectNode) {
   node._bailed = null;
   for (const child of bailed) {
     if (child._state === STATE_DISPOSED) continue;
-    // One throwing custom scheduler must not lose the remaining children.
-    try {
-      child._schedule(child._run, child);
-    } catch (error) {
-      logEffectError(child, error);
+    // One throwing custom scheduler must not lose the remaining children, nor freeze its own.
+    bookRun(child);
+  }
+}
+
+/**
+ * Book the effect's run with its Schedule. A throwing custom Schedule (built-in ones never throw)
+ * is this effect's error: reported, never thrown to the caller — a notify() walk (that would cut it
+ * short, and from a memo's result write surface as that memo's compute error), the compute that
+ * creates the effect, the release of bailed children, the loop guard's macrotask. The node must not
+ * stay dirty with no run booked (only the CLEAN → dirty edge schedules: it would be frozen), so it
+ * goes back to CLEAN with F_THREW: its next change re-runs its compute even if the deps it saw look
+ * unchanged by then (and applies, if it never did).
+ */
+function bookRun(node: EffectNode) {
+  try {
+    node._schedule(node._run, node);
+  } catch (error) {
+    if (node._state !== STATE_DISPOSED) {
+      node._state = STATE_CLEAN;
+      node._flags |= F_THREW;
     }
+    logEffectError(node, error);
   }
 }
 
@@ -333,17 +353,11 @@ setEffectScheduler((raw) => {
       );
       node._selfDirty = 0;
       // The node is DIRTY already (notify set it): dropping the run would freeze it forever.
-      setTimeout(() => {
-        try {
-          node._schedule(node._run, node);
-        } catch (error) {
-          logEffectError(node, error);
-        }
-      }, 0);
+      setTimeout(() => bookRun(node), 0);
       return;
     }
   }
-  node._schedule(node._run, node);
+  bookRun(node);
 });
 
 /** How an apply-cleanup runs when its effect is disposed. Task 9 replaces this to defer DOM cleanups to the mutate phase. */

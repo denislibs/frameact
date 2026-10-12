@@ -11,6 +11,8 @@ import { SCOPE } from '../../src/core/symbols';
 import { installFakeRaf } from '../helpers/raf';
 import { frame } from '../helpers/frame';
 import { flushMicrotasks } from '../helpers/micro';
+import { createMemo, createSignal } from '../../src/index';
+import { depsOf } from './helpers/graph';
 
 const keysOf = (node: object) => Reflect.ownKeys(node).map(String);
 
@@ -44,7 +46,7 @@ it('a scope initialises the shared scope fields: its key list is the prefix of a
   expect(Object.keys(scope)).toEqual(comp.slice(0, Object.keys(scope).length));
   expect(keysOf(nested)).toEqual(keysOf(scope));
   expect(Reflect.ownKeys(scope)).toContain(SCOPE);
-  for (const k of ['_context', '_handlers', '_disposal', '_compute', '_state', '_children']) {
+  for (const k of ['_context', '_handlers', '_disposal', '_compute', '_state', '_lastChild', '_prevSibling', '_nextSibling']) {
     expect(keysOf(scope)).toContain(k);
   }
 });
@@ -96,4 +98,50 @@ it('a selector node has the full computation field set (then its own fields)', (
   const comp = Object.keys(signal(0).node!);
   expect(Object.keys(node).slice(0, comp.length)).toEqual(comp);
   expect(Reflect.ownKeys(node)).toContain(SCOPE);
+});
+
+/** The node behind a createSignal accessor: the first dep of a memo that read it. */
+function nodeOfAccessor(get: () => unknown): Computation {
+  let owner!: Computation;
+  const m = createMemo(() => {
+    owner = getScope() as Computation;
+    return get();
+  });
+  m();
+  return depsOf(owner)[0];
+}
+
+describe('P5: public createSignal nodes are slim', () => {
+  it('every createSignal node has the same small key list (plain, equals: false, custom equals, id)', () => {
+    const nodes = [
+      createSignal(0),
+      createSignal('x', { equals: false }),
+      createSignal({ a: 1 }, { equals: (a, b) => a.a === b.a }),
+      createSignal(0, { id: 'named' }),
+    ].map(([get]) => nodeOfAccessor(get));
+    const first = keysOf(nodes[0]);
+    for (const n of nodes) expect(keysOf(n)).toEqual(first);
+    // only what a dependency needs (+ the DEV id): no owner, children, deps or compute fields
+    expect(first).toHaveLength(7);
+    expect(new Set(first)).toEqual(new Set(['_changed', '_state', '_subs', '_subsTail', '_value', '_writtenAt', 'id']));
+  });
+
+  it('DEV id: the given id, or "signal"', () => {
+    expect(nodeOfAccessor(createSignal(0, { id: 'count' })[0]).id).toBe('count');
+    expect(nodeOfAccessor(createSignal(0)[0]).id).toBe('signal');
+  });
+
+  it('a slim node keeps its key list after writes, subscriptions and unsubscriptions', () => {
+    const [get, set] = createSignal(1);
+    const node = nodeOfAccessor(get);
+    const before = keysOf(node);
+    const dispose = root((d) => {
+      createEffect(() => get(), () => {});
+      return d;
+    });
+    set(2);
+    set((p) => p + 1);
+    dispose();
+    expect(keysOf(node)).toEqual(before);
+  });
 });

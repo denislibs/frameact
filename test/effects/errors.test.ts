@@ -44,7 +44,12 @@ it('a bailed child is re-scheduled even when its parent run throws', async () =>
   $boom.set(true); // … parent goes CHECK: the child bails onto it, then the parent's run throws
   await flushMicrotasks();
   expect(err).toHaveBeenCalled();
-  expect(childApply).toHaveBeenLastCalledWith(2, 1);
+  // The parent's run recomputed (its dep now holds an error) and recreated the child before
+  // throwing: the old child (bailed, now disposed) is dropped, the new one runs. Nothing is lost.
+  expect(childApply).toHaveBeenLastCalledWith(2, undefined);
+  $a.set(3);
+  await flushMicrotasks();
+  expect(childApply).toHaveBeenLastCalledWith(3, 2);
 });
 
 // Finding 2
