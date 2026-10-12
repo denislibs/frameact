@@ -74,6 +74,11 @@ function isUnsafeUrl(value: string): boolean {
   return false;
 }
 
+/** `<script src="data:…">` runs whatever the URL carries, so no `data:` type is safe there. */
+function isScriptDataSrc(node: Element, name: string, value: unknown): boolean {
+  return typeof value === 'string' && node.nodeName.toUpperCase() === 'SCRIPT' && name.toLowerCase() === 'src' && urlScheme(value).scheme === 'data';
+}
+
 function isUnsafeAnimationValue(value: string): boolean {
   for (const part of value.split(';')) {
     const { scheme } = urlScheme(part);
@@ -169,7 +174,7 @@ export function setAttribute(node: Element, name: string, value: unknown): void 
   }
   value = stringifyValue(name, value); // stringified once: what is checked is what is written
   const text = value === true ? '' : String(value);
-  const reason = refusal(name, value);
+  const reason = refusal(name, value) ?? (isScriptDataSrc(node, name, value) ? 'url' : null);
   if (reason) {
     report(name, value, reason);
     node.removeAttribute(name);

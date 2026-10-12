@@ -214,3 +214,24 @@ describe('srcdoc is an HTML sink (I4)', () => {
     expect(frame.getAttribute('srcdoc')).toBe('<b>trusted</b>');
   });
 });
+
+describe('<script src> refuses data: (any MIME)', () => {
+  it('on HTML and SVG scripts, in any name casing', () => {
+    const html = document.createElement('script');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'script');
+    for (const el of [html, svg]) {
+      for (const name of ['src', 'SRC', 'attr:src']) {
+        setAttribute(el, name, 'data:image/png;base64,AAAA');
+        expect(el.hasAttribute('src'), name).toBe(false);
+        setAttribute(el, name, ' DATA:text/javascript,alert(1)');
+        expect(el.hasAttribute('src'), name).toBe(false);
+      }
+    }
+    expect(errors).toHaveBeenCalled();
+    setAttribute(html, 'src', '/app.js');
+    expect(html.getAttribute('src')).toBe('/app.js');
+    const img = document.createElement('img');
+    setAttribute(img, 'src', 'data:image/png;base64,AAAA');
+    expect(img.hasAttribute('src')).toBe(true);
+  });
+});
