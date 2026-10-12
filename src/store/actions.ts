@@ -44,13 +44,21 @@ function runOne(name: string, fn: AnyFn, args: unknown[], done: (() => void) | u
     done?.();
     return undefined;
   }
-  if (!isThenable(r)) {
+  let thenable: boolean;
+  try {
+    thenable = isThenable(r); // (reads `r.then`: a getter may throw)
+  } catch (error) {
+    report(name, error);
+    done?.();
+    return undefined;
+  }
+  if (!thenable) {
     done?.();
     return undefined;
   }
   const settle = (resolve: () => void) => {
     try {
-      r.then(resolve, (e) => {
+      (r as PromiseLike<unknown>).then(resolve, (e) => {
         report(name, e);
         resolve();
       });

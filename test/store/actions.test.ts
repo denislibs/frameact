@@ -191,3 +191,29 @@ it('a long queue drains in FIFO order', () => {
   expect(out.slice(0, 3)).toEqual([0, 1, 2]);
   expect(out.at(-1)).toBe(4999);
 });
+
+it('N3: a result whose `then` getter throws is reported and does not abort the cascade (a queued action still runs)', () => {
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const log: string[] = [];
+  const actions = defineActions({
+    outer() {
+      actions.badThen();
+      actions.later();
+      log.push('outer');
+    },
+    badThen() {
+      // oxlint-disable-next-line unicorn/no-thenable -- the point of the test
+      return { get then(): never { throw new Error('getter'); } };
+    },
+    later() {
+      log.push('later');
+    },
+  });
+  expect(() => actions.outer()).not.toThrow();
+  expect(log).toEqual(['outer', 'later']);
+  expect(errorSpy).toHaveBeenCalled();
+  expect(() => actions.badThen()).not.toThrow(); // as a top-level call too
+  actions.later();
+  expect(log).toEqual(['outer', 'later', 'later']);
+  errorSpy.mockRestore();
+});
