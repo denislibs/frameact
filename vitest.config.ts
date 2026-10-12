@@ -10,6 +10,7 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: 'frameact/dom', replacement: src('dom/index.ts') },
+      { find: 'frameact/store', replacement: src('store/index.ts') },
       { find: 'frameact/jsx-runtime', replacement: src('jsx-runtime.ts') },
       { find: /^frameact$/, replacement: src('index.ts') },
     ],

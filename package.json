@@ -11,6 +11,7 @@
     ".": "./src/index.ts",
     "./dom": "./src/dom/index.ts",
     "./scheduler": "./src/scheduler/index.ts",
+    "./store": "./src/store/index.ts",
     "./vite": "./src/vite/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts"
   },
