@@ -14,7 +14,8 @@
 // effect (the machine), one mutation effect (the class writes) — no element signal, no memos. The
 // element is handed in through `ref`, which writes the current classes once; every later state
 // change is one apply of the mutation effect (five classList toggles).
-import { createEffect, createMemo, createMutationEffect, createSignal, onCleanup, untrack, type Accessor } from '../index';
+import { createEffect, createMemo, createMutationEffect, onCleanup, untrack, type Accessor } from '../index';
+import { createSignalNode, readSignal, write } from '../core/core';
 import { requestMeasure } from '../scheduler/fasterdom';
 import { insert } from '../dom/insert';
 import { getNatives } from '../dom/natives';
@@ -60,10 +61,14 @@ function stateTokens(prefix: string): StateTokens {
   return [`${prefix}shown`, `${prefix}not-shown`, `${prefix}open`, `${prefix}not-open`, `${prefix}closing`];
 }
 
-/** Mutate-phase (or detached-element) write of the state classes; idempotent. */
+/**
+ * Mutate-phase (or detached-element) write of the state classes; idempotent, and the token order is
+ * stable (shown-ness, then open-ness, then `closing`): leaving `closed` re-adds `not-open` after `shown`.
+ */
 function writeState(el: Element, tokens: StateTokens, state: ShowTransitionState): void {
   const list = el.classList;
   const closed = state === 'closed';
+  if (!closed && list.contains(tokens[1])) list.remove(tokens[3]);
   list.toggle(tokens[0], !closed);
   list.toggle(tokens[1], closed);
   list.toggle(tokens[2], state === 'open');
@@ -79,22 +84,20 @@ export function createShowTransition(options: ShowTransitionOptions): ShowTransi
   const wantsOpen = (): boolean => !!(forceOpen?.() || isOpen());
 
   let current: ShowTransitionState = options.noMountTransition && untrack(wantsOpen) ? 'open' : 'closed';
-  const [state, setState] = createSignal<ShowTransitionState>(current);
-  const [shouldRender, setShouldRender] = createSignal(current !== 'closed');
+  // Two bare signal nodes (one bound read each; writes go through `write.call`): the cheapest
+  // reactive cells the core has. `shouldRender` is its own node so that a slot reading it is not
+  // re-run — and its element not recreated — by the state changes in between.
+  const stateNode = createSignalNode<ShowTransitionState>(current);
+  const renderNode = createSignalNode(current !== 'closed');
+  const state = readSignal.bind(stateNode) as Accessor<ShowTransitionState>;
   let el: Element | undefined;
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
 
   function go(next: ShowTransitionState): void {
     current = next;
-    setState(next);
-    setShouldRender(next !== 'closed');
-  }
-
-  function cancelClose(): void {
-    if (closeTimer === undefined) return;
-    clearTimeout(closeTimer);
-    closeTimer = undefined;
+    write.call(stateNode, next);
+    write.call(renderNode, next !== 'closed');
   }
 
   function close(): void {
@@ -115,7 +118,10 @@ export function createShowTransition(options: ShowTransitionOptions): ShowTransi
     (open) => {
       if (open) {
         if (current === 'open' || current === 'scheduled-open') return;
-        cancelClose();
+        if (closeTimer !== undefined) {
+          clearTimeout(closeTimer); // re-opened while closing
+          closeTimer = undefined;
+        }
         go(noOpenTransition?.() ? 'open' : 'scheduled-open');
       } else {
         if (current === 'closed' || current === 'closing') return;
@@ -142,7 +148,8 @@ export function createShowTransition(options: ShowTransitionOptions): ShowTransi
 
   onCleanup(() => {
     disposed = true;
-    cancelClose();
+    if (closeTimer !== undefined) clearTimeout(closeTimer);
+    closeTimer = undefined;
   });
 
   return {
@@ -152,7 +159,7 @@ export function createShowTransition(options: ShowTransitionOptions): ShowTransi
       writeState(node, tokens, current);
     },
     state,
-    shouldRender,
+    shouldRender: readSignal.bind(renderNode) as Accessor<boolean>,
     isClosing: () => state() === 'closing',
   };
 }

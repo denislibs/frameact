@@ -6,6 +6,7 @@ import { createComponent } from '../../src/dom/component';
 import { insert } from '../../src/dom/insert';
 import { For } from '../../src/dom/list';
 import { createScrollAnchor } from '../../src/kit/scrollAnchor';
+import { TRACK } from '../../src/core/symbols';
 import { InfiniteScroll } from '../../src/kit/infiniteScroll';
 import { container, useDomHarness } from '../helpers/dom';
 import { fakeLayout, resetLayout } from '../helpers/layout';
@@ -213,5 +214,40 @@ describe('<InfiniteScroll>', () => {
     expect(el.scrollTop).toBe(850);
     el.dispatchEvent(new Event('scroll')); // the browser's scroll event from the restore: not a user scroll
     expect(loads.length).toBe(3);
+  });
+});
+
+describe('<InfiniteScroll> tracked reads', () => {
+  it('reads the list\'s shape once per update — one tracked read beyond createScrollAnchor\'s own (clean-room finding 7)', async () => {
+    // A list whose shape read is observable: a Proxy over a plain array that answers [TRACK] like a store array does.
+    let shapeReads = 0;
+    const shaped = (arr: number[]) =>
+      new Proxy(arr, {
+        get(target, key, receiver) {
+          if (key === TRACK) {
+            shapeReads++;
+            return target;
+          }
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    // Reference: the anchor alone.
+    const box = container();
+    fakeLayout(box);
+    const [a, setA] = createSignal(shaped(ids(0, 5)));
+    createRoot(() => createScrollAnchor({ container: () => box, items: a }));
+    await settle();
+    shapeReads = 0;
+    setA(shaped(ids(0, 6)));
+    await settle();
+    const anchorReads = shapeReads;
+    expect(anchorReads).toBeGreaterThan(0);
+    // The component (no <For>: a list component reads the shape too, and that is its own read).
+    const { setItems } = mount({ children: undefined }, shaped(ids(0, 50)));
+    await settle();
+    shapeReads = 0;
+    setItems(shaped(ids(0, 60)));
+    await settle();
+    expect(shapeReads).toBe(anchorReads + 1);
   });
 });

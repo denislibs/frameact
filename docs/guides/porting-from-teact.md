@@ -169,4 +169,12 @@ subset of `unwrap(state)` in `onFullyIdle` / `createIdleEffect`, throttled; the 
 - `requestMeasure(() => el.focus())` in an action; in a component `onMount(() => el.focus())`.
 - `beginHeavyAnimation(…, true)` freezes every frame queue globally; prefer a scope (`createHeavyAnimationScope`,
   `<HeavyAnimationScope>`, `<Transition scope>`) so only the moving subtree waits.
+- **`<Transition>` children: use the render function and render by `slide.key`** —
+  `<Transition activeKey={tab()} name="slide">{(slide) => <Tab id={slide.key} />}</Transition>`. Both slides are
+  live while the animation runs. With JSX children (`{tab() === 0 ? <A/> : <B/>}`) every slide's JSX reads the
+  same current props and signals, so the outgoing slide re-renders to the NEW content as it slides out — the
+  "previous screen slides away" effect of tt is only there when each slide owns the content of its own key.
+  The render function is called once per slide; `slide.isActive()` / `slide.isFrom()` are accessors for the
+  slide's own state. `renderCount` keeps a slide per visited key forever (it is a hint for DEV, not a cap):
+  with an open key set (message ids) use `shouldCleanup` or the default keep-alive instead.
 - `flushSync()` is for tests and imperative glue (View Transitions, iOS gesture) only.
