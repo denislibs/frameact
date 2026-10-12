@@ -238,20 +238,21 @@ function unwrapRaw<T>(v: T): any {
 
 // N1: a path key that is not a string/number/symbol but coerces to "__proto__" (an array from JSON, an
 // object with toString / Symbol.toPrimitive) must never reach `raw[key] = value`.
+const mk = () => createStore<any>({ x: {}, list: [1], deep: { y: {} } });
+const intact = (s: any) => {
+  const raw = unwrap(s);
+  expect(Object.getPrototypeOf(raw.x)).toBe(Object.prototype);
+  expect(Object.getPrototypeOf(raw.list)).toBe(Array.prototype);
+  expect(Object.getPrototypeOf(raw.deep.y)).toBe(Object.prototype);
+  clean();
+};
 describe('path keys that coerce to __proto__', () => {
   const coercing: [string, () => any][] = [
     ['nested array', () => [['__proto__']]],
     ['toString', () => ({ toString: () => '__proto__' })],
     ['Symbol.toPrimitive', () => ({ [Symbol.toPrimitive]: () => '__proto__' })],
   ];
-  const mk = () => createStore<any>({ x: {}, list: [1], deep: { y: {} } });
-  const intact = (s: any) => {
-    const raw = unwrap(s);
-    expect(Object.getPrototypeOf(raw.x)).toBe(Object.prototype);
-    expect(Object.getPrototypeOf(raw.list)).toBe(Array.prototype);
-    expect(Object.getPrototypeOf(raw.deep.y)).toBe(Object.prototype);
-    clean();
-  };
+
   it.each(coercing)('%s as the last key (object, array), fanned out, and as a descent key: TypeError', (_n, k) => {
     const [s, set0] = mk();
     const set = set0 as (...a: any[]) => void;

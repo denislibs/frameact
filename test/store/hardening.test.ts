@@ -16,12 +16,12 @@ function watch<T>(fn: () => T): T[] {
 describe('keys named like Object.prototype members (I2)', () => {
   it.each(['constructor', 'toString', 'hasOwnProperty', 'valueOf'])('%s: adding the key notifies Object.keys, `in` and get readers', (name) => {
     const [state, setState] = createStore<any>({ users: {} });
-    const keys = watch(() => Object.keys(state.users).join(','));
+    const keyLog = watch(() => Object.keys(state.users).join(','));
     const read = watch(() => typeof state.users[name]);
     const has = watch(() => Object.hasOwn(state.users, name) || name in state.users);
     setState('users', name, 2);
     flushSync();
-    expect(keys).toEqual(['', name]);
+    expect(keyLog).toEqual(['', name]);
     expect(read).toEqual(['function', 'number']);
     expect(state.users[name]).toBe(2);
     expect(has.length).toBeGreaterThanOrEqual(1);
@@ -31,7 +31,7 @@ describe('keys named like Object.prototype members (I2)', () => {
     expect(state.users[name]).toBe(3);
     setState('users', name, undefined);
     flushSync();
-    expect(keys).toEqual(['', name, '']);
+    expect(keyLog).toEqual(['', name, '']);
     expect(read).toEqual(['function', 'number', 'function']);
   });
   it('the own value tracks and updates', () => {

@@ -356,11 +356,11 @@ it('N2: a scope that ends and re-begins mid-drain does not park an effect it wou
   const [loc, setLoc] = createSignal(0);
   const S = createHeavyAnimationScope(null);
   const log: string[] = [];
-  let end = () => {};
+  let end: (() => void) | undefined;
   inScope(S, () => {
     createMutationEffect(() => state.a, (v) => { log.push('A' + v); });
   });
-  createRoot(() => createMutationEffect(loc, (v) => { if (v) { end(); end = S.begin(Infinity); log.push('restart'); } }));
+  createRoot(() => createMutationEffect(loc, (v) => { if (v) { end?.(); end = S.begin(Infinity); log.push('restart'); } }));
   inScope(S, () => {
     createMutationEffect(() => state.b, (v) => { log.push('B' + v); });
   });

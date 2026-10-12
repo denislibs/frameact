@@ -127,7 +127,7 @@ describe('lazy leaf signals', () => {
     expect([...state.list]).toEqual([1, 3]);
   });
 
-  it('the leaf of a deleted key stays while it has a reader (and is reused by a re-added key); it leaves the table with its last reader (a churning dictionary does not accumulate leaves)', () => {
+  it('the leaf of a deleted key stays while it has a reader (and is reused by a re-added key); it leaves the table with its last reader', () => {
     const [state, setState] = createStore({ byId: {} as Record<string, number> });
     setState('byId', 'k', 1);
     const log = createRoot(() => track(() => state.byId.k));
