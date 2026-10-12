@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { transformSync, types as t, type PluginObj } from '@babel/core';
 import solid from '@solidjs/babel-plugin';
 import * as dom from '../../src/dom/index';
-import { createRoot } from '../../src/index';
+import { createRoot, flushSync } from '../../src/index';
 import { compilerOptions } from '../../src/vite/index';
 
 // Not `new URL('./fixtures/', import.meta.url)`: under the jsdom environment that URL is not a file: URL.
@@ -30,6 +30,12 @@ const stubCall = (name: string) =>
   t.variableDeclaration('let', [
     t.variableDeclarator(t.identifier(name), t.callExpression(t.identifier('__stub'), [t.stringLiteral(name)])),
   ]);
+
+/**
+ * The only free identifiers that stay real: ES/DOM globals the fixtures use. Everything else, including
+ * names that happen to exist on the test environment's global (vitest's `test`, `window.name`), is a stub.
+ */
+const REAL_GLOBALS = new Set(['__dom', '__stub', 'undefined', 'console', 'Array', 'queueMicrotask']);
 
 /**
  * Compiled module → function body: `import { x as _$x } from "frameact/dom"` becomes
@@ -62,7 +68,7 @@ function toFunctionBody(code: string): { body: string; domImports: string[] } {
           }
           path.scope.crawl();
           const globals = Object.keys(path.scope.globals).filter(
-            (name) => name !== '__dom' && name !== '__stub' && !(name in globalThis),
+            (name) => !REAL_GLOBALS.has(name),
           );
           body.unshift(...globals.map(stubCall));
         },
@@ -79,7 +85,9 @@ function stubTarget() {}
 /**
  * A value that survives whatever compiled output does with a free identifier: callable (two levels
  * deep, so accessor unwrapping terminates), constructible, has any property, iterates as empty,
- * coerces to the string "stub", and is never mistaken for a DOM node or an array.
+ * coerces to the string "stub", and is never mistaken for a DOM node or an array. Because a stub
+ * iterates as empty, `For` rows (the `mapArray` row mapper) are not executed here: unit tests cover them
+ * (for.test.ts, forManual.test.ts).
  */
 function makeStub(name: string, depth = 0): any {
   const cache = new Map<PropertyKey, unknown>();
@@ -110,19 +118,32 @@ function runModule(body: string): void {
     fn.call(undefined, dom, makeStub);
     return d;
   });
+  flushSync();
   dispose();
 }
 
-/** Our own runtime error reports (effects, drains, cleanups, list rows) — unlike dev lint messages, these mean something threw. */
-const RUNTIME_ERROR = /Error in effect|entry failed|onCleanup failed|row mapper|keyFn/;
+/**
+ * DEV lints that fixtures legitimately trigger (they are diagnostics, not failures). Every other
+ * `console.error` fails the test: the runtime reports a thrown effect, a broken invariant, a failed
+ * scheduler task and so on through `console.error`.
+ */
+const DEV_LINTS = [
+  /className= on an element/, // attributeExpressions compiles `className=`
+  /refused an unsafe URL/,
+  /is an HTML sink/,
+  /string event handlers/,
+];
 
 /**
  * Fixtures whose own source throws when it is executed as a program against stubs: the compiler output
- * is right, the fixture is just not a runnable module. Each entry must match the exact message and
- * say why. `insertChildren`: `const children = <div/>; … {children()}` calls a DOM node.
+ * is right, the fixture is just not a runnable module. Each entry is the exact message (anchored, so
+ * `props.children is not a function` or `dynamic.children …` still fail) and the number of times it
+ * must fire per run, so the exemption cannot go stale silently. `insertChildren`: `{children()()}`
+ * compiles to `_$insert(el, () => children()())`, and `children` is a DOM node, not a function
+ * (`{children()}` alone compiles to `_$insert(el, children)` and does not call it).
  */
-const FIXTURE_USER_ERRORS: Record<string, RegExp> = {
-  insertChildren: /children is not a function/,
+const FIXTURE_USER_ERRORS: Record<string, { message: RegExp; count: number }> = {
+  insertChildren: { message: /(?<![\w$.])children is not a function$/, count: 1 },
 };
 
 describe.each([false, true])('compiler acceptance (dev=%s)', (dev) => {
@@ -147,9 +168,10 @@ describe.each([false, true])('compiler acceptance (dev=%s)', (dev) => {
         dom.clearDelegatedEvents();
         document.body.textContent = '';
       }
-      expect(
-        errors.filter((message) => RUNTIME_ERROR.test(message) && !FIXTURE_USER_ERRORS[name]?.test(message)),
-      ).toEqual([]);
+      const exempt = FIXTURE_USER_ERRORS[name];
+      const exempted = errors.filter((message) => exempt?.message.test(message));
+      if (exempt) expect(exempted, `${name}: the documented fixture error must fire exactly ${exempt.count}x`).toHaveLength(exempt.count);
+      expect(errors.filter((message) => !exempted.includes(message) && !DEV_LINTS.some((lint) => lint.test(message)))).toEqual([]);
     });
   }
 });
