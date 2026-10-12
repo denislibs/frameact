@@ -164,7 +164,7 @@ render(() => <Composer />, document.getElementById('app')!);
 |---|---|---|
 | 1 · core | сигналы, двухфазные эффекты, кадровые очереди, гейтинг анимаций, `mapArray`, context | ✅ готово — [PR #1](https://github.com/denislibs/frameact/pull/1) |
 | 2 · dom | рантайм для JSX-компилятора, `For`/`Show`/`Switch`, контролируемые инпуты, списки с ручным порядком, Vite-плагин | ✅ готово |
-| 3 · store | глобальный стор в стиле TeactN (`withGlobal`, action handlers) с распространением, учитывающим анимации | ⏳ |
+| 3 · store | глобальный стор на сигналах: подписки на сущности, запись со структурным шарингом, обновления с учётом анимаций | ⏳ |
 | 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта | ⏳ |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact на сценариях мессенджера (Chromium + WebKit, CPU ×4) | ⏳ |
 

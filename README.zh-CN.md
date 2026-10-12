@@ -151,7 +151,7 @@ solidjs/solid，以 `SOURCE` 文件代替逐文件头部声明。
 |---|---|---|
 | 1 · core | 信号、两阶段 effect、帧队列、重动画闸门、`mapArray`、context | ✅ 完成 —— [PR #1](https://github.com/denislibs/frameact/pull/1) |
 | 2 · dom | JSX 编译器运行时、`For`/`Show`/`Switch`、受控输入、手动排序列表、Vite 插件 | ✅ 完成 |
-| 3 · store | TeactN 风格的全局 store（`withGlobal`、action handlers），传播过程感知动画 | ⏳ |
+| 3 · store | 基于 signal 的全局 store：实体级订阅、结构共享写入、感知动画的更新 | ⏳ |
 | 4 · stricterdom | 开发模式阶段检查，定位到具体 effect | ⏳ |
 | 5 · benchmark | 在即时通讯场景下对比 teact、Solid 2.0 与 frameact（Chromium + WebKit，CPU ×4） | ⏳ |
 

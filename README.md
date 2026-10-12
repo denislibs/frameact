@@ -164,7 +164,7 @@ Third-party code is MIT-licensed (udomdiff: ISC) and attributed in each adapted 
 |---|---|---|
 | 1 · core | signals, two-phase effects, frame queues, heavy-animation gating, `mapArray`, context | ✅ done — [PR #1](https://github.com/denislibs/frameact/pull/1) |
 | 2 · dom | runtime for the JSX compiler, `For`/`Show`/`Switch`, controlled inputs, manual-order lists, Vite plugin | ✅ done |
-| 3 · store | global store in the style of TeactN (`withGlobal`, action handlers) with animation-aware propagation | ⏳ |
+| 3 · store | global store on signals: entity subscriptions, structural-sharing writes, animation-aware updates | ⏳ |
 | 4 · stricterdom | dev-mode phase checks with effect attribution | ⏳ |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact on messenger scenarios (Chromium + WebKit, CPU ×4) | ⏳ |
 
