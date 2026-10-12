@@ -1,5 +1,5 @@
 // Adapted from solidjs/solid packages/web/src/client.ts (MIT, © 2016-2025 Ryan Carniato) and
-// dom-expressions packages/dom-expressions/src/client.js (MIT, © 2017 Ryan Carniato).
+// dom-expressions packages/dom-expressions/src/client.js (MIT, © 2018-2019 Ryan Carniato).
 // frameact: `insert` is a two-phase render effect — compute = normalize (pure; creates subtrees on
 // detached DOM), apply = insertExpression (the DOM write: synchronous at creation, mutate phase later).
 import { DEV } from '../env';

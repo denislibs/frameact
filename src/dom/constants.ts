@@ -1,4 +1,4 @@
-// Adapted from dom-expressions (MIT, © 2017 Ryan Carniato) — https://github.com/ryansolid/dom-expressions packages/dom-expressions/src/constants.js
+// Adapted from dom-expressions (MIT, © 2018-2019 Ryan Carniato) — https://github.com/ryansolid/dom-expressions packages/dom-expressions/src/constants.js
 // list of lowercase booleans
 const booleans = [
   "allowfullscreen",

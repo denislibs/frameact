@@ -11,7 +11,7 @@ Each adapted file carries an `Adapted from …` header. The license texts follow
 `src/scheduler/schedulers.ts`, `src/scheduler/fasterdom.ts`, `src/scheduler/heavyAnimation.ts`,
 `src/dom/classes.ts`, `src/dom/styles.ts`, `src/dom/directives.ts`, `src/dom/list.ts`
 
-## dom-expressions (ryansolid/dom-expressions) — MIT License, Copyright (c) 2017 Ryan Carniato
+## dom-expressions (ryansolid/dom-expressions) — MIT License, Copyright (c) 2018-2019 Ryan Carniato
 `src/dom/constants.ts`, `src/dom/template.ts`, `src/dom/insert.ts`, `src/dom/events.ts`,
 `src/dom/attributes.ts`, `src/dom/props.ts`, `src/jsx/jsx.d.ts`
 

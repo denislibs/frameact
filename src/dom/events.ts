@@ -1,4 +1,4 @@
-// Adapted from dom-expressions packages/dom-expressions/src/client.js (MIT, © 2017 Ryan Carniato):
+// Adapted from dom-expressions packages/dom-expressions/src/client.js (MIT, © 2018-2019 Ryan Carniato):
 // event delegation on `document`; handlers live on nodes under the compiler's `_$$<event>` keys.
 import { DEV } from '../env';
 import { portalHostOf } from './insert';
