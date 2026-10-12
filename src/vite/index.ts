@@ -53,10 +53,19 @@ export interface FrameactPluginOptions {
  *    positive: a constant identifier (`value={LABEL}`) is not distinguished from a signal read.
  * 2. A static string event attribute on an intrinsic element (`<div onclick="…">`): the compiler inlines
  *    it into the template HTML, so the runtime's "no string handlers" check never sees it.
+ * 3. Destructured props (trap no. 1 for a team coming from hooks): `function Chat({ isOpen })`,
+ *    `const Chat = ({ isOpen }) =>`, `const Chat: FC<P> = function ({ … })` and, in a body,
+ *    `const { isOpen } = props`. A component runs once, so a destructured prop is read once at creation
+ *    and never updates. Only capitalised names are checked (a helper named `Format({ a })` is a
+ *    known false positive; the message says so), and so is the body form inside a memo/effect compute,
+ *    where the read is tracked and re-runs. A type annotation containing `=` or `=>` ends the declaration
+ *    scan (known false negative). `props` is the conventional parameter name for the body form.
  */
 const CONTROLLED_PROP =
   /<(input|textarea|select)\b(?:=>|[^>])*?\s(value|checked)=\{(?!\s*(?:"[^"]*"|'[^']*'|`[^`$]*`|-?\d[\d.]*|true|false|null|undefined)\s*\})/g;
 const STRING_HANDLER = /<[a-z][\w-]*\b(?:=>|[^>])*?\s(on[A-Za-z]+)=["']/g;
+const DESTRUCTURED_PARAM = /\b(?:function\s+([A-Z][\w$]*)\s*\(|(?:const|let|var)\s+([A-Z][\w$]*)\s*(?::[^=]*)?=\s*(?:function\s*\(|\())\s*\{/g;
+const DESTRUCTURED_BODY = /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*props\b/g;
 
 interface Lint {
   index: number;
@@ -75,6 +84,19 @@ function lintSource(code: string): Lint[] {
     found.push({
       index: match.index,
       message: `${match[1]}="…" is a static string attribute: the compiler inlines it into the template HTML, bypassing the runtime's check. Use onClick={fn}-style handlers.`,
+    });
+  }
+  for (const match of code.matchAll(DESTRUCTURED_PARAM)) {
+    const name = match[1] ?? match[2];
+    found.push({
+      index: match.index,
+      message: `<${name}> destructures its props: a component runs once, so a destructured prop is read at creation and never updates. Take \`props\` and read \`props.x\` where it is used (or splitProps). If ${name} is not a component, ignore this.`,
+    });
+  }
+  for (const match of code.matchAll(DESTRUCTURED_BODY)) {
+    found.push({
+      index: match.index,
+      message: 'const { … } = props reads the props once: the values never update. Read `props.x` where it is used (or splitProps).',
     });
   }
   return found;

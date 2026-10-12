@@ -139,3 +139,28 @@ it('derives dev from the resolved config when the option is omitted; the option 
   expect(await compileResolved({}, false)).toEqual({ named: true, warned: 1 });
   expect(await compileResolved({ dev: true }, true)).toEqual({ named: true, warned: 1 });
 });
+
+it('warns in dev about destructured props: in the signature (function, arrow, function expression, typed) and in the body; not in prod', async () => {
+  const code = [
+    'function Chat({ isOpen }: P) { return <div>{isOpen}</div>; }',
+    'const Panel = ({ title }) => <b>{title}</b>;',
+    'const Row: FC<P> = function ({ id }) { return <i>{id}</i>; };',
+    'export const Item = (props: P) => { const { id, title } = props; return <i>{id}</i>; };',
+    'const ok = (props: P) => <i>{props.id}</i>;',
+    'function helper({ a }) { return a; }', // lowercase: not a component
+    'const fine = ({ a }) => a;',
+  ].join('\n');
+  const dev = await compile(code, '/app/x.tsx');
+  expect(dev.warnings.length).toBe(4);
+  expect(dev.warnings[0]).toContain('<Chat> destructures its props');
+  expect(dev.warnings[1]).toContain('<Panel>');
+  expect(dev.warnings[2]).toContain('<Row>');
+  expect(dev.warnings[3]).toContain('const { … } = props');
+  expect(dev.positions).toEqual([
+    { line: 1, column: 0 },
+    { line: 2, column: 0 },
+    { line: 3, column: 0 },
+    { line: 4, column: 36 },
+  ]);
+  expect((await compile(code, '/app/x.tsx', false)).warnings).toEqual([]);
+});
