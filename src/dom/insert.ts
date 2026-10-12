@@ -5,7 +5,7 @@
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import type { EffectOptions } from '../core/effects';
-import { reconcileArrays, SLOT } from './reconcile';
+import { ownedBy, reconcileArrays, tagSlot } from './reconcile';
 
 // No `Document`: lib.dom types its `textContent` as a read-only `null`, and mounting into a Document is meaningless anyway.
 export type MountableElement = Element | ShadowRoot | DocumentFragment;
@@ -219,7 +219,7 @@ export function insertExpression(parent: MountableElement, value: any, current: 
       // a sole text child holds the previous primitive (`0`/`NaN` are falsy, hence `!= null`)
       parent.replaceChild(value, parent.firstChild);
     } else parent.insertBefore(value, marker ?? null);
-    if (marker) value[SLOT] = marker;
+    tagSlot(value, marker);
     return value;
   }
   if (DEV) console.warn('[frameact] Unrecognized value. Skipped inserting', value);
@@ -230,7 +230,10 @@ export function insertExpression(parent: MountableElement, value: any, current: 
 function cleanChildren(parent: MountableElement, current: any, marker?: Node | null, replacement?: any): any {
   if (marker === undefined) {
     parent.textContent = '';
-    if (replacement) parent.appendChild(replacement);
+    if (replacement) {
+      parent.appendChild(replacement);
+      tagSlot(replacement, marker);
+    }
     return replacement ?? '';
   }
   const list: any[] = Array.isArray(current) ? current : current != null && current !== '' ? [current] : [];
@@ -239,8 +242,7 @@ function cleanChildren(parent: MountableElement, current: any, marker?: Node | n
     for (let i = list.length - 1; i >= 0; i--) {
       const el = list[i];
       if (replacement !== el) {
-        const tag = el[SLOT];
-        const owns = el.parentNode === parent && (!tag || tag === marker);
+        const owns = ownedBy(el, parent, marker);
         if (replacement && !inserted && !i) {
           if (owns) parent.replaceChild(replacement, el);
           else parent.insertBefore(replacement, marker);
@@ -248,7 +250,7 @@ function cleanChildren(parent: MountableElement, current: any, marker?: Node | n
       } else inserted = true;
     }
   } else if (replacement) parent.insertBefore(replacement, marker);
-  if (replacement && marker) replacement[SLOT] = marker;
+  if (replacement) tagSlot(replacement, marker);
   return replacement ? [replacement] : [];
 }
 
@@ -256,7 +258,7 @@ function appendNodes(parent: MountableElement, array: any[], marker: Node | null
   for (let i = 0; i < array.length; i++) {
     const n = array[i];
     parent.insertBefore(n, marker);
-    if (marker) n[SLOT] = marker;
+    tagSlot(n, marker);
   }
 }
 

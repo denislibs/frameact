@@ -1,5 +1,6 @@
 import { createMemo, createRoot, createSignal, mapArray } from '../../src/index';
 import { insert, insertExpression } from '../../src/dom/insert';
+import { SLOT } from '../../src/dom/reconcile';
 import { render } from '../../src/dom/render';
 import { container, useDomHarness } from '../helpers/dom';
 
@@ -215,5 +216,43 @@ describe('foreign text nodes', () => {
     expect(el.textContent).toBe('headerrow1row2');
     expect(t1.data).toBe('row1');
     expect(current).toHaveLength(3);
+  });
+});
+
+describe('slot ownership tags', () => {
+  it('(a) a node moving into the last (marker null) slot is not removed by the slot it left', async () => {
+    const el = container();
+    const m = document.createTextNode('');
+    el.append(m);
+    const x = document.createElement('i');
+    const [a, setA] = createSignal(true);
+    createRoot(() => {
+      insert(el, () => (a() ? null : [x, 'tail']), null);
+      insert(el, () => (a() ? x : null), m);
+    });
+    expect(el.innerHTML).toBe('<i></i>');
+    setA(false);
+    await frame();
+    expect(el.innerHTML).toBe('<i></i>tail');
+    expect((x as any)[SLOT]).toBeNull();
+    setA(true);
+    await frame();
+    expect(el.innerHTML).toBe('<i></i>');
+  });
+
+  it('(b) a node that lived in a multi slot of another parent is reconciled normally in root mode', async () => {
+    const p1 = container();
+    const m = document.createTextNode('');
+    p1.append(m);
+    const x = document.createElement('i');
+    insert(p1, [x], m);
+    const p2 = container();
+    const y = document.createElement('b');
+    const [l, setL] = createSignal<Node[]>([x, y]);
+    createRoot(() => insert(p2, () => l()));
+    expect(p2.innerHTML).toBe('<i></i><b></b>');
+    setL([y]);
+    await frame();
+    expect(p2.innerHTML).toBe('<b></b>');
   });
 });

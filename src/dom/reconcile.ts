@@ -4,10 +4,19 @@
 /** Nodes inserted under a marker are tagged with it: a node that migrated to another slot of the same parent is not ours. */
 export const SLOT: unique symbol = Symbol('frameact.slot');
 
-function ownedBy(n: any, parentNode: any, marker: any): boolean {
-  if (!n) return false;
+/**
+ * Tag a node with the slot that inserted it: its marker, or `null` for the last slot (and for root
+ * mode). Always written, so a node that migrates between slots never keeps a stale tag.
+ */
+export function tagSlot(n: any, marker: Node | null | undefined): void {
+  n[SLOT] = marker ?? null;
+}
+
+/** `undefined` tag = never inserted by a slot (static template nodes): owned by whoever holds it. */
+export function ownedBy(n: any, parentNode: any, marker: any): boolean {
+  if (!n || n.parentNode !== parentNode) return false;
   const tag = n[SLOT];
-  return n.parentNode === parentNode && (!tag || tag === marker);
+  return tag === undefined || tag === (marker ?? null);
 }
 
 /** Diff `a` (current nodes) → `b` (next nodes) inside `parentNode`, minimal moves. `a` must be non-empty. */
@@ -45,7 +54,7 @@ export function reconcileArrays(parentNode: any, a: any[], b: any[], marker?: No
       while (bStart < bEnd) {
         const n = b[bStart++];
         parentNode.insertBefore(n, node);
-        if (marker) n[SLOT] = marker;
+        tagSlot(n, marker);
       }
     } else if (bEnd === bStart) {
       // remove
@@ -59,7 +68,7 @@ export function reconcileArrays(parentNode: any, a: any[], b: any[], marker?: No
       do {
         const n = a[--aEnd];
         parentNode.insertBefore(n, anchor);
-        if (marker) n[SLOT] = marker;
+        tagSlot(n, marker);
         bStart++;
         if (aStart >= aEnd - 1 || bStart >= bEnd) break;
       } while (a[aStart] === b[bEnd - 1] && b[bStart] === a[aEnd - 1]);
@@ -86,14 +95,14 @@ export function reconcileArrays(parentNode: any, a: any[], b: any[], marker?: No
             while (bStart < index) {
               const n = b[bStart++];
               parentNode.insertBefore(n, node);
-              if (marker) n[SLOT] = marker;
+              tagSlot(n, marker);
             }
           } else {
             const oldNode = a[aStart++];
             const newNode = b[bStart++];
             if (ownedBy(oldNode, parentNode, marker)) parentNode.replaceChild(newNode, oldNode);
             else parentNode.insertBefore(newNode, after);
-            if (marker) newNode[SLOT] = marker;
+            tagSlot(newNode, marker);
           }
         } else aStart++;
       } else {
