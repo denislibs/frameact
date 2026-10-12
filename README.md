@@ -119,7 +119,12 @@ render(() => <Composer />, document.getElementById('app')!);
 
 `class=` / `classList=` / spreads diff class tokens, so imperative `addExtraClass` survives updates; a string
 `style=` writes `cssText` and is incompatible with `setExtraStyles`. Controlled inputs are `use:value` /
-`use:checked` — a reactive `value=` is written as a property, and the Vite plugin warns about it in dev.
+`use:checked` — a reactive `value=` is written as a property, and the Vite plugin warns about it in dev. To write
+to a controlled input imperatively, use `forceControlledValue` (and `isForcingControlledValue` to detect it).
+
+**Security.** Attribute writes refuse `javascript:` / `vbscript:` URLs, non-media `data:` URLs, string `on*`
+handlers and `srcdoc=`; the explicit escape hatch for trusted HTML is `prop:srcdoc`. Refusals are silent in
+production and a `console.error` in DEV.
 
 ## Inspiration and credits
 
@@ -136,7 +141,8 @@ render(() => <Composer />, document.getElementById('app')!);
 - **[SolidJS](https://github.com/solidjs/solid)** and **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
   by Ryan Carniato — the component model, the JSX compiler and the DOM runtime design.
 
-Third-party code is MIT-licensed and attributed in each adapted file.
+Third-party code is MIT-licensed (udomdiff: ISC) and attributed in each adapted file. The compiler fixtures in
+`test/dom/fixtures` are vendored verbatim from solidjs/solid and carry a `SOURCE` file instead of per-file headers.
 
 ## Roadmap
 
@@ -164,5 +170,5 @@ Toolchain: TypeScript 7 (native), Vite 8 / Vitest 5 + jsdom, oxlint.
 
 ## License
 
-[MIT](LICENSE). Vendored and adapted third-party code (maverick-js/signals, teact, dom-expressions) is also
-MIT — see [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
+[MIT](LICENSE). Vendored and adapted third-party code (maverick-js/signals, teact, dom-expressions, solidjs/solid — web client
+parts and the compiler fixtures) is also MIT, udomdiff is ISC — see [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

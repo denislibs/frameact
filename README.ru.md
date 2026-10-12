@@ -118,7 +118,13 @@ render(() => <Composer />, document.getElementById('app')!);
 
 `class=` / `classList=` / спреды диффят токены классов, поэтому императивный `addExtraClass` переживает
 обновления; строковый `style=` пишет `cssText` и несовместим с `setExtraStyles`. Контролируемые инпуты —
-`use:value` / `use:checked`: реактивный `value=` пишется как свойство, и Vite-плагин предупреждает об этом в dev.
+`use:value` / `use:checked`: реактивный `value=` пишется как свойство, и Vite-плагин предупреждает об этом в dev. Чтобы
+записать значение в контролируемый инпут императивно, используйте `forceControlledValue` (а `isForcingControlledValue`
+позволяет это распознать).
+
+**Безопасность.** Запись атрибутов отклоняет URL `javascript:` / `vbscript:`, `data:` не для медиа, строковые
+обработчики `on*` и `srcdoc=`; явный выход для доверенного HTML — `prop:srcdoc`. В production отказы тихие, в DEV — это
+`console.error`.
 
 ## Вдохновение и благодарности
 
@@ -135,7 +141,9 @@ render(() => <Composer />, document.getElementById('app')!);
 - **[SolidJS](https://github.com/solidjs/solid)** и **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
   Райана Карниато — модель компонентов, JSX-компилятор и устройство DOM-рантайма.
 
-Сторонний код распространяется по MIT, авторство указано в каждом адаптированном файле.
+Сторонний код распространяется по MIT (udomdiff — ISC), авторство указано в каждом адаптированном файле.
+Фикстуры компилятора в `test/dom/fixtures` вендорены дословно из solidjs/solid и вместо заголовков в файлах
+сопровождаются файлом `SOURCE`.
 
 ## Дорожная карта
 
@@ -163,5 +171,5 @@ pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
 
 ## Лицензия
 
-[MIT](LICENSE). Вендоренный и адаптированный сторонний код (maverick-js/signals, teact, dom-expressions) —
-тоже MIT, см. [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
+[MIT](LICENSE). Вендоренный и адаптированный сторонний код (maverick-js/signals, teact, dom-expressions, solidjs/solid — части
+web-клиента и фикстуры компилятора) — тоже MIT, udomdiff — ISC, см. [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

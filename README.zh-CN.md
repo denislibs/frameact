@@ -113,7 +113,10 @@ render(() => <Composer />, document.getElementById('app')!);
 
 `class=` / `classList=` / 展开属性按 token 做 diff，因此命令式的 `addExtraClass` 在更新后依然保留；字符串形式的 `style=`
 会写入 `cssText`，与 `setExtraStyles` 不兼容。受控输入使用 `use:value` / `use:checked` —— 响应式的 `value=` 会被当作属性直接写入，
-Vite 插件会在开发模式下给出警告。
+Vite 插件会在开发模式下给出警告。如需以命令式方式写入受控输入，请使用 `forceControlledValue`（`isForcingControlledValue` 用于检测）。
+
+**安全。** 属性写入会拒绝 `javascript:` / `vbscript:` URL、非媒体类 `data:` URL、字符串形式的 `on*` 处理器以及 `srcdoc=`；
+受信任 HTML 的显式出口是 `prop:srcdoc`。生产环境中拒绝是静默的，开发模式下会输出 `console.error`。
 
 ## 灵感与致谢
 
@@ -129,7 +132,8 @@ Vite 插件会在开发模式下给出警告。
 - **[SolidJS](https://github.com/solidjs/solid)** 与 **[dom-expressions](https://github.com/ryansolid/dom-expressions)**
   （作者 Ryan Carniato）—— 组件模型、JSX 编译器以及 DOM 运行时的设计。
 
-第三方代码均为 MIT 许可，并在每个改编文件中注明出处。
+第三方代码均为 MIT 许可（udomdiff 为 ISC），并在每个改编文件中注明出处。`test/dom/fixtures` 中的编译器测试夹具原样取自
+solidjs/solid，以 `SOURCE` 文件代替逐文件头部声明。
 
 ## 路线图
 
@@ -157,5 +161,5 @@ pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
 
 ## 许可证
 
-[MIT](LICENSE)。内置和改编的第三方代码（maverick-js/signals、teact、dom-expressions）同样为 MIT，
-见 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)。
+[MIT](LICENSE)。内置和改编的第三方代码（maverick-js/signals、teact、dom-expressions、solidjs/solid 的 Web 客户端部分及编译器夹具）同样为 MIT，
+udomdiff 为 ISC，见 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)。
