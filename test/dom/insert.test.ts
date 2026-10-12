@@ -118,12 +118,15 @@ describe('arrays and function values', () => {
     createRoot(() => insert(ul, rows));
     expect(ul.innerHTML).toBe('<li>a</li><li>b</li>');
     const ins = vi.spyOn(ul, 'insertBefore');
-    const rem = vi.spyOn(ul, 'removeChild');
+    const observer = new MutationObserver(() => {});
+    observer.observe(ul, { childList: true });
     setList([{ id: 1, text: 'a' }, { id: 2, text: 'B' }]);
     await frame();
     expect(ul.innerHTML).toBe('<li>a</li><li>B</li>');
     expect(ins).not.toHaveBeenCalled();
-    expect(rem).not.toHaveBeenCalled();
+    // remove() / replaceChild() / insertBefore() all surface as childList records
+    expect(observer.takeRecords()).toHaveLength(0);
+    observer.disconnect();
   });
 
   it('a static array containing a memo updates through the memo', async () => {
