@@ -1,5 +1,5 @@
 import { addEvent, clearDelegatedEvents, delegateEvents, EVENT_KEY, setListener } from '../../src/dom/events';
-import { HOST_KEY } from '../../src/dom/insert';
+import { tagPortalHost } from '../../src/dom/insert';
 import { useDomHarness, container } from '../helpers/dom';
 
 useDomHarness();
@@ -119,7 +119,7 @@ describe('delegation survives DOM clobbering (forms with named inputs)', () => {
     const { outer, form, input } = formWithInput();
     const { counter, handler } = counting();
     const outerCalls = vi.fn();
-    clobber(form, HOST_KEY, input);
+    clobber(form, '_$host', input);
     addEvent(form, 'click', handler, true);
     addEvent(outer, 'click', outerCalls, true);
     delegateEvents(['click']);
@@ -128,7 +128,27 @@ describe('delegation survives DOM clobbering (forms with named inputs)', () => {
     expect(outerCalls).toHaveBeenCalledTimes(1);
   });
 
-  it('cross-linked forms (form= attribute) cannot redirect or loop the walk: only accessor hosts count', () => {
+  it('an own `_$host` accessor or data property on a node is not a portal host: the walk reaches the real ancestors', () => {
+    const logicalParent = container();
+    const outer = container();
+    const middle = document.createElement('div');
+    const accessorNode = document.createElement('span');
+    const dataNode = document.createElement('b');
+    middle.append(accessorNode, dataNode);
+    outer.appendChild(middle);
+    Object.defineProperty(accessorNode, '_$host', { get: () => logicalParent, configurable: true });
+    (dataNode as any)['_$host'] = logicalParent;
+    const log: string[] = [];
+    addEvent(logicalParent, 'click', () => log.push('logical'), true);
+    addEvent(middle, 'click', () => log.push('middle'), true);
+    addEvent(outer, 'click', () => log.push('outer'), true);
+    delegateEvents(['click']);
+    click(accessorNode);
+    click(dataNode);
+    expect(log).toEqual(['middle', 'outer', 'middle', 'outer']);
+  });
+
+  it('cross-linked forms (form= attribute) cannot redirect or loop the walk: named controls are never hosts', () => {
     const rootA = container();
     const rootB = container();
     const formA = document.createElement('form');
@@ -142,8 +162,8 @@ describe('delegation survives DOM clobbering (forms with named inputs)', () => {
     rootA.appendChild(formA);
     rootB.appendChild(formB);
     // <input form=fb name=_$host> inside fa, <input form=fa name=_$host> inside fb: named props point out of the form.
-    clobber(formA, HOST_KEY, inputInB);
-    clobber(formB, HOST_KEY, inputInA);
+    clobber(formA, '_$host', inputInB);
+    clobber(formB, '_$host', inputInA);
     const { counter, handler } = counting();
     const log: string[] = [];
     addEvent(formA, 'click', handler, true);
@@ -156,15 +176,15 @@ describe('delegation survives DOM clobbering (forms with named inputs)', () => {
     expect(log).toEqual(['rootA']);
   });
 
-  it('a genuine portal host cycle (two accessors pointing at each other) still terminates', () => {
+  it('a genuine portal host cycle (two registered hosts pointing at each other) still terminates', () => {
     const mountA = container();
     const mountB = container();
     const insideA = document.createElement('i');
     const insideB = document.createElement('i');
     mountA.appendChild(insideA);
     mountB.appendChild(insideB);
-    Object.defineProperty(mountA, HOST_KEY, { get: () => insideB, configurable: true });
-    Object.defineProperty(mountB, HOST_KEY, { get: () => insideA, configurable: true });
+    tagPortalHost(mountA, () => insideB);
+    tagPortalHost(mountB, () => insideA);
     const { counter, handler } = counting(1000);
     addEvent(mountA, 'click', handler, true);
     delegateEvents(['click']);
@@ -202,7 +222,7 @@ describe('delegation survives DOM clobbering (forms with named inputs)', () => {
     const logicalParent = document.createElement('div');
     form.appendChild(logicalParent);
     const portalMount = container();
-    Object.defineProperty(portalMount, HOST_KEY, { get: () => logicalParent, configurable: true });
+    tagPortalHost(portalMount, () => logicalParent);
     const inside = document.createElement('b');
     portalMount.appendChild(inside);
     const { counter, handler } = counting();
@@ -285,7 +305,7 @@ describe('delegation: retargeting, portals, removal, disabled ancestors, cleanup
     const logicalParent = document.createElement('section');
     logicalOuter.appendChild(logicalParent);
     const mount = container(); // a sibling, not inside the logical parent
-    Object.defineProperty(mount, HOST_KEY, { get: () => logicalParent, configurable: true });
+    tagPortalHost(mount, () => logicalParent);
     const inside = document.createElement('b');
     mount.appendChild(inside);
     const log: string[] = [];

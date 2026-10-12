@@ -1,7 +1,8 @@
 // Adapted from dom-expressions packages/dom-expressions/src/client.js (MIT, © 2017 Ryan Carniato):
 // event delegation on `document`; handlers live on nodes under the compiler's `_$$<event>` keys.
 import { DEV } from '../env';
-import { HOST_KEY } from './insert';
+import { portalHostOf } from './insert';
+import { getNatives } from './natives';
 
 /** Compiler contract: `el._$$click = handler`, `el._$$clickData = data` (accessed as strings: oxlint no-underscore-dangle). */
 export const EVENT_KEY = '_$$';
@@ -99,25 +100,10 @@ export function setListener(node: Element, name: string, value: unknown, capture
   node.addEventListener(name, value, capture || (typeof value === 'function' ? undefined : (value as AddEventListenerOptions)));
 }
 
-// DOM clobbering: `<form><input name="parentNode"></form>` makes `form.parentNode` the input (forms
-// override even built-in properties), so the walk reads structure through the prototype getters
-// (`Node.prototype.parentNode`, `Node.prototype.contains`, `ShadowRoot.prototype.host`), cached on
-// first use. Expando keys (`_$$click`, `_$host`) cannot be read any other way and are validated.
-interface Natives {
-  parentNode: (this: Node) => Node | null;
-  contains: (this: Node, other: Node | null) => boolean;
-  shadowHost: (this: ShadowRoot) => Element;
-}
+// Structure is read through the prototype getters (natives.ts); portal hosts live in a WeakMap (insert.ts),
+// so neither a named form control nor an expando can redirect the walk. Only the handler expandos
+// (`_$$click`, `_$$clickData`) must be read off the node and are validated.
 const MAX_PORTAL_HOPS = 64;
-let natives: Natives | undefined;
-
-function getNatives(): Natives {
-  return (natives ??= {
-    parentNode: Object.getOwnPropertyDescriptor(Node.prototype, 'parentNode')!.get!,
-    contains: Node.prototype.contains,
-    shadowHost: Object.getOwnPropertyDescriptor(ShadowRoot.prototype, 'host')!.get!,
-  });
-}
 
 function eventHandler(e: Event): void {
   const { parentNode, contains, shadowHost } = getNatives();
@@ -126,14 +112,11 @@ function eventHandler(e: Event): void {
   const oriCurrentTarget = e.currentTarget;
   const retarget = (value: unknown) => Object.defineProperty(e, 'target', { configurable: true, value });
   /**
-   * A portal's logical parent. The real host is an accessor (insert.ts defines it with a getter); form
-   * named properties — including controls linked from elsewhere with `form=` — are data properties,
-   * so only an own accessor counts. The host must also be a Node outside the portal's own subtree.
+   * A portal's logical parent, from the registry insert.ts keeps (nothing on the node itself is read, so
+   * DOM clobbering cannot fake a host). The host must also be a Node outside the portal's own subtree.
    */
   const portalHost = (n: any): Node | undefined => {
-    if (!n[HOST_KEY]) return undefined;
-    const getter = Object.getOwnPropertyDescriptor(n, HOST_KEY)?.get;
-    const h = getter?.call(n);
+    const h = portalHostOf(n);
     return h instanceof Node && !contains.call(n, h) ? h : undefined;
   };
   let hops = 0; // safety net: portals nest a handful of levels, a longer chain is a cycle

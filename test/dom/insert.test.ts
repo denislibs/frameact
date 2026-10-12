@@ -1,5 +1,5 @@
 import { createMemo, createRoot, createSignal, mapArray } from '../../src/index';
-import { HOST_KEY, insert, insertExpression } from '../../src/dom/insert';
+import { insert, insertExpression, portalHostOf } from '../../src/dom/insert';
 import { reconcileArrays, SLOT } from '../../src/dom/reconcile';
 import { render } from '../../src/dom/render';
 import { container, useDomHarness } from '../helpers/dom';
@@ -483,20 +483,50 @@ describe('functions in multi mode with a marker', () => {
 });
 
 describe('options', () => {
-  it('host: top-level inserted nodes get a _$host getter (static and reactive), arrays included', async () => {
+  it('host: top-level inserted nodes are registered with their host (static and reactive), arrays included', async () => {
     const el = container();
     const logicalParent = document.createElement('section');
     const a = document.createElement('a');
     const b = document.createElement('b');
     insert(el, a, undefined, undefined, { host: () => logicalParent });
-    expect((a as any)[HOST_KEY]).toBe(logicalParent);
+    expect(portalHostOf(a)).toBe(logicalParent);
     const [s, set] = createSignal<Node[]>([b]);
     createRoot(() => insert(el, () => s(), null, undefined, { host: () => logicalParent }));
-    expect((b as any)[HOST_KEY]).toBe(logicalParent);
+    expect(portalHostOf(b)).toBe(logicalParent);
     const c = document.createElement('i');
     set([b, c]);
     await frame();
-    expect((c as any)[HOST_KEY]).toBe(logicalParent);
+    expect(portalHostOf(c)).toBe(logicalParent);
+  });
+
+  it('host: reported only while the node is a child of the insert parent; moved out or removed -> null', () => {
+    const el = container();
+    const elsewhere = container();
+    const logicalParent = document.createElement('section');
+    const a = document.createElement('a');
+    insert(el, a, undefined, undefined, { host: () => logicalParent });
+    expect(portalHostOf(a)).toBe(logicalParent);
+    elsewhere.appendChild(a);
+    expect(portalHostOf(a)).toBeNull();
+    el.appendChild(a);
+    expect(portalHostOf(a)).toBe(logicalParent);
+    a.remove();
+    expect(portalHostOf(a)).toBeNull();
+  });
+
+  it('host: a form with a control named parentNode or _$host neither breaks the registration nor fakes the parent', () => {
+    const el = container();
+    const logicalParent = document.createElement('section');
+    const form = document.createElement('form');
+    const input = document.createElement('input');
+    input.name = 'parentNode';
+    const input2 = document.createElement('input');
+    input2.name = '_$host';
+    form.append(input, input2);
+    insert(el, form, undefined, undefined, { host: () => logicalParent });
+    expect(portalHostOf(form)).toBe(logicalParent);
+    container().appendChild(form);
+    expect(portalHostOf(form)).toBeNull();
   });
 
   it('name: accepted for reactive inserts, behaviour unchanged', async () => {

@@ -19,3 +19,4 @@ export { setAttribute, setAttributeNS, setBoolAttribute, setProperty } from './a
 export { addEvent, delegateEvents, clearDelegatedEvents, setListener, EVENT_KEY } from './events';
 export { defineDirective, use, type Directive } from './directives';
 export { forceControlledValue } from './controlled';
+export { Show, Switch, Match, Dynamic, Portal, type MatchProps } from './flow';
