@@ -126,11 +126,27 @@ it('Provider: a function child (and one inside an array) runs under the provider
   });
 });
 
+it('Provider resolves functions inside nested arrays', () => {
+  const C = createContext('d');
+  root(() => {
+    const out = C.Provider({
+      value: 'v',
+      get children() {
+        return [['x', () => useContext(C)]];
+      },
+    }) as () => unknown;
+    expect(out()).toEqual([['x', 'v']]);
+  });
+});
+
 it('Provider warns in DEV when called without an owner', () => {
   const Ctx = createContext(0);
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  Ctx.Provider({ value: 1 });
-  expect(warn).toHaveBeenCalledTimes(1);
-  expect(String(warn.mock.calls[0]![0])).toContain('Provider');
-  warn.mockRestore();
+  try {
+    Ctx.Provider({ value: 1 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toContain('Provider');
+  } finally {
+    warn.mockRestore();
+  }
 });

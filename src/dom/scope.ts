@@ -15,7 +15,7 @@ import { children } from './component';
  * `children` are created right here, inside the component's own scope (render it through
  * `createComponent`/JSX, which gives it one; DEV warns when there is no owner). Returns an accessor
  * of the resolved children (a reactive `children` getter stays reactive; accessor children run under
- * the scope).
+ * the scope). The children are created on the first read of the result (JSX always reads it).
  *
  * `scope` is read once, as a snapshot at creation. A fresh inner scope is not force-released on
  * unmount: a child that began a blocking animation on it must call `end` itself (a finite duration

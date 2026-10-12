@@ -137,7 +137,10 @@ it('disposing the subtree during a blocking animation drops its parked run', asy
 
 it('warns in DEV when rendered without an owner', () => {
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  createComponent(HeavyAnimationScope, {});
-  expect(warn.mock.calls.some((c) => String(c[0]).includes('HeavyAnimationScope'))).toBe(true);
-  warn.mockRestore();
+  try {
+    createComponent(HeavyAnimationScope, {});
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('HeavyAnimationScope'))).toBe(true);
+  } finally {
+    warn.mockRestore();
+  }
 });

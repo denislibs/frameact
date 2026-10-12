@@ -9,17 +9,24 @@ export interface Context<T> {
    * `<Ctx.Provider value>`: provides `value` to everything created in `children`, which are resolved
    * inside the provider's own child scope of the current owner. Returns an accessor of the resolved
    * children (accessor children are called there, so they see `value`; a reactive `children` getter
-   * stays reactive). `value` is read once, as a snapshot (like Solid 1.x): pass an accessor as the
+   * stays reactive). Children are created on the first read of the returned accessor (JSX always
+   * reads it). `value` is read once, as a snapshot (like Solid 1.x): pass an accessor as the
    * value for reactivity. It must be called under an owner (DEV warns otherwise).
    */
   readonly Provider: (props: { value: T; children?: unknown }) => unknown;
 }
 
-/** Call zero-arity accessor children (and ones inside an array) so they run under the provider's scope. */
+/** Call zero-arity accessor children (also inside nested arrays) so they run under the provider's scope. */
 function resolveChildren(value: unknown): unknown {
   while (typeof value === 'function' && !value.length) value = value();
-  if (Array.isArray(value) && value.some((v) => typeof v === 'function' && !v.length)) {
-    return value.map(resolveChildren);
+  if (Array.isArray(value)) {
+    let out: unknown[] | undefined;
+    for (let i = 0; i < value.length; i++) {
+      const item = resolveChildren(value[i]);
+      if (item !== value[i] && !out) out = value.slice(0, i);
+      if (out) out.push(item);
+    }
+    return out ?? value;
   }
   return value;
 }
