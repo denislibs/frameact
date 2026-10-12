@@ -586,3 +586,35 @@ describe('children, skip, classList, ref', () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('spread onX and on:x use separate listener slots', () => {
+  it('coexist and both fire; removing either leaves the other working', async () => {
+    const el = container();
+    const log: string[] = [];
+    const [props, setProps] = createSignal<Record<string, unknown>>({ onScroll: () => log.push('spread') });
+    createRoot(() => spread(el, () => props(), true));
+    setAttribute(el, 'on:scroll', () => log.push('local'));
+    el.dispatchEvent(new Event('scroll'));
+    expect(log).toEqual(['spread', 'local']);
+    log.length = 0;
+    setProps({});
+    await frame();
+    el.dispatchEvent(new Event('scroll'));
+    expect(log).toEqual(['local']);
+    log.length = 0;
+    setProps({ onScroll: () => log.push('spread2') });
+    await frame();
+    setAttribute(el, 'on:scroll', null);
+    el.dispatchEvent(new Event('scroll'));
+    expect(log).toEqual(['spread2']);
+  });
+
+  it('onChange and on:change in one bag both attach', () => {
+    const el = container();
+    const log: string[] = [];
+    createRoot(() => spread(el, { onChange: () => log.push('x'), 'on:change': () => log.push('y') }, true));
+    el.dispatchEvent(new Event('change'));
+    expect(new Set(log)).toEqual(new Set(['x', 'y']));
+    expect(log).toHaveLength(2);
+  });
+});

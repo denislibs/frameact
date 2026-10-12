@@ -80,10 +80,13 @@ export function addEvent(node: Element, name: string, handler: unknown, delegate
 
 const listeners = new WeakMap<Element, Map<string, EventListenerOrEventListenerObject>>();
 
-/** `on:name` / `oncapture:name`: a native listener per element and name, replaced or removed on update. */
-export function setListener(node: Element, name: string, value: unknown, capture: boolean): void {
+/**
+ * `on:name` / `oncapture:name`: a native listener per element and name, replaced or removed on update.
+ * `slot` namespaces the key, so a second owner (a spread's `onX`) never displaces `on:name`.
+ */
+export function setListener(node: Element, name: string, value: unknown, capture: boolean, slot = ''): void {
   let map = listeners.get(node);
-  const key = capture ? `c:${name}` : name;
+  const key = slot + (capture ? `c:${name}` : name);
   const prev = map?.get(key);
   if (prev) {
     node.removeEventListener(name, prev, capture || (typeof prev === 'function' ? undefined : (prev as EventListenerOptions)));

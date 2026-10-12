@@ -265,6 +265,8 @@ function assignCustomProp(node: Element, prop: string, value: unknown): void {
   setProp(node, name, value);
 }
 
+const SPREAD_SLOT = 's:';
+
 function assignProp(
   node: Element,
   prop: string,
@@ -313,9 +315,9 @@ function assignProp(
         addEvent(node, event, value, true);
         delegateEvents([event], node.ownerDocument);
       } else {
-        // setListener owns the bookkeeping (options of a handleEvent object, capture on removal). It
-        // shares its per-element slot with `on:<event>`: use one of the two for an event.
-        setListener(node, event, Array.isArray(value) ? (tupleListener(node, value) ?? value) : value, false);
+        // setListener owns the bookkeeping (options of a handleEvent object, capture on removal); the
+        // spread has its own slot, so an explicit `on:<event>` on the same element is independent.
+        setListener(node, event, Array.isArray(value) ? (tupleListener(node, value) ?? value) : value, false, SPREAD_SLOT);
       }
       return value;
     }
