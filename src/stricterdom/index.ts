@@ -6,3 +6,6 @@ export {
   StrictViolationError, IGNORE_SUBTREE_ATTR, type StrictErrorHandler, type StrictViolationKind,
 } from './stricterdom';
 export { LAYOUT_CAUSES, type LayoutCauses } from './layoutCauses';
+export {
+  enableRunLog, disableRunLog, getRunStats, resetRunStats, SLOW_RUN_MS, type RunStats, type RunLogOptions,
+} from './runlog';

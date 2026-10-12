@@ -10,6 +10,7 @@ import { effectPath } from '../core/debug';
 import { getNatives } from '../dom/natives';
 import { strictHooks } from '../dom/strict';
 import { LAYOUT_CAUSES } from './layoutCauses';
+import { setStrictProfiling } from './runlog';
 
 export type StrictViolationKind = 'measure' | 'mutation';
 
@@ -128,11 +129,13 @@ export function enableStrict(): void {
     if (effectivePhase() !== 'mutate') drainRecords();
   });
   strictHooks.forceMutation = (cb, target) => allowMutation(target, cb);
+  setStrictProfiling(true); // run counters and the slow-run / slow-drain warnings (runlog.ts)
 }
 
 export function disableStrict(): void {
   if (!DEV || !isStrict) return;
   drainRecords();
+  setStrictProfiling(false);
   strictHooks.forceMutation = (cb) => cb();
   setApplyHook(null);
   unsubscribePhase?.();
