@@ -5,8 +5,8 @@ the three things that change: **a component runs once** (hooks become primitives
 halves and a phase**, and **the store is a tree of signals written in place** (model B, spec §3.5).
 The API named here is `frameact`, `frameact/dom`, `frameact/store`, `frameact/scheduler` and the
 client-readiness kit `frameact/kit` (plan 6). `frameact/stricterdom` (`enableStrict`, `forceMeasure`,
-`forceMutation`, `suppressStrict`, `setHandler`) is plan 4, on its own branch: there is no such entry on this one, so the
-import fails until that branch merges. Enable it from the first day once it is there; the phase rules below are what it checks.
+`forceMutation`, `suppressStrict`, `setHandler`) is available: call `enableStrict()` in dev from the first day; the phase
+rules below are what it checks, and every violation names the offending effect.
 
 ## 1. Hooks → primitives
 
@@ -163,7 +163,7 @@ Store-caused frame effects inside an animating scope park until the animation en
 events, `live()` reads and `ungated()` writes do not wait. tickEnd logic is never parked. A
 `<Transition>` creates a scope per subtree (pass `scope` to share one), so the chat list keeps
 updating while the right column slides. View Transitions and the iOS back gesture: write through
-`ungated(() => setState(…))` and commit with `flushSync()` (contract to be fixed in plan 4).
+`ungated(() => setState(…))` and commit with `flushSync()` (under `enableStrict()` the layout reads and DOM writes of that callback are phase-checked like any other: use `forceMeasure` / `forceMutation` for the deliberate ones, `suppressStrict` for third-party code).
 
 ### 5.5 Cache and multitab
 
