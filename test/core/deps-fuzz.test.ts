@@ -294,7 +294,7 @@ function runFuzz(seed: number, withWriters: boolean, sync = false, throwing = fa
       runsInStep[i]++;
       logs[i] = log;
       allowance[i] = true; // a node that threw re-runs on its next check (F_THREW)
-      if (!errNow[i]) changeCount[i]++; // value → error: a change for its readers
+      changeCount[i]++; // value → error, or a new error object: a change for its readers
       errNow[i] = true;
       throw error;
     }

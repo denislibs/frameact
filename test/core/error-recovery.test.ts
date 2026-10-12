@@ -418,3 +418,23 @@ it('review Minor 5: F_UNSURE does not stick to a node that resolved CLEAN or was
   $s.set(2); // marking a CLEAN node descends anyway: the flag goes
   expect(m._flags & F_UNSURE).toBe(0);
 });
+
+it('re-review Minor 1 (N2): a held error replaced by a different error is a change for the readers', () => {
+  const $s = signal(0);
+  const $t = computed(() => {
+    if ($s() > 0) throw new Error(`err${$s()}`);
+    return 0;
+  });
+  const $msg = computed(() => {
+    try {
+      return String($t());
+    } catch (error) {
+      return (error as Error).message;
+    }
+  });
+  expect($msg()).toBe('0');
+  $s.set(1);
+  expect($msg()).toBe('err1');
+  $s.set(3);
+  expect($msg()).toBe('err3');
+});

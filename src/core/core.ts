@@ -868,9 +868,10 @@ export function update(node: Computation) {
       } catch (unhandled) {
         // The error becomes the node's value until a compute succeeds (reads rethrow it).
         const wasErrored = node._flags & F_ERRORED;
+        const changed = !wasErrored || unhandled !== node._value; // value → error, or another error
         node._value = unhandled;
         node._flags |= F_ERRORED;
-        if (!wasErrored && node._subs !== null) notifySubs(node); // value → error: a change
+        if (changed && node._subs !== null) notifySubs(node);
       }
     }
   } finally {
