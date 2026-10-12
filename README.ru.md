@@ -21,14 +21,16 @@ frameact — реактивный UI-фреймворк для приложен�
   перемежается с записью в DOM (нет layout thrashing);
 - **гейтинг тяжёлых анимаций** — пока идёт блокирующая анимация, кадровая работа паркуется и выпускается одним
   кадром после её окончания — глобально или только для одного поддерева;
-- **stricterdom** *(в планах)* — dev-режим, который ловит нарушения фаз на уровне DOM API и называет виновный эффект.
+- **stricterdom** — dev-режим, который ловит нарушения фаз на уровне DOM API и называет виновный эффект
+  (`Message > MessageMeta > span.style:color [mutate]`).
 
 > **Статус: ранняя разработка.** Реактивное ядро ([PR #1](https://github.com/denislibs/frameact/pull/1)) и
 > DOM-рантайм реализованы: `frameact/dom` для JSX-компилятора Solid 2.0
 > (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (включая `order="manual"`),
 > `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, контролируемые инпуты (`use:value` / `use:checked`),
 > `HeavyAnimationScope`, context `Provider` и Vite-плагин `frameact/vite`; стор (`frameact/store`: дерево
-> сигналов с парковкой по причине на время тяжёлых анимаций) тоже готов. Дальше — stricterdom.
+> сигналов с парковкой по причине на время тяжёлых анимаций) тоже готов, как и stricterdom (`frameact/stricterdom`:
+> dev-проверки фаз с атрибуцией до эффекта, профайлер прогонов). Дальше — бенчмарк.
 > В npm пока не опубликован, API может меняться.
 
 ## Зачем
@@ -47,7 +49,7 @@ fine-grained реактивность, где обновление — это о
 | Когда флашится | rAF, один проход | микротаск | rAF, один проход |
 | Фазы measure / mutate | да | нет | да |
 | Гейтинг анимаций | глобальный | нет | глобальный + по поддереву |
-| Проверка нарушений фаз | stricterdom | нет | stricterdom + атрибуция до эффекта *(в планах)* |
+| Проверка нарушений фаз | stricterdom | нет | stricterdom + атрибуция до эффекта |
 
 ## Как это работает
 
@@ -168,6 +170,34 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
 <For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
 ```
 
+## stricterdom (dev-режим)
+
+Dev-страж, который превращает дисциплину фаз в проверяемый инвариант на уровне DOM API (порт из teact): геттеры и
+методы, вызывающие layout (`offsetHeight`, `getBoundingClientRect()`, `scrollTop`, `focus()`, `getComputedStyle()`,
+`selectionStart`, …), сообщают о нарушении вне measure-фазы, а `MutationObserver` на `document.body` — о записях в
+живой DOM вне mutate-фазы. Каждое нарушение называет эффект:
+
+```ts
+import { enableStrict, setHandler } from 'frameact/stricterdom';
+if (import.meta.env.DEV) enableStrict();
+// [frameact/stricterdom] Unexpected measurement `offsetHeight` in Message > MessageMeta > span.style:color [mutate]
+// [frameact/stricterdom] Unexpected mutation `class` of <button id="send"> outside an effect [measure]
+```
+
+Имена компонентов даёт `sourceNames` компилятора (включён в dev), имена биндингов — его метки. Detached-поддеревья не
+считаются нарушением (так рантайм и строит DOM), как и `data-*`-атрибуты, `details[open]`, правки внутри
+`contenteditable` и всё под `data-stricterdom-ignore`. Эскейпы: `forceMeasure(cb)` читает layout из mutate-фазы (якорь
+скролла; вне mutate-фазы — обычный вызов), `forceMutation(cb, nodes)` пишет из measure-фазы (монтирование — так работают
+`render()` и `Portal`), `suppressStrict(cb)` выключает обе проверки для стороннего кода, `setHandler(fn)` заменяет
+`console.error` (бросьте из него, чтобы уронить тест). Записи мутаций разбираются при каждой смене фазы и вокруг каждого
+apply эффекта, поэтому `flushSync()` не даёт ложных срабатываний, а отчёт называет эффект, который сделал запись.
+
+Тот же выключатель включает dev-профайлер: прогон дольше 7 мс предупреждает с путём (`Slow effect run: 12.3 ms in
+Message > span.children [mutate]`), фаза кадра — тоже (`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`),
+`getRunStats()` считает прогоны по путям, а `enableRunLog({ filter })` печатает, почему эффект выполнился:
+`run #3 ChatList > li.class [mutate] ← signal "store.title" via memo "chatTitle" in ChatList`. В production-сборке
+(`process.env.NODE_ENV === 'production'`) всё это — мёртвый код: функции превращаются в `cb => cb()`.
+
 ## Вдохновение и благодарности
 
 - **[teact](https://github.com/Ajaxy/teact)** Александра Зинчука — отсюда дисциплина кадра, fasterdom,
@@ -198,7 +228,7 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
 | 1 · core | сигналы, двухфазные эффекты, кадровые очереди, гейтинг анимаций, `mapArray`, context | ✅ готово — [PR #1](https://github.com/denislibs/frameact/pull/1) |
 | 2 · dom | рантайм для JSX-компилятора, `For`/`Show`/`Switch`, контролируемые инпуты, списки с ручным порядком, Vite-плагин | ✅ готово |
 | 3 · store | стор-дерево сигналов: подписки на листья, запись по пути на месте, `reconcile`, парковка по причине на время анимаций, типизированные экшены | ✅ готово |
-| 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта | ⏳ |
+| 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта, профайлер прогонов, контракт `flushSync` для прода | ✅ готово |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact на сценариях мессенджера (Chromium + WebKit, CPU ×4) | ⏳ |
 
 Дизайн: [`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md) ·
@@ -211,6 +241,7 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
 ```bash
 pnpm install
 pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
+pnpm test:chrome  # stricterdom в headless Chrome (настоящий layout и тайминг observer'а); нужен Google Chrome
 ```
 
 Тулчейн: TypeScript 7 (нативный), Vite 8 / Vitest 5 + jsdom, oxlint.

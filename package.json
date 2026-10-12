@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src test",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "test:chrome": "node test/chrome/run.mjs",
     "bench:reactivity": "node bench/reactivity/run.mjs"
   },
   "devDependencies": {

@@ -20,13 +20,13 @@ frameact 是一个面向"每一帧都很重要"的应用的响应式 UI 框架�
   DOM 写入交错（没有 layout thrashing）；
 - **重动画闸门（heavy-animation gating）** —— 阻塞式动画进行期间，帧内工作会被暂存，并在动画结束后的一帧内统一释放；
   可以作用于全局，也可以只作用于某个子树；
-- **stricterdom** *（计划中）* —— 开发模式下在 DOM API 层面捕获阶段违规，并指出是哪个 effect 造成的。
+- **stricterdom** —— 开发模式下在 DOM API 层面捕获阶段违规，并指出是哪个 effect 造成的（`Message > MessageMeta > span.style:color [mutate]`）。
 
 > **状态：早期开发。** 响应式内核（[PR #1](https://github.com/denislibs/frameact/pull/1)）与 DOM 运行时已实现：
 > 面向 Solid 2.0 JSX 编译器（`@solidjs/babel-plugin@2.0.0-rc.14`）的 `frameact/dom`、`render`、
 > `For`（含 `order="manual"`）、`Show`/`Switch`/`Match`/`Dynamic`/`Portal`、受控输入（`use:value` / `use:checked`）、
 > `HeavyAnimationScope`、context `Provider`，以及 `frameact/vite` 插件；store（`frameact/store`：在重动画期间
-> 按原因停靠的 signal 树）也已完成。接下来是 stricterdom。尚未发布到 npm，API 可能变化。
+> 按原因停靠的 signal 树）也已完成，stricterdom（`frameact/stricterdom`：开发模式阶段检查并定位到 effect，运行分析器）也已完成。接下来是基准测试。尚未发布到 npm，API 可能变化。
 
 ## 为什么
 
@@ -43,7 +43,7 @@ teact 通过 **fasterdom** 为虚拟 DOM 渲染器解决了这个问题：每个
 | 刷新时机 | rAF，单次处理 | 微任务 | rAF，单次处理 |
 | measure / mutate 阶段 | 有 | 无 | 有 |
 | 重动画闸门 | 全局 | 无 | 全局 + 子树 |
-| 阶段违规检查 | stricterdom | 无 | stricterdom + 定位到 effect *（计划中）* |
+| 阶段违规检查 | stricterdom | 无 | stricterdom + 定位到 effect |
 
 ## 工作原理
 
@@ -149,6 +149,31 @@ setState('messages', chatId, reconcile(chunk)); // 来自服务端的不可变�
 <For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
 ```
 
+## stricterdom（开发模式）
+
+一个仅限开发模式的守卫，把阶段纪律变成 DOM API 层面可检查的不变量（移植自 teact）：触发布局的 getter 和方法
+（`offsetHeight`、`getBoundingClientRect()`、`scrollTop`、`focus()`、`getComputedStyle()`、`selectionStart` 等）在 measure
+阶段之外被调用时报告违规；`document.body` 上的 `MutationObserver` 报告 mutate 阶段之外对真实 DOM 的写入。每条违规都会指出
+effect：
+
+```ts
+import { enableStrict, setHandler } from 'frameact/stricterdom';
+if (import.meta.env.DEV) enableStrict();
+// [frameact/stricterdom] Unexpected measurement `offsetHeight` in Message > MessageMeta > span.style:color [mutate]
+// [frameact/stricterdom] Unexpected mutation `class` of <button id="send"> outside an effect [measure]
+```
+
+组件名来自编译器的 `sourceNames`（开发模式下开启），绑定名是编译器的标签。游离子树不会被报告（运行时就是这样构建 DOM 的），
+`data-*` 属性、`details[open]`、`contenteditable` 宿主内部的编辑以及 `data-stricterdom-ignore` 之下的一切也不会。逃生口：
+`forceMeasure(cb)` 在 mutate 阶段读取布局（滚动锚定；在其他阶段只是普通调用），`forceMutation(cb, nodes)` 在 measure 阶段写入（挂载——
+`render()` 和 `Portal` 就用它），`suppressStrict(cb)` 为第三方代码关闭两项检查，`setHandler(fn)` 替换 `console.error`（在其中抛出即可让测试失败）。
+变更记录在每次阶段切换以及每个 effect apply 的前后判定，因此 `flushSync()` 不会产生误报，报告指出做出写入的 effect。
+
+同一个开关还会开启开发分析器：超过 7 ms 的运行会带路径发出警告（`Slow effect run: 12.3 ms in Message > span.children
+[mutate]`），帧阶段同样（`Slow mutate drain: 18.0 ms, 240 effect runs; slowest: …`），`getRunStats()` 按路径统计运行次数，
+`enableRunLog({ filter })` 打印每个 effect 为何运行：`run #3 ChatList > li.class [mutate] ← signal "store.title" via memo
+"chatTitle" in ChatList`。在生产构建（`process.env.NODE_ENV === 'production'`）中这些全是死代码：函数退化为 `cb => cb()`。
+
 ## 灵感与致谢
 
 - **[teact](https://github.com/Ajaxy/teact)**（作者 Alexander Zinchuk）—— 帧调度纪律、fasterdom、stricterdom
@@ -176,7 +201,7 @@ solidjs/solid，以 `SOURCE` 文件代替逐文件头部声明。
 | 1 · core | 信号、两阶段 effect、帧队列、重动画闸门、`mapArray`、context | ✅ 完成 —— [PR #1](https://github.com/denislibs/frameact/pull/1) |
 | 2 · dom | JSX 编译器运行时、`For`/`Show`/`Switch`、受控输入、手动排序列表、Vite 插件 | ✅ 完成 |
 | 3 · store | signal 树 store：叶子级订阅、就地路径写入、`reconcile`、动画期间按原因停靠、带类型的 action | ✅ 完成 |
-| 4 · stricterdom | 开发模式阶段检查，定位到具体 effect | ⏳ |
+| 4 · stricterdom | 开发模式阶段检查，定位到具体 effect，运行分析器，`flushSync` 生产契约 | ✅ 完成 |
 | 5 · benchmark | 在即时通讯场景下对比 teact、Solid 2.0 与 frameact（Chromium + WebKit，CPU ×4） | ⏳ |
 
 设计文档：[`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md)
@@ -189,6 +214,7 @@ solidjs/solid，以 `SOURCE` 文件代替逐文件头部声明。
 ```bash
 pnpm install
 pnpm check     # oxlint + TypeScript 7 (tsc) + vitest
+pnpm test:chrome  # 在 headless Chrome 中运行 stricterdom（真实布局、真实 observer 时序）；需要 Google Chrome
 ```
 
 工具链：TypeScript 7（原生）、Vite 8 / Vitest 5 + jsdom、oxlint。
