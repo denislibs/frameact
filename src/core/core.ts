@@ -787,9 +787,10 @@ export function update(node: Computation) {
       node._value = result;
       node._flags |= F_INIT;
       // A first result is normally not announced (nobody saw a value yet) — unless a reader got
-      // the `initial` value while this first run was still going (see the re-entry guard above)
-      // and the result differs from it. (`!==`, not the user's `equals`: it never sees `initial`.)
-      if (node._flags & F_REENTERED && initial !== result) notifySubs(node);
+      // the `initial` value: while this first run was still going (see the re-entry guard above),
+      // or from an earlier first run that threw (its readers stay linked: `_subs`). Announced if
+      // the result differs from it. (`!==`, not the user's `equals`: it never sees `initial`.)
+      if ((node._flags & F_REENTERED || node._subs !== null) && initial !== result) notifySubs(node);
     }
   } catch (error) {
     currentScope = prevScope;

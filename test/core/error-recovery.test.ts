@@ -245,3 +245,25 @@ describe('stage-3 review, Important 2: a node whose compute threw re-runs on its
   });
 });
 
+it('stage-3 review, Important 3 (P2): the first successful result of a memo whose first run threw reaches its readers', () => {
+  const { schedule, flush } = queue();
+  const $s = signal(1);
+  const $t = computed(() => {
+    if ($s() === 1) throw new Error('boom');
+    return $s();
+  });
+  const $m = computed(() => {
+    try {
+      return $t() * 10;
+    } catch {
+      return -1;
+    }
+  });
+  const seen: number[] = [];
+  root(() => createEffect(() => $m(), (v) => { seen.push(v); }, schedule));
+  flush();
+  expect(seen).toEqual([-1]);
+  $s.set(2); // $t's first successful run: 2 (it never had a value before)
+  flush();
+  expect(seen).toEqual([-1, 20]);
+});
