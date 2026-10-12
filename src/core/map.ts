@@ -199,6 +199,10 @@ function updateKeyedMap<Item, MappedItem>(this: KeyedMapData<Item, MappedItem>):
       // 3) moved rows learn their new index
       for (let j = start; j < newLen; j++) write.call(nodes[j], j);
     } catch (error) {
+      // Unreachable by design: nothing called inside throws since baac2ff/f545539 (keyFn and
+      // mappers are isolated, writes never throw — a throwing Schedule is its effect's error).
+      // Safety net: keeps `_mappings`/`_nodes` consistent and the rows created in this pass from
+      // leaking if a future change lets something throw here.
       disposeChildren(this._scope, created);
       throw error;
     }
@@ -451,6 +455,10 @@ function updateKeyedMapBy<Item, Key, Mapped>(this: KeyedByData<Item, Key, Mapped
         if (indexNodes[j]._value !== j) write.call(indexNodes[j], j);
       }
     } catch (error) {
+      // Unreachable by design: nothing called inside throws since baac2ff/f545539 (keyFn and
+      // mappers are isolated, writes never throw — a throwing Schedule is its effect's error).
+      // Safety net: keeps `_mappings`/`_nodes` consistent and the rows created in this pass from
+      // leaking if a future change lets something throw here.
       disposeChildren(this._scope, created);
       throw error;
     }
