@@ -9,13 +9,23 @@ const { frame } = useDomHarness();
 const attrNames = (el: Element) => Array.from(el.attributes).map((a) => a.name);
 const hidden = () => Object.defineProperty({ shown: 1 }, 'hidden', { value: 'secret', enumerable: false });
 
+// DEV diagnostics are recorded, not silenced: a test that expects one calls `expectDevErrors()`;
+// every other test fails if the runtime logged anything.
 let errors: ReturnType<typeof vi.spyOn>;
+let warnings: ReturnType<typeof vi.spyOn>;
+let devErrorsExpected = false;
+const expectDevErrors = () => {
+  devErrorsExpected = true;
+};
 beforeEach(() => {
+  devErrorsExpected = false;
   errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 afterEach(() => {
+  const unexpected = [...errors.mock.calls, ...warnings.mock.calls];
   vi.restoreAllMocks();
+  if (!devErrorsExpected) expect(unexpected).toEqual([]);
 });
 
 it('applies attributes, properties, class/style diffs, delegated events and children; later sources win', async () => {
@@ -155,6 +165,8 @@ it('assign writes once; readShallow is identity', () => {
 });
 
 describe('security: every attribute write in a spread goes through the policy', () => {
+  beforeEach(expectDevErrors);
+
   it.each(['ONCLICK', 'onclick', 'OnMouseOver', 'attr:ONCLICK', 'attr:onerror'])('a string handler under %s is refused', (name) => {
     const el = container();
     createRoot(() => spread(el, { [name]: 'alert(1)' }, true));
@@ -213,6 +225,40 @@ describe('security: every attribute write in a spread goes through the policy', 
     expect(a.hasAttribute('href')).toBe(false);
   });
 
+  it('is-mode checks the FINAL property name: form-action / formAction never reach an instance property', () => {
+    const button = document.createElement('button');
+    const writes: unknown[] = [];
+    Object.defineProperty(button, 'formAction', { configurable: true, set: (v) => void writes.push(v), get: () => '' });
+    createRoot(() => spread(button, { is: 'x-b', 'form-action': 'javascript:alert(1)', 'FORM-ACTION': 'javascript:alert(2)' }, true));
+    createRoot(() => spread(button, { is: 'x-b', formAction: 'javascript:alert(3)' }, true));
+    expect(writes).toEqual([]);
+    expect(button.hasAttribute('formaction')).toBe(false);
+    // a safe value is still applied, as the attribute (the property reflects it in browsers)
+    createRoot(() => spread(button, { is: 'x-b', 'form-action': 'https://ok.example/' }, true));
+    expect(writes).toEqual([]);
+    expect(button.getAttribute('formaction')).toBe('https://ok.example/');
+  });
+
+  it.each(['outerHTML', 'outer-h-t-m-l', 'inner-h-t-m-l'])('%s is never written as a property (is-mode and custom elements)', (name) => {
+    const host = container();
+    const child = document.createElement('div');
+    host.appendChild(child);
+    createRoot(() => spread(child, { is: 'x-d', [name]: '<img src=x onerror=alert(1)>' }, true));
+    expect(host.innerHTML).toBe('<div></div>');
+    const ce = document.createElement('my-el');
+    host.appendChild(ce);
+    createRoot(() => spread(ce, { [name]: '<img src=x onerror=alert(1)>' }, true));
+    expect(host.querySelector('img')).toBeNull();
+    expect(host.querySelector('my-el')).toBe(ce);
+    expect(ce.innerHTML).toBe('');
+  });
+
+  it('innerHTML by its exact explicit name stays an explicit opt-in', () => {
+    const div = document.createElement('div');
+    createRoot(() => spread(div, { innerHTML: '<b>trusted</b>' }, true));
+    expect(div.innerHTML).toBe('<b>trusted</b>');
+  });
+
   it('a removed policed prop is removed (null), not stringified', async () => {
     const a = document.createElement('a');
     const [props, setProps] = createSignal<Record<string, unknown>>({ href: 'https://a.example/' });
@@ -226,6 +272,7 @@ describe('security: every attribute write in a spread goes through the policy', 
 
 describe('props are never [[Set]]-copied', () => {
   it('a source with an own __proto__ key changes no prototype', async () => {
+    expectDevErrors(); // prop:__proto__ is refused with a diagnostic
     const el = container();
     const source = JSON.parse('{"__proto__": {"polluted": "yes"}, "title": "t", "prop:__proto__": {"polluted": "yes"}}');
     expect(Object.hasOwn(source, '__proto__')).toBe(true);
@@ -339,6 +386,7 @@ describe('style and directives through a spread', () => {
     const input = document.createElement('input');
     createRoot(() => spread(input, { 'use:value': 'hello' }, true));
     expect(input.value).toBe('hello');
+    expectDevErrors();
     createRoot(() => spread(el, { 'use:nope': 1 }, true));
     expect(errors).toHaveBeenCalledWith(expect.stringContaining('unknown directive use:nope'));
   });

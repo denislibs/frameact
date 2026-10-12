@@ -245,6 +245,27 @@ function setSpreadListener(node: Element, event: string, handler: unknown): void
   node.addEventListener(event, listener);
 }
 
+/**
+ * `is` (or a dashed tag) makes unknown props properties: `some-prop` → `someProp`, camelCase as written.
+ * The policy is applied to the FINAL property name, after that conversion. Only an autonomous custom
+ * element (`my-el`) owns its setters; on a built-in element (`<a is=…>`, `<button is=…>`) a policed
+ * name (URL, handler, `srcdoc`, including `form-action` → `formAction`) is written as an attribute
+ * through `setAttribute`, whose policy then applies. `outerHTML` is never written, and `innerHTML`
+ * only by its exact name (the known-property path), never through the dash conversion.
+ */
+function assignCustomProp(node: Element, prop: string, value: unknown): void {
+  const name = prop.includes('-') ? toPropertyName(prop) : prop;
+  if (name === 'outerHTML' || name === 'innerHTML') {
+    if (DEV) console.error(`[frameact] ${prop}= is an HTML sink and is not written as a custom-element property.`);
+    return;
+  }
+  if (!node.nodeName.includes('-')) {
+    if (isPolicedName(name)) return setAttribute(node, name, value);
+    if (isPolicedName(prop)) return setAttribute(node, prop, value);
+  }
+  setProp(node, name, value);
+}
+
 function assignProp(
   node: Element,
   prop: string,
@@ -294,25 +315,13 @@ function assignProp(
       return value;
     }
   }
-  // `is` makes every prop a property, but only an autonomous custom element (`my-el`) owns its setters:
-  // on a built-in element (`<a is=…>`, `<iframe is=…>`) URL/handler/srcdoc names stay attributes, so
-  // setAttribute's policy applies.
-  if (isCE && !node.nodeName.includes('-') && isPolicedName(prop)) {
-    setAttribute(node, prop, value);
-    return value;
-  }
   const propAlias = isSVG ? undefined : getPropAlias(prop, node.tagName);
-  if (ChildProperties.has(prop) || (!isSVG && (propAlias !== undefined || Properties.has(prop))) || isCE) {
-    const target = propAlias ?? prop;
-    if (isCE && propAlias === undefined && !Properties.has(prop) && !ChildProperties.has(prop)) {
-      // custom elements take properties: `some-prop` → `someProp`, camelCase names as written
-      setProp(node, prop.includes('-') ? toPropertyName(prop) : prop, value);
-    } else if (
-      (target === 'value' || target === 'defaultValue') &&
-      (node.nodeName === 'INPUT' || node.nodeName === 'TEXTAREA')
-    ) {
-      setProp(node, target, value ?? '');
-    } else setProp(node, target, value);
+  const known = ChildProperties.has(prop) || Properties.has(prop) || propAlias !== undefined;
+  if (ChildProperties.has(prop) || (!isSVG && known) || isCE) {
+    if (isCE && !known) assignCustomProp(node, prop, value);
+    else if ((propAlias ?? prop) === 'value' || (propAlias ?? prop) === 'defaultValue') {
+      setProp(node, propAlias ?? prop, node.nodeName === 'INPUT' || node.nodeName === 'TEXTAREA' ? (value ?? '') : value);
+    } else setProp(node, propAlias ?? prop, value);
     return value;
   }
   setAttribute(node, Aliases[prop] || prop, value);
