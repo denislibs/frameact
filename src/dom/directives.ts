@@ -83,6 +83,9 @@ interface ValueBinding extends Binding<TextControl> {
   hasSelection: boolean;
   selStart: number;
   selEnd: number;
+  /** An expiry task is queued: the snapshot lives until the end of the frame it was taken in. */
+  expiring: boolean;
+  readonly expire: () => void;
   composing: boolean;
 }
 
@@ -179,6 +182,25 @@ function snapshot(b: ValueBinding): void {
   b.selEnd = input.selectionEnd ?? start;
 }
 
+/**
+ * A snapshot is valid for the frame it was taken in (the deferred check and the deliveries of that
+ * frame use it), or until the selection changes (see onSelectionChange). Afterwards a click or arrow
+ * key may have moved the caret without an input event, and a programmatic write must not jump back
+ * to the last keystroke. The expiry task is queued after the event's check, so it runs after it;
+ * while a deferred check is still waiting (re-armed, see runDeferred), the snapshot waits with it.
+ */
+function armExpiry(b: ValueBinding): void {
+  if (b.expiring) return;
+  b.expiring = true;
+  requestMutation(b.expire);
+}
+
+function expire(b: ValueBinding): void {
+  b.expiring = false;
+  if (b.pending) armExpiry(b);
+  else b.hasSelection = false;
+}
+
 function isHighSurrogate(c: number): boolean {
   return c >= 0xd8_00 && c <= 0xdb_ff;
 }
@@ -239,6 +261,8 @@ const valueKind: Kind<ValueBinding> = {
     b.hasSelection = false;
     b.selStart = 0;
     b.selEnd = 0;
+    b.expiring = false;
+    (b as { expire: () => void }).expire = () => expire(b);
     b.composing = false;
     return b;
   },
@@ -264,6 +288,21 @@ function onInput(e: Event): void {
   if (!b || (e as InputEvent).isComposing || b.composing) return;
   snapshot(b);
   verify(b);
+  armExpiry(b);
+}
+
+/** The deepest focused element (through open shadow roots). */
+function deepActiveElement(doc: Document): Element | null {
+  let active = doc.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
+}
+
+/** Measure-time event: a caret moved by clicks or arrows refreshes a still-valid snapshot (never creates one). */
+function onSelectionChange(e: Event): void {
+  const target = e.target;
+  const b = lookup(valueKind, target instanceof Element ? target : deepActiveElement(target as Document));
+  if (b && b.hasSelection) snapshot(b);
 }
 
 function onCompositionStart(e: Event): void {
@@ -277,6 +316,7 @@ function onCompositionEnd(e: Event): void {
   b.composing = false;
   snapshot(b);
   verify(b);
+  armExpiry(b);
 }
 
 function onFocusOut(e: Event): void {
@@ -303,6 +343,7 @@ function installListeners(doc: Document): void {
   doc.addEventListener('compositionstart', onCompositionStart);
   doc.addEventListener('compositionend', onCompositionEnd);
   doc.addEventListener('focusout', onFocusOut);
+  doc.addEventListener('selectionchange', onSelectionChange);
 }
 
 onClearDelegated((doc) => {
@@ -313,6 +354,7 @@ onClearDelegated((doc) => {
   doc.removeEventListener('compositionstart', onCompositionStart);
   doc.removeEventListener('compositionend', onCompositionEnd);
   doc.removeEventListener('focusout', onFocusOut);
+  doc.removeEventListener('selectionchange', onSelectionChange);
 });
 
 // ---- the directive entry (three forms, shared by value and checked) ----

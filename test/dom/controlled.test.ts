@@ -390,6 +390,11 @@ it('M1: a skipped deferred check is re-armed: the effect turning clean without a
   expect(pending()).toBe(0); // the re-armed check stopped once it ran
 });
 
+/** Handler factory for `controlled`: accepts every input. */
+function acceptAll(setText: (v: string) => void) {
+  return (e: Event) => setText((e.currentTarget as HTMLInputElement).value);
+}
+
 /** Handler factory for `controlled`: accepts input only up to `max` characters (rejects longer). */
 function limit(max: number) {
   return (setText: (v: string) => void) => (e: Event) => {
@@ -447,5 +452,31 @@ describe('I1: the caret is anchored on the common suffix of the DOM value and th
     type(input, 'a:)b', 3);
     expect(input.value).toBe('a🙂b');
     expect(input.selectionStart).toBe(3);
+  });
+});
+
+describe('I2: a caret snapshot is valid only for the frame it was taken in, or until the selection changes', () => {
+  it('a programmatic write in a later frame, after the user moved the caret, does not jump back to the last keystroke (2 -> 5)', async () => {
+    const input = textInput();
+    const { setText } = controlled(input, acceptAll, 'abc');
+    type(input, 'abcd', 2); // the keystroke left the caret at 2
+    await frame();
+    input.setSelectionRange(4, 4); // a click at the end: no input event
+    setText('abcd!');
+    await frame();
+    expect(input.value).toBe('abcd!');
+    expect(input.selectionStart).toBe(5);
+  });
+
+  it('a selection change in the same frame refreshes the snapshot', async () => {
+    const input = textInput();
+    const { setText } = controlled(input, acceptAll, 'abc');
+    type(input, 'abcd', 2);
+    input.setSelectionRange(1, 1); // arrow keys: no input event, a selectionchange
+    input.dispatchEvent(new Event('selectionchange', { bubbles: true }));
+    setText('Xabcd'); // delivered in this frame: the caret keeps its place after "a"
+    await frame();
+    expect(input.value).toBe('Xabcd');
+    expect(input.selectionStart).toBe(2);
   });
 });
