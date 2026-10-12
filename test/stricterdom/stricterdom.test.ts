@@ -412,3 +412,26 @@ it('a handler that writes to <body> (an overlay) or reads layout does not re-ent
   flushSync();
   expect(violations.map(summary)).toEqual(['measure:offsetHeight:mutate:-']);
 });
+
+it('a foreign patch over a stricterdom getter/method (vi.spyOn) is not clobbered by disableStrict, and a re-enable neither double-patches nor reports while disabled', () => {
+  const el = attached();
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get');
+  vi.spyOn(Element.prototype, 'getBoundingClientRect');
+  disableStrict();
+  vi.restoreAllMocks(); // puts back what the spies saved: stricterdom's wrappers, now inert
+  requestMutation(() => { void el.offsetHeight; void el.getBoundingClientRect(); });
+  flushSync();
+  expect(violations).toEqual([]); // strict is off: the leftover wrappers do not report
+  enableStrict();
+  requestMutation(() => { void el.offsetHeight; void el.getBoundingClientRect(); });
+  flushSync();
+  expect(violations.map(summary)).toEqual(['measure:offsetHeight:mutate:-', 'measure:getBoundingClientRect:mutate:-']); // once each
+  disableStrict();
+  const getter = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')!.get!;
+  const spy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(42);
+  enableStrict();
+  disableStrict(); // the spy (foreign) stays installed while we were enabled over it
+  expect(el.offsetHeight).toBe(42);
+  spy.mockRestore();
+  expect(Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')!.get).toBe(getter);
+});

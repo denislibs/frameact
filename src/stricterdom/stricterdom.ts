@@ -204,6 +204,13 @@ export function setHandler(handler?: StrictErrorHandler): void {
 
 // ---- layout detectors ---------------------------------------------------------
 
+/**
+ * What a wrapper of ours forwards to. A wrapper can outlive `disableStrict` (a foreign patch such
+ * as `vi.spyOn` was put over it, and its own restore reinstalls the wrapper later): it is inert
+ * while strict is off, and the next `enableStrict` unwraps it instead of wrapping it again.
+ */
+const wrapped = new WeakMap<object, unknown>();
+
 function setupLayoutDetectors() {
   for (const name of Object.keys(LAYOUT_CAUSES)) {
     const entity = (globalThis as Record<string, unknown>)[name];
@@ -211,26 +218,35 @@ function setupLayoutDetectors() {
     const target = (typeof entity === 'object' ? entity : (entity as { prototype: object }).prototype) as Record<string, unknown>;
     const causes = LAYOUT_CAUSES[name];
     for (const prop of causes.props ?? []) {
-      const nativeGetter = Object.getOwnPropertyDescriptor(target, prop)?.get;
-      if (!nativeGetter) continue; // not implemented here (jsdom lacks some)
+      const found = Object.getOwnPropertyDescriptor(target, prop)?.get;
+      if (!found) continue; // not implemented here (jsdom lacks some)
+      const nativeGetter = (wrapped.get(found) as typeof found | undefined) ?? found;
       // Only `get` is replaced: an existing setter (scrollTop, innerText) stays.
-      Object.defineProperty(target, prop, {
-        get() {
+      const wrapper = {
+        get(this: unknown) {
           onMeasure(prop);
           return nativeGetter.call(this);
         },
+      }.get;
+      wrapped.set(wrapper, nativeGetter);
+      Object.defineProperty(target, prop, { get: wrapper });
+      restores.push(() => {
+        // Only if still ours: a foreign patch installed over it is left alone (it forwards to the inert wrapper).
+        if (Object.getOwnPropertyDescriptor(target, prop)?.get === wrapper) Object.defineProperty(target, prop, { get: nativeGetter });
       });
-      restores.push(() => Object.defineProperty(target, prop, { get: nativeGetter }));
     }
     for (const method of causes.methods ?? []) {
-      const nativeMethod = target[method];
-      if (typeof nativeMethod !== 'function') continue;
-      target[method] = function (this: unknown, ...args: unknown[]) {
+      const found = target[method];
+      if (typeof found !== 'function') continue;
+      const nativeMethod = (wrapped.get(found) as typeof found | undefined) ?? found;
+      const wrapper = function (this: unknown, ...args: unknown[]) {
         onMeasure(method);
         return (nativeMethod as (...a: unknown[]) => unknown).apply(this, args);
       };
+      wrapped.set(wrapper, nativeMethod);
+      target[method] = wrapper;
       restores.push(() => {
-        target[method] = nativeMethod;
+        if (target[method] === wrapper) target[method] = nativeMethod;
       });
     }
   }
