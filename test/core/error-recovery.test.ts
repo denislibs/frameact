@@ -7,7 +7,7 @@
 // recomputed memo's CHECK subscribers relies on it). Pre-existing since the vendored maverick
 // (995e983): an effect whose source threw two levels down never ran again when it recovered.
 import { computed, signal } from '../../src/core/signals';
-import { getScope, onError, root, STATE_CLEAN } from '../../src/core/core';
+import { F_UNSURE, getScope, onError, root, STATE_CLEAN } from '../../src/core/core';
 import type { Computation } from '../../src/core/types';
 import { createEffect, type Schedule } from '../../src/core/effects';
 
@@ -401,4 +401,20 @@ describe('a memo whose compute threw (unhandled) holds the error: every read ret
     expect($t()).toBe(0);
     expect(handled).toEqual(['boom']);
   });
+});
+
+it('review Minor 5: F_UNSURE does not stick to a node that resolved CLEAN or was descended into', () => {
+  // White-box: the flag only arises from an unexpected throw (a safety net); set it by hand.
+  const $s = signal(0);
+  const $a = computed(() => $s() * 0); // never changes
+  const $m = computed(() => $a() + 1);
+  expect($m()).toBe(1);
+  $s.set(1); // $a DIRTY, $m CHECK
+  const m = $m.node!;
+  m._flags |= F_UNSURE;
+  expect($m()).toBe(1); // $a recomputes to the same value: $m resolves CLEAN without a run
+  expect(m._flags & F_UNSURE).toBe(0);
+  m._flags |= F_UNSURE;
+  $s.set(2); // marking a CLEAN node descends anyway: the flag goes
+  expect(m._flags & F_UNSURE).toBe(0);
 });

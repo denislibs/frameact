@@ -703,7 +703,10 @@ export function updateCheck(node: Computation) {
         if (cur._state === STATE_DIRTY) update(cur);
         else if (cur._state === STATE_CHECK) {
           if (cur._flags & F_THREW) update(cur); // its last run threw: no dep change to rely on
-          else cur._state = STATE_CLEAN;
+          else {
+            cur._state = STATE_CLEAN;
+            cur._flags &= ~F_UNSURE; // (CLEAN: marking it again descends anyway)
+          }
         }
         if (checkTop === base) return;
         scan = checkStack[--checkTop];
@@ -1034,6 +1037,7 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
           // right here, and that run must see the node dirty. Scheduled once per dirty period:
           // only on the CLEAN → dirty edge. (Effects have no subscribers.)
           node._state = state;
+          if (flags & F_UNSURE) node._flags = flags & ~F_UNSURE; // (descending now)
           if (node._effect && prev === STATE_CLEAN) effectScheduler(node);
           subs = node._subs;
         } else if (flags & F_UNSURE) {
