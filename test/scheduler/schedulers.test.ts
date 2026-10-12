@@ -151,6 +151,25 @@ describe('debounce', () => {
   });
 });
 
+describe('debounce: a single call (N6)', () => {
+  it('with the default (true, true) one call runs fn exactly once — the leading edge, no trailing repeat (lodash semantics; teact would run it twice)', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fn = vi.fn();
+    const d = debounce(fn, 100);
+    d('a');
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(fn).toHaveBeenCalledTimes(1);
+    d('b', 'c'); // the next wait opens a fresh leading call
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(fn).toHaveBeenLastCalledWith('b', 'c');
+    d('d'); // a second call in the wait owes the trailing one
+    vi.advanceTimersByTime(100);
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(fn).toHaveBeenLastCalledWith('d');
+  });
+});
+
 describe('throttleWithTickEnd', () => {
   it('runs once per tick with the last arguments', async () => {
     const fn = vi.fn();

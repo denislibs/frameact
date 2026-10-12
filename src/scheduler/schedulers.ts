@@ -50,6 +50,10 @@ export function throttle<F extends AnyToVoidFunction>(fn: F, ms: number, shouldR
  * - `shouldRunFirst` (default true): the call that OPENS a wait runs `fn` at once (leading edge).
  * - `shouldRunLast` (default true): when the wait ends, `fn` runs once more with the last arguments
  *   (trailing edge) — unless the only call of the wait was the leading one that already ran.
+ * A SINGLE call with the defaults runs `fn` once (the leading edge; the trailing one is owed only when
+ * a second call lands inside the wait) — lodash's leading + trailing semantics. This differs from teact,
+ * whose default runs a single call twice (leading, then trailing). When porting, a call site that
+ * relied on the run after the quiet period alone should pass `shouldRunFirst = false`.
  * `debounce(fn, 1000, true, false)` is "fire now, then ignore repeats for a second" (InfiniteScroll's
  * load-more); `debounce(fn, 300, false)` is the classic "run once the input has been quiet for 300 ms".
  */
