@@ -1,6 +1,7 @@
-import { createRoot, createSignal, onError } from '../../src/index';
+import { createRoot, createSignal, onCleanup, onError } from '../../src/index';
 import { insert, portalHostOf } from '../../src/dom/insert';
 import { createComponent } from '../../src/dom/component';
+import { mergeProps } from '../../src/dom/props';
 import { Dynamic, Match, Portal, Show, Switch } from '../../src/dom/flow';
 import { addEvent, delegateEvents } from '../../src/dom/events';
 import { strictHooks } from '../../src/dom/strict';
@@ -15,6 +16,12 @@ const el = (tag: string, text = '') => {
 };
 
 const Comp = (props: { title: string }) => el('i', props.title);
+
+const Keys = (props: Record<string, unknown>) => {
+  const s = el('s');
+  insert(s, () => `${Object.keys(props).join(',')}|${'component' in props}|${String(props.extra)}`);
+  return s;
+};
 
 function mount(target: HTMLElement, make: () => unknown) {
   return createRoot((dispose) => {
@@ -104,6 +111,30 @@ describe('Switch/Match', () => {
   });
 });
 
+describe('keyed Match', () => {
+  it('passes the value itself and recreates the branch when the identity changes', async () => {
+    const root = container();
+    const [v, setV] = createSignal<{ n: number } | null>({ n: 1 });
+    const made = vi.fn((item: { n: number }) => el('b', String(item.n)));
+    mount(root, () =>
+      createComponent(Switch, {
+        get fallback() { return el('i', 'none'); },
+        get children() {
+          return createComponent(Match, { get when() { return v(); }, keyed: true, children: made });
+        },
+      }),
+    );
+    expect(root.innerHTML).toBe('<b>1</b>');
+    setV({ n: 2 });
+    await frame();
+    expect(root.innerHTML).toBe('<b>2</b>');
+    expect(made).toHaveBeenCalledTimes(2);
+    setV(null);
+    await frame();
+    expect(root.innerHTML).toBe('<i>none</i>');
+  });
+});
+
 describe('Dynamic', () => {
   it('renders a tag name with spread props or a component, and switches', async () => {
     const root = container();
@@ -120,6 +151,60 @@ describe('Dynamic', () => {
     setComp(null);
     await frame();
     expect(root.innerHTML).toBe('');
+  });
+
+  it('keeps the same element on a prop change; a tag change disposes the old subtree and its binding', async () => {
+    const root = container();
+    const [comp, setComp] = createSignal<string | ((p: { title: string }) => unknown)>('b');
+    const [title, setTitle] = createSignal('t');
+    const disposed = vi.fn();
+    const Cleaning = (props: { title: string }) => {
+      onCleanup(disposed);
+      return el('i', props.title);
+    };
+    mount(root, () => createComponent(Dynamic, { get component() { return comp(); }, get title() { return title(); } }));
+    const first = root.firstElementChild!;
+    setTitle('t2');
+    await frame();
+    expect(root.firstElementChild).toBe(first);
+    expect(first.getAttribute('title')).toBe('t2');
+    setComp('s');
+    await frame();
+    expect(root.innerHTML).toBe('<s title="t2"></s>');
+    setTitle('t3');
+    await frame();
+    expect(first.getAttribute('title')).toBe('t2'); // the old element's spread effect is dead
+    setComp(() => Cleaning);
+    await frame();
+    expect(root.innerHTML).toBe('<i>t3</i>');
+    expect(disposed).not.toHaveBeenCalled();
+    setComp('u');
+    await frame();
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(root.innerHTML).toBe('<u title="t3"></u>');
+  });
+
+  it('props whose key set follows a function source (mergeProps): keys that appear later are applied, `component` never is', async () => {
+    const root = container();
+    const [attrs, setAttrs] = createSignal<Record<string, string>>({});
+    mount(root, () => createComponent(Dynamic, mergeProps(() => attrs(), { component: 'b' })));
+    expect(root.innerHTML).toBe('<b></b>');
+    setAttrs({ title: 'a', id: 'x' });
+    await frame();
+    expect(root.innerHTML).toBe('<b title="a" id="x"></b>');
+    setAttrs({ id: 'y' });
+    await frame();
+    expect(root.innerHTML).toBe('<b id="y"></b>');
+  });
+
+  it('a component sees the live key set without `component`', async () => {
+    const root = container();
+    const [attrs, setAttrs] = createSignal<Record<string, string>>({});
+    mount(root, () => createComponent(Dynamic, mergeProps(() => attrs(), { component: Keys, a: '1' })));
+    expect(root.innerHTML).toBe('<s>a|false|undefined</s>');
+    setAttrs({ extra: 'e' });
+    await frame();
+    expect(root.innerHTML).toBe('<s>extra,a|false|e</s>');
   });
 
   it('creates SVG tags in the SVG namespace', () => {
@@ -191,6 +276,71 @@ describe('Portal', () => {
     await frame();
     expect(second.innerHTML).toBe('');
     expect(second.childNodes.length).toBe(0);
+  });
+
+  it('a mount getter that re-runs with the same element, and a children recompute, keep the nodes and focus', async () => {
+    const logical = container();
+    const mountEl = container();
+    const [tick, setTick] = createSignal(0);
+    const span = el('span');
+    const input = document.createElement('input');
+    span.appendChild(input);
+    mount(logical, () =>
+      createComponent(Portal, {
+        get mount() { tick(); return mountEl; },
+        get children() { tick(); return span; },
+      }),
+    );
+    input.focus();
+    expect(document.activeElement).toBe(input);
+    setTick(1);
+    await frame();
+    expect(mountEl.firstElementChild).toBe(span);
+    expect(span.firstChild).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(mountEl.childNodes.length).toBe(3); // start marker, span, end marker
+  });
+
+  it('children changing in the same mount are reconciled; the markers stay exactly two', async () => {
+    const logical = container();
+    const mountEl = container();
+    const [which, setWhich] = createSignal(0);
+    const nodes = [el('b', 'a'), el('i', 'b')];
+    const dispose = mount(logical, () =>
+      createComponent(Portal, { mount: mountEl, get children() { return which() === 2 ? [nodes[0], nodes[1]] : nodes[which()]; } }),
+    );
+    expect(mountEl.innerHTML).toBe('<b>a</b>');
+    setWhich(1);
+    await frame();
+    expect(mountEl.innerHTML).toBe('<i>b</i>');
+    expect(mountEl.childNodes.length).toBe(3);
+    setWhich(2);
+    await frame();
+    expect(mountEl.innerHTML).toBe('<b>a</b><i>b</i>');
+    expect(mountEl.childNodes.length).toBe(4);
+    dispose();
+    await frame();
+    expect(mountEl.childNodes.length).toBe(0);
+  });
+
+  it('a node handed from one portal to another is re-hosted by the portal that owns it now', async () => {
+    const logical1 = container();
+    const logical2 = container();
+    const mount1 = container();
+    const mount2 = container();
+    const [which, setWhich] = createSignal(1);
+    const shared = el('span');
+    mount(logical1, () => createComponent(Portal, { mount: mount1, get children() { return which() === 1 ? shared : null; } }));
+    mount(logical2, () => createComponent(Portal, { mount: mount2, get children() { return which() === 2 ? shared : null; } }));
+    expect(portalHostOf(shared)).toBe(logical1);
+    setWhich(2);
+    await frame();
+    expect(shared.parentNode).toBe(mount2);
+    expect(portalHostOf(shared)).toBe(logical2);
+    setWhich(1);
+    await frame();
+    expect(shared.parentNode).toBe(mount1);
+    expect(portalHostOf(shared)).toBe(logical1);
   });
 
   it('the host is kept in a registry, not on the node; a delegated click reaches the logical parent handlers, not the mount ancestors', () => {

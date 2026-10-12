@@ -1,5 +1,6 @@
-// Show/Switch/Match follow solid-js's flow components (MIT, © 2016-2025 Ryan Carniato) on frameact's
-// core; Portal follows solidjs/solid packages/web (2.0) with the stricterdom seam.
+// Adapted from solidjs/solid (MIT, © 2016-2025 Ryan Carniato): Show/Switch/Match/Dynamic from
+// packages/solid/src/render/flow.ts and component.ts, Portal from packages/web/src/client.ts (2.0 branch).
+// frameact: the same flow on its own core, with Portal's DOM attach going through the stricterdom seam.
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import type { Scope } from '../core/types';
@@ -91,7 +92,7 @@ export function Switch(props: { fallback?: unknown; children: unknown }): unknow
         mp.keyed
           ? conditionValue()
           : () => {
-              if (untrack(switchFunc)()?.[0] !== index) throw staleError('Match');
+              if (untrack(() => switchFunc()())?.[0] !== index) throw staleError('Match');
               return conditionValue();
             },
       ),
@@ -99,25 +100,33 @@ export function Switch(props: { fallback?: unknown; children: unknown }): unknow
   });
 }
 
-/** Everything but `omit`, as forwarding getters (key set fixed at creation — compiled props objects are). */
-function omitProp(props: Record<string, unknown>, omit: string): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(props)) {
-    if (key !== omit) Object.defineProperty(out, key, { enumerable: true, configurable: true, get: () => props[key] });
-  }
-  return out;
+const isComponentKey = (key: string) => key === 'component';
+
+/**
+ * `props` without the `component` key, read live: the key set follows `props` on every access (a
+ * `mergeProps` with a function source is a Proxy whose keys come and go), values stay lazy getters.
+ */
+function omitComponent(props: Record<string, unknown>): Record<string, unknown> {
+  return new Proxy({} as Record<string, unknown>, {
+    get: (_target, key) => (key === 'component' ? undefined : props[key as string]),
+    has: (_target, key) => key !== 'component' && key in props,
+    ownKeys: () => Reflect.ownKeys(props).filter((key) => key !== 'component'),
+    getOwnPropertyDescriptor: (_target, key) =>
+      key !== 'component' && Object.prototype.hasOwnProperty.call(props, key) && Object.prototype.propertyIsEnumerable.call(props, key)
+        ? { enumerable: true, configurable: true, get: () => props[key as string] }
+        : undefined,
+  });
 }
 
 /** `<Dynamic component={tagOrComponent} …props>`. */
 export function Dynamic(props: { component?: ((props: any) => unknown) | string | Falsy; [prop: string]: unknown }): unknown {
-  const others = omitProp(props, 'component');
   return createMemo(() => {
     const component = props.component;
     if (!component) return undefined;
-    if (typeof component === 'function') return untrack(() => createComponent(component, others));
+    if (typeof component === 'function') return untrack(() => createComponent(component, omitComponent(props)));
     if (typeof component === 'string') {
       const node = SVGElements.has(component) ? document.createElementNS(SVG_NS, component) : document.createElement(component);
-      spread(node, others, false);
+      spread(node, props, false, isComponentKey);
       return node;
     }
     if (DEV) console.error('[frameact] <Dynamic component={…}>: expected a component function or a tag name', component);
@@ -135,17 +144,18 @@ export function Portal(props: { mount?: Element; children: unknown }): unknown {
   const treeMarker = document.createTextNode('');
   const startMarker = document.createTextNode('');
   const endMarker = document.createTextNode('');
-  const mount = () => props.mount || document.body;
+  // Compared by identity: a getter that re-runs and returns the same element must not rebuild the portal.
+  const mount = createMemo<Element>(() => props.mount || document.body);
   const content = createMemo(() => [startMarker, props.children]);
-  createRenderEffect<[Element, unknown, Scope | null]>(
-    () => [mount(), content(), getOwner()],
-    ([, c, owner]) => {
-      const m = untrack(mount);
+  createRenderEffect<[Element, Scope | null]>(
+    () => [mount(), getOwner()],
+    ([m, owner]) => {
       const dispose = strictHooks.forceMutation(() => {
         m.appendChild(endMarker);
         return runWithOwner(owner, () =>
           createRoot((d) => {
-            insert(m, c, endMarker, undefined, { host: () => treeMarker.parentNode });
+            // `content` goes in as an accessor: a children change is a reconcile inside the mount, not a rebuild.
+            insert(m, content, endMarker, undefined, { host: () => treeMarker.parentNode });
             return d;
           }),
         )!;
