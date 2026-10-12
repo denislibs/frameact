@@ -11,6 +11,7 @@ import { SVG_NS, SVGElements } from './constants';
 import { insert } from './insert';
 import { spread } from './props';
 import { strictHooks } from './strict';
+import { template } from './template';
 
 type Falsy = undefined | null | false;
 type JSXElement = JSX.Element;
@@ -144,14 +145,37 @@ function omitComponent(props: Record<string, unknown>): Record<string, unknown> 
   });
 }
 
-/** `<Dynamic component={tagOrComponent} …props>`. */
+const TAG_NAME = /^[a-zA-Z][a-zA-Z0-9-]*$/;
+
+// A `<script>` made by `createElement` is live; one cloned from a parsed template carries the
+// "already started" flag and stays inert (what the compiler's own `<script>` templates rely on).
+const inertScript = template('<script></script>');
+
+/**
+ * `<Dynamic component={tagOrComponent} …props>`.
+ *
+ * TRUST: a string `component` is a tag name and a trust boundary. It must come from the author, never
+ * from content: `style`, `base`, `meta`, `link`, `iframe`, `object`, `embed` are all reachable by
+ * name and the attribute policy cannot help (the tag name is a key, not a value). The name is
+ * validated (`/^[a-zA-Z][a-zA-Z0-9-]*$/`; anything else renders nothing, with a DEV error), and
+ * `script` is created inert (cloned from a parsed template), so its text never runs.
+ */
 export function Dynamic(props: { component?: ((props: any) => unknown) | string | Falsy; [prop: string]: unknown }): unknown {
   return createMemo(() => {
     const component = props.component;
     if (!component) return undefined;
     if (typeof component === 'function') return untrack(() => createComponent(component, omitComponent(props)));
     if (typeof component === 'string') {
-      const node = SVGElements.has(component) ? document.createElementNS(SVG_NS, component) : document.createElement(component);
+      if (!TAG_NAME.test(component)) {
+        if (DEV) console.error(`[frameact] <Dynamic component="${component}">: invalid tag name, nothing is rendered.`);
+        return undefined;
+      }
+      const node =
+        component.toLowerCase() === 'script'
+          ? inertScript()
+          : SVGElements.has(component)
+            ? document.createElementNS(SVG_NS, component)
+            : document.createElement(component);
       spread(node, props, false, isComponentKey);
       return node;
     }

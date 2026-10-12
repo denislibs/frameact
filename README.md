@@ -128,6 +128,12 @@ a value through an active IME composition (e.g. clearing the field on Send), upd
 handlers and `srcdoc=`; the explicit escape hatch for trusted HTML is `prop:srcdoc`. Refusals are silent in
 production and a `console.error` in DEV.
 
+**Trust boundary: `<Dynamic component="…">`.** A string `component` is a tag name, and a tag name is a key, not a
+value, so the attribute policy cannot help: `style`, `base`, `meta`, `link`, `iframe`, `object` and `embed` are all
+reachable by name. It must come from the author, never from content (messages, bot markup). The name is validated
+(`/^[a-zA-Z][a-zA-Z0-9-]*$/`, anything else renders nothing and logs a DEV error) and `script` is created inert
+(cloned from a parsed template, so its text never runs); the rest of the allow-list is yours.
+
 ## Inspiration and credits
 
 - **[teact](https://github.com/Ajaxy/teact)** by Alexander Zinchuk — the frame discipline, fasterdom,

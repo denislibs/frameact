@@ -118,6 +118,11 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 **安全。** 属性写入会拒绝 `javascript:` / `vbscript:` URL、非媒体类 `data:` URL、字符串形式的 `on*` 处理器以及 `srcdoc=`；
 受信任 HTML 的显式出口是 `prop:srcdoc`。生产环境中拒绝是静默的，开发模式下会输出 `console.error`。
 
+**信任边界：`<Dynamic component="…">`。** 字符串形式的 `component` 是标签名，而标签名是键而不是值，因此属性策略无能为力：
+`style`、`base`、`meta`、`link`、`iframe`、`object`、`embed` 都可以按名称访问。它必须来自作者，绝不能来自内容（消息、机器人标记）。
+名称会被校验（`/^[a-zA-Z][a-zA-Z0-9-]*$/`，其他情况不渲染任何内容，并在开发模式输出错误），`script` 以惰性方式创建
+（从已解析的模板克隆，其文本不会执行）；其余白名单由你自己负责。
+
 ## 灵感与致谢
 
 - **[teact](https://github.com/Ajaxy/teact)**（作者 Alexander Zinchuk）—— 帧调度纪律、fasterdom、stricterdom

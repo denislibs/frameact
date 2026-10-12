@@ -221,6 +221,45 @@ describe('Dynamic', () => {
   });
 });
 
+describe('Dynamic: a string component is a trust boundary', () => {
+  it.each(['', '1div', 'a b', 'a>b', '<img', 'x"y', 'é', 'a/b', '-x'])('refuses the invalid tag name %j: a DEV error, nothing rendered', (name) => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const root = container();
+    mount(root, () => createComponent(Dynamic, { component: name, children: 'kid' }));
+    expect(root.innerHTML).toBe('');
+    if (name) expect(err.mock.calls.some((c) => String(c[0]).includes('invalid tag name'))).toBe(true);
+    err.mockRestore();
+  });
+
+  it.each(['div', 'my-element', 'h1', 'x-y-z9'])('accepts the tag name %s', (name) => {
+    const root = container();
+    mount(root, () => createComponent(Dynamic, { component: name }));
+    expect(root.firstElementChild!.localName).toBe(name);
+  });
+
+  // jsdom does not mark fragment-parsed scripts "already started" (browsers do, and cloneNode copies the flag),
+  // so execution cannot be asserted here: the test pins the construction path instead.
+  it.each(['script', 'SCRIPT', 'Script'])('<Dynamic component=%s> is made from the inert script template, never createElement', (name) => {
+    const create = vi.spyOn(document, 'createElement');
+    const root = container();
+    mount(root, () => createComponent(Dynamic, { component: name, children: 'window.dynamicScriptRan = 1' }));
+    expect(create.mock.calls.some(([tag]) => String(tag).toLowerCase() === 'script')).toBe(false);
+    const script = root.firstElementChild as HTMLScriptElement;
+    expect(script.localName).toBe('script');
+    expect(script.textContent).toBe('window.dynamicScriptRan = 1');
+    expect((window as unknown as { dynamicScriptRan?: number }).dynamicScriptRan).toBeUndefined();
+    create.mockRestore();
+  });
+
+  it('script src=data: is still refused on the inert script', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const root = container();
+    mount(root, () => createComponent(Dynamic, { component: 'script', src: 'data:text/javascript,alert(1)' }));
+    expect(root.firstElementChild!.hasAttribute('src')).toBe(false);
+    err.mockRestore();
+  });
+});
+
 describe('Portal', () => {
   it('renders into the mount, retargets delegated events to the logical parent, and cleans up on dispose', async () => {
     const logical = container();
