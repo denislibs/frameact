@@ -30,7 +30,8 @@ let pendingMutationTasks: NoneToVoidFunction[] = [];
 let pendingForceReflowTasks: ReflowTask[] = [];
 /**
  * > 0 while a phase segment of a frame pass runs — a rAF segment (measure tasks, then each
- * microtask: mutations, forced-reflow measures, forced-reflow mutations) or flushSync() itself.
+ * microtask: mutations, forced-reflow measures, forced-reflow mutations) or one of the segments
+ * flushSync() runs (the depth is momentarily 0 between them, where no user code runs).
  * A microtask between two rAF segments (a tickEnd drain) is NOT inside a segment.
  */
 let passDepth = 0;

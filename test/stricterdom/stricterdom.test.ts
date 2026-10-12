@@ -451,3 +451,19 @@ it('untrusted ids, classes and attribute names are quoted and cut in the message
   const forged = messages.find((m) => m.includes('fake line'))!;
   expect(forged).toContain('id="m1\\"\\n[frameact] fake line"'); // JSON-quoted: the quote and the line break are escaped
 });
+
+it('a failing enableStrict (no MutationObserver, frozen prototypes) rolls back what it installed instead of staying half on', () => {
+  disableStrict();
+  const patchedBefore = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!.get;
+  vi.stubGlobal('MutationObserver', vi.fn(function () { throw new Error('no observer here'); }));
+  try {
+    expect(() => enableStrict()).toThrow('no observer here');
+  } finally {
+    vi.unstubAllGlobals();
+  }
+  expect(isStrictEnabled()).toBe(false);
+  expect(Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!.get).toBe(patchedBefore); // the natives are back
+  expect(Element.prototype.getBoundingClientRect).toBe(NATIVE_GBCR);
+  enableStrict(); // and a later enable works
+  expect(isStrictEnabled()).toBe(true);
+});

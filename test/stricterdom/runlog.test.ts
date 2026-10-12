@@ -134,7 +134,7 @@ it('the slowest effect a drain warning names ran in that drain (a slow tickEnd r
   setCount(1);
   flushSync(); // the tickEnd run (12 ms, outside any drain), then the mutate drain (8 ms)
   expect(warn.mock.calls.map((c) => c[0])).toEqual([
-    '[frameact] Slow effect run: 12.0 ms in logic [measure]',
+    '[frameact] Slow effect run: 12.0 ms in logic [tickEnd]',
     '[frameact] Slow effect run: 8.0 ms in div.title [mutate]',
     '[frameact] Slow mutate drain: 8.0 ms, 1 effect run; slowest: div.title (8.0 ms)',
   ]);
@@ -152,8 +152,8 @@ it('an effect that re-dirties itself from its own apply keeps the "why" of the r
   flushSync();
   const lines = log.mock.calls.map((c) => c[0] as string).filter((l) => l.includes(' loop '));
   expect(lines).toEqual([
-    '[frameact] run #2 loop [measure] ← signal "n"',
-    '[frameact] run #3 loop [measure] ← signal "n"', // caused by setN(2) in run #2's apply
+    '[frameact] run #2 loop [tickEnd] ← signal "n"',
+    '[frameact] run #3 loop [tickEnd] ← signal "n"', // caused by setN(2) in run #2's apply
   ]); // (the third booking finds the effect clean: nothing ran, nothing is logged or counted)
   expect(getRunStats().map((s) => `${s.path}:${s.runs}`)).toEqual(['loop:2']);
 });
@@ -167,7 +167,7 @@ it('the first apply of a scheduled (tickEnd) effect is the end of its creation r
     createEffect(() => n(), () => {}, undefined, { name: 'first' });
   });
   flushSync();
-  expect(log.mock.calls.map((c) => c[0])).toEqual(['[frameact] first apply first [measure]']);
+  expect(log.mock.calls.map((c) => c[0])).toEqual(['[frameact] first apply first [tickEnd]']);
   expect(getRunStats()).toEqual([]);
 });
 

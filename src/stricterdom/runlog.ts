@@ -6,7 +6,6 @@ import { getEffectDebugInfo, setRunObserver, type EffectNode } from '../core/eff
 import type { Computation } from '../core/types';
 import { getDrainingPhase, setDrainObserver, type FramePhase } from '../core/frame';
 import { describeNode, effectPath } from '../core/debug';
-import { getPhase } from '../scheduler/fasterdom';
 
 /** An effect run, or one frame-phase drain, slower than this is reported (`console.warn`). */
 export const SLOW_RUN_MS = 7;
@@ -36,6 +35,11 @@ let drainSlowest: { path: string; ms: number } | null = null;
 /** An effect's owner chain never changes: its path is built once, not on every run. */
 const paths = new WeakMap<EffectNode, string>();
 
+/** The frame phase whose drain runs the effect, or `tickEnd` for runs outside a frame drain (tickEnd, custom schedules). */
+function runPhase(): string {
+  return getDrainingPhase() ?? 'tickEnd';
+}
+
 function pathOf(node: EffectNode): string {
   let path = paths.get(node);
   if (path === undefined) paths.set(node, (path = effectPath(node)));
@@ -57,7 +61,7 @@ function onRun(node: EffectNode, ms: number, dep: Computation | null, root: Comp
     if (ms > entry.maxMs) entry.maxMs = ms;
   }
   if (getDrainingPhase() !== null && (drainSlowest === null || ms > drainSlowest.ms)) drainSlowest = { path, ms };
-  if (ms > SLOW_RUN_MS) console.warn(`[frameact] Slow effect run: ${ms.toFixed(1)} ms in ${path} [${getPhase()}]`);
+  if (ms > SLOW_RUN_MS) console.warn(`[frameact] Slow effect run: ${ms.toFixed(1)} ms in ${path} [${runPhase()}]`);
   if (logging && (filter === null || path.search(filter) !== -1)) { // (search: a /g filter has no lastIndex state)
     const why =
       root === null
@@ -65,7 +69,7 @@ function onRun(node: EffectNode, ms: number, dep: Computation | null, root: Comp
         : dep === root
           ? describeNode(root)
           : `${describeNode(root)} via ${describeNode(dep)}`;
-    console.log(runs === 1 ? `[frameact] first apply ${path} [${getPhase()}]` : `[frameact] run #${runs} ${path} [${getPhase()}] ← ${why}`);
+    console.log(runs === 1 ? `[frameact] first apply ${path} [${runPhase()}]` : `[frameact] run #${runs} ${path} [${runPhase()}] ← ${why}`);
   }
 }
 

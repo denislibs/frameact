@@ -3,6 +3,8 @@
 // phase change and around every effect apply (so a violation is reported in the phase it happened
 // in and attributed to the effect that was running), `suppressStrict` is a counter instead of an
 // unpatch/repatch, and the error carries the attribution path (spec §3.4).
+// `data-stricterdom-ignore`, the `details[open]` exception and the `allowAnyPhase` flag mirror the behaviour
+// of telegram-tt's stricterdom (GPL-3.0); they are re-implemented here from the behaviour alone, no code taken.
 import { DEV } from '../env';
 import { getPhase, onPhaseChange, type Phase } from '../scheduler/fasterdom';
 import { getRunningEffect, setApplyHook } from '../core/effects';
@@ -123,21 +125,26 @@ export function enableStrict(): void {
     throw new Error('[frameact/stricterdom] enableStrict() needs a document with a <body>');
   }
   isStrict = true;
-  setupLayoutDetectors();
-  setupMutationObserver();
-  recordsPhase = getPhase();
-  unsubscribePhase = onPhaseChange((next) => {
-    // Records produced since the last change belong to the phase that just ended.
-    drainRecordsAs(recordsPhase);
-    recordsPhase = next;
-  });
-  // Around an apply outside the mutate phase: before it, pending records belong to the context
-  // around the apply; after it, to the effect (the asynchronous observer callback would know neither).
-  setApplyHook(() => {
-    if (effectivePhase() !== 'mutate') drainRecords();
-  });
-  strictHooks.forceMutation = (cb, target) => allowMutation(target, cb);
-  setStrictProfiling(true); // run counters and the slow-run / slow-drain warnings (runlog.ts)
+  try {
+    setupLayoutDetectors();
+    setupMutationObserver();
+    recordsPhase = getPhase();
+    unsubscribePhase = onPhaseChange((next) => {
+      // Records produced since the last change belong to the phase that just ended.
+      drainRecordsAs(recordsPhase);
+      recordsPhase = next;
+    });
+    // Around an apply outside the mutate phase: before it, pending records belong to the context
+    // around the apply; after it, to the effect (the asynchronous observer callback would know neither).
+    setApplyHook(() => {
+      if (effectivePhase() !== 'mutate') drainRecords();
+    });
+    strictHooks.forceMutation = (cb, target) => allowMutation(target, cb);
+    setStrictProfiling(true); // run counters and the slow-run / slow-drain warnings (runlog.ts)
+  } catch (error) {
+    disableStrict(); // frozen prototypes, no MutationObserver: never stay half on
+    throw error;
+  }
 }
 
 export function disableStrict(): void {
