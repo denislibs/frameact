@@ -4,6 +4,7 @@
 import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import type { Scope } from '../core/types';
+import type { JSX } from '../jsx-runtime';
 import { createMemo, createRoot, getOwner, runWithOwner, untrack } from '../index';
 import { children, createComponent } from './component';
 import { SVG_NS, SVGElements } from './constants';
@@ -12,7 +13,10 @@ import { spread } from './props';
 import { strictHooks } from './strict';
 
 type Falsy = undefined | null | false;
-type ChildOrFn = unknown | ((item: any) => unknown);
+type JSXElement = JSX.Element;
+type Accessor<T> = () => T;
+/** A render function must take its parameter; a bare `() => Element` is already a `JSX.Element`. */
+type RequiredParameter<T> = T extends () => unknown ? never : T;
 
 const sameTruthiness = (a: unknown, b: unknown) => !a === !b;
 
@@ -24,9 +28,21 @@ function staleError(name: string) {
  * `<Show when keyed fallback>`. A function child receives an accessor (non-keyed: the child is kept
  * while `when` stays truthy) or the value itself (keyed: recreated when the identity changes).
  */
-export function Show<T>(props: { when: T | Falsy; keyed?: boolean; fallback?: unknown; children: ChildOrFn }): unknown {
+export function Show<T, TRenderFunction extends (item: Accessor<NonNullable<T>>) => JSXElement>(props: {
+  when: T | Falsy;
+  keyed?: false;
+  fallback?: JSXElement;
+  children: JSXElement | RequiredParameter<TRenderFunction>;
+}): JSXElement;
+export function Show<T, TRenderFunction extends (item: NonNullable<T>) => JSXElement>(props: {
+  when: T | Falsy;
+  keyed: true;
+  fallback?: JSXElement;
+  children: JSXElement | RequiredParameter<TRenderFunction>;
+}): JSXElement;
+export function Show(props: { when: unknown; keyed?: boolean; fallback?: unknown; children: unknown }): unknown {
   const keyed = props.keyed;
-  const condition = createMemo<T | Falsy>(() => props.when, keyed ? undefined : { equals: sameTruthiness });
+  const condition = createMemo<unknown>(() => props.when, keyed ? undefined : { equals: sameTruthiness });
   return createMemo(() => {
     const c = condition();
     if (c) {
@@ -51,11 +67,21 @@ export function Show<T>(props: { when: T | Falsy; keyed?: boolean; fallback?: un
 export interface MatchProps<T> {
   when: T | Falsy;
   keyed?: boolean;
-  children: ChildOrFn;
+  children: unknown;
 }
 
-/** A branch of `<Switch>`: returns its props, which Switch reads. */
-export function Match<T>(props: MatchProps<T>): unknown {
+/** A branch of `<Switch>`: returns its props, which Switch reads. Function children are typed like `Show`'s. */
+export function Match<T, TRenderFunction extends (item: Accessor<NonNullable<T>>) => JSXElement>(props: {
+  when: T | Falsy;
+  keyed?: false;
+  children: JSXElement | RequiredParameter<TRenderFunction>;
+}): JSXElement;
+export function Match<T, TRenderFunction extends (item: NonNullable<T>) => JSXElement>(props: {
+  when: T | Falsy;
+  keyed: true;
+  children: JSXElement | RequiredParameter<TRenderFunction>;
+}): JSXElement;
+export function Match(props: MatchProps<unknown>): unknown {
   return props;
 }
 

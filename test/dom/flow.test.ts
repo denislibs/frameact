@@ -9,6 +9,10 @@ import { container, useDomHarness } from '../helpers/dom';
 
 const { frame } = useDomHarness();
 
+// The typed overloads (JSX use) are exercised in test/jsx/types.tsx; these tests build props by hand.
+const ShowC = Show as (props: any) => unknown;
+const MatchC = Match as (props: any) => unknown;
+
 const el = (tag: string, text = '') => {
   const e = document.createElement(tag);
   e.textContent = text;
@@ -39,7 +43,7 @@ describe('Show', () => {
       insert(b, () => String(item().n));
       return b;
     });
-    mount(root, () => createComponent(Show, { get when() { return when(); }, get fallback() { return el('i', 'none'); }, children: made }));
+    mount(root, () => createComponent(ShowC, { get when() { return when(); }, get fallback() { return el('i', 'none'); }, children: made }));
     expect(root.innerHTML).toBe('<b>1</b>');
     setWhen({ n: 2 });
     await frame();
@@ -55,7 +59,7 @@ describe('Show', () => {
 
     const keyedRoot = container();
     const keyedMade = vi.fn((item: { n: number }) => el('b', String(item.n)));
-    mount(keyedRoot, () => createComponent(Show, { get when() { return when(); }, keyed: true, children: keyedMade }));
+    mount(keyedRoot, () => createComponent(ShowC, { get when() { return when(); }, keyed: true, children: keyedMade }));
     expect(keyedRoot.innerHTML).toBe('<b>3</b>');
     setWhen({ n: 4 });
     await frame();
@@ -66,7 +70,7 @@ describe('Show', () => {
   it('plain children are returned as-is', () => {
     const root = container();
     const [when] = createSignal(true);
-    mount(root, () => createComponent(Show, { get when() { return when(); }, get children() { return el('u', 'x'); } }));
+    mount(root, () => createComponent(ShowC, { get when() { return when(); }, get children() { return el('u', 'x'); } }));
     expect(root.innerHTML).toBe('<u>x</u>');
   });
 });
@@ -81,8 +85,8 @@ describe('Switch/Match', () => {
         get fallback() { return el('i', 'none'); },
         get children() {
           return [
-            createComponent(Match, { get when() { return a(); }, get children() { return el('b', 'A'); } }),
-            createComponent(Match, {
+            createComponent(MatchC, { get when() { return a(); }, get children() { return el('b', 'A'); } }),
+            createComponent(MatchC, {
               get when() { return b(); },
               children: (v: () => string) => {
                 const s = el('s');
@@ -120,7 +124,7 @@ describe('keyed Match', () => {
       createComponent(Switch, {
         get fallback() { return el('i', 'none'); },
         get children() {
-          return createComponent(Match, { get when() { return v(); }, keyed: true, children: made });
+          return createComponent(MatchC, { get when() { return v(); }, keyed: true, children: made });
         },
       }),
     );
@@ -426,7 +430,7 @@ describe('conditions that throw', () => {
       onError((e) => errors.push((e as Error).message));
       insert(
         root,
-        createComponent(Show, {
+        createComponent(ShowC, {
           get when() {
             if (v() === 2) throw new Error('boom');
             return v() > 0;
@@ -467,7 +471,7 @@ describe('conditions that throw', () => {
       onError((e) => errors.push((e as Error).message));
       insert(
         root,
-        createComponent(Show, {
+        createComponent(ShowC, {
           get when() {
             if (v() === 2) throw new Error('boom');
             return v() > 0;
@@ -495,14 +499,14 @@ describe('conditions that throw', () => {
           get fallback() { return el('i', 'none'); },
           get children() {
             return [
-              createComponent(Match, {
+              createComponent(MatchC, {
                 get when() {
                   if (v() === 2) throw new Error('boom');
                   return v() === 1;
                 },
                 get children() { return el('b', 'one'); },
               }),
-              createComponent(Match, { get when() { return v() === 3; }, get children() { return el('s', 'three'); } }),
+              createComponent(MatchC, { get when() { return v() === 3; }, get children() { return el('s', 'three'); } }),
             ];
           },
         }),
