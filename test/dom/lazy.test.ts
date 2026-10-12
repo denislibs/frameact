@@ -93,3 +93,26 @@ it('a failed load goes to the owner\'s onError handlers (else the console), keep
   expect(err).toHaveBeenCalledTimes(1);
   expect(String(err.mock.calls[0][0])).toContain('lazy');
 });
+
+it('a loader that throws synchronously is a failed load: it reaches onError and the next instance retries', async () => {
+  let calls = 0;
+  const LazyHello = lazy((): Promise<{ default: typeof Hello }> => {
+    if (++calls === 1) throw new Error('sync boom');
+    return Promise.resolve({ default: Hello });
+  });
+  const errors: unknown[] = [];
+  const root = container();
+  createRoot(() => {
+    onError((e) => errors.push(e));
+    insert(root, createComponent(LazyHello, { name: 'a' })); // must not throw out of the component
+  });
+  await flushMicrotasks();
+  expect(errors.map((e) => (e as Error).message)).toEqual(['sync boom']);
+  expect(root.innerHTML).toBe('');
+  const root2 = container();
+  createRoot(() => insert(root2, createComponent(LazyHello, { name: 'b' })));
+  await flushMicrotasks();
+  await frame();
+  expect(root2.innerHTML).toBe('<b>hi b</b>');
+  await expect(lazy(() => { throw new Error('x'); }).preload()).rejects.toThrow('x'); // preload() reports it as a rejection
+});

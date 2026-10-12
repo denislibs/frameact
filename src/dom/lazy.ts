@@ -22,7 +22,8 @@ export interface LazyComponent<P> {
  * `lazy(() => import('./Settings'))`: a component that loads its implementation on first render
  * (or `preload()`). The module is cached per `lazy` call; a failed load is reported through the
  * owner's `onError` handlers (else the console), the placeholder stays, and the next instance
- * retries. Heavy first renders during an animation: wrap the instance in `deferUntilIdle`.
+ * retries (a loader that throws synchronously counts as a failed load). The promise `preload()`
+ * returns rejects on failure: handle it where you call it. Heavy first renders during an animation: wrap the instance in `deferUntilIdle`.
  */
 export function lazy<P>(loader: () => Promise<{ default: Component<P> }>, options?: LazyOptions): LazyComponent<P> {
   let loaded: Component<P> | undefined;
@@ -32,7 +33,7 @@ export function lazy<P>(loader: () => Promise<{ default: Component<P> }>, option
   function preload(): Promise<Component<P>> {
     if (loaded) return Promise.resolve(loaded);
     if (!pending) {
-      pending = loader().then(
+      pending = new Promise<{ default: Component<P> }>((resolve) => resolve(loader())).then(
         (m) => {
           loaded = m.default;
           return loaded;
