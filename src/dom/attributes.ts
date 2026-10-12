@@ -6,6 +6,7 @@
 import { DEV } from '../env';
 import { className, classList, toggleClassToken } from './classes';
 import { SVGNamespace } from './constants';
+import './controlled'; // registers the built-in use:value / use:checked
 import { runDirective } from './directives';
 import { setListener } from './events';
 import { setStyleProperty } from './styles';
