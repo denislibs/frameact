@@ -1,6 +1,7 @@
 import { createMemo, createMutationEffect, createRoot, createSignal, flushSync } from '../../src/index';
 import { createComponent, effect } from '../../src/dom/component';
 import { createStore } from '../../src/store/index';
+import { notifyDep, notifyRoot } from '../../src/core/core';
 import { describeNode, effectPath, ownerPath } from '../../src/core/debug';
 import { getEffectDebugInfo, getRunningEffect, setRunObserver, type EffectNode } from '../../src/core/effects';
 import { installFakeRaf } from '../helpers/raf';
@@ -128,4 +129,15 @@ it('the run observer sees every scheduled run with a duration (not the creation 
   setN(1);
   flushSync();
   expect(seen).toEqual(['div.title:number']);
+});
+
+it('the notify walk does not keep the last written node (a store leaf, its subtree) reachable once it is done', () => {
+  const [state, setState] = createStore({ title: 'a', list: [1, 2, 3] });
+  testRoot(() => {
+    createMutationEffect(() => state.title, () => {});
+  });
+  setState('title', 'b');
+  flushSync();
+  expect(notifyDep).toBeNull();
+  expect(notifyRoot).toBeNull();
 });

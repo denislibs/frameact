@@ -1257,5 +1257,6 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
   } finally {
     // Normally already at `base`; after a throwing scheduler, drop this call's frames.
     while (notifyTop > base) notifyStack[--notifyTop] = null;
+    if (DEV) notifyDep = notifyRoot = null; // (the stamps were read by the scheduler hook: do not pin a freed store leaf)
   }
 }
