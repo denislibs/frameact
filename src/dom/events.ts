@@ -100,6 +100,7 @@ interface Natives {
   contains: (this: Node, other: Node | null) => boolean;
   shadowHost: (this: ShadowRoot) => Element;
 }
+const MAX_PORTAL_HOPS = 64;
 let natives: Natives | undefined;
 
 function getNatives(): Natives {
@@ -116,11 +117,18 @@ function eventHandler(e: Event): void {
   const key = EVENT_KEY + e.type;
   const oriCurrentTarget = e.currentTarget;
   const retarget = (value: unknown) => Object.defineProperty(e, 'target', { configurable: true, value });
-  /** A portal's logical parent: a Node outside the portal's own subtree (a clobbering element is inside it). */
+  /**
+   * A portal's logical parent. The real host is an accessor (insert.ts defines it with a getter); form
+   * named properties — including controls linked from elsewhere with `form=` — are data properties,
+   * so only an own accessor counts. The host must also be a Node outside the portal's own subtree.
+   */
   const portalHost = (n: any): Node | undefined => {
-    const h = n[HOST_KEY];
+    if (!n[HOST_KEY]) return undefined;
+    const getter = Object.getOwnPropertyDescriptor(n, HOST_KEY)?.get;
+    const h = getter?.call(n);
     return h instanceof Node && !contains.call(n, h) ? h : undefined;
   };
+  let hops = 0; // safety net: portals nest a handful of levels, a longer chain is a cycle
   const handleNode = (): boolean => {
     const handler = node[key];
     if (handler && node.disabled !== true) {
@@ -138,8 +146,11 @@ function eventHandler(e: Event): void {
     return true;
   };
   const walkUpTree = () => {
-    while (handleNode() && (node = portalHost(node) || parentNode.call(node) || (node instanceof ShadowRoot ? shadowHost.call(node) : null))) {
-      // keep walking: portal hosts, parents, shadow hosts
+    while (handleNode()) {
+      const host = portalHost(node);
+      if (host && ++hops > MAX_PORTAL_HOPS) break;
+      node = host || parentNode.call(node) || (node instanceof ShadowRoot ? shadowHost.call(node) : null);
+      if (!node) break;
     }
   };
   // simulate currentTarget

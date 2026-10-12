@@ -128,6 +128,50 @@ describe('delegation survives DOM clobbering (forms with named inputs)', () => {
     expect(outerCalls).toHaveBeenCalledTimes(1);
   });
 
+  it('cross-linked forms (form= attribute) cannot redirect or loop the walk: only accessor hosts count', () => {
+    const rootA = container();
+    const rootB = container();
+    const formA = document.createElement('form');
+    const formB = document.createElement('form');
+    const buttonA = document.createElement('button');
+    const inputInB = document.createElement('input');
+    const inputInA = document.createElement('input');
+    formA.appendChild(buttonA);
+    formA.appendChild(inputInA);
+    formB.appendChild(inputInB);
+    rootA.appendChild(formA);
+    rootB.appendChild(formB);
+    // <input form=fb name=_$host> inside fa, <input form=fa name=_$host> inside fb: named props point out of the form.
+    clobber(formA, HOST_KEY, inputInB);
+    clobber(formB, HOST_KEY, inputInA);
+    const { counter, handler } = counting();
+    const log: string[] = [];
+    addEvent(formA, 'click', handler, true);
+    addEvent(rootA, 'click', () => log.push('rootA'), true);
+    addEvent(formB, 'click', () => log.push('formB'), true);
+    addEvent(rootB, 'click', () => log.push('rootB'), true);
+    delegateEvents(['click']);
+    click(buttonA);
+    expect(counter.calls).toBe(1);
+    expect(log).toEqual(['rootA']);
+  });
+
+  it('a genuine portal host cycle (two accessors pointing at each other) still terminates', () => {
+    const mountA = container();
+    const mountB = container();
+    const insideA = document.createElement('i');
+    const insideB = document.createElement('i');
+    mountA.appendChild(insideA);
+    mountB.appendChild(insideB);
+    Object.defineProperty(mountA, HOST_KEY, { get: () => insideB, configurable: true });
+    Object.defineProperty(mountB, HOST_KEY, { get: () => insideA, configurable: true });
+    const { counter, handler } = counting(1000);
+    addEvent(mountA, 'click', handler, true);
+    delegateEvents(['click']);
+    click(insideA);
+    expect(counter.calls).toBeLessThan(200);
+  });
+
   it('an element named _$$click is not a handler', () => {
     const { outer, form, input } = formWithInput();
     const outerCalls = vi.fn();
