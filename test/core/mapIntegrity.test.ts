@@ -57,7 +57,11 @@ describe('M1: by-reference keyed map (computedKeyedMap)', () => {
     expect(handled).toHaveLength(1);
   });
 
-  it('is transactional: a pass that throws keeps the previous state and disposes the rows it created', () => {
+  // (Was: "is transactional: a pass that throws keeps the previous state…", with the throw injected
+  // by a scheduler throwing from a write mid-pass. Since review fix round 1 a throwing scheduler is
+  // the effect's reported error and never escapes a write, so the pass completes; the map's
+  // transactional catch stays as a safety net, with no public way left to throw mid-pass.)
+  it('a scheduler throwing from a write mid-pass does not abort the pass: rows stay consistent', () => {
     const A = { id: 'A' }, B = { id: 'B' }, C = { id: 'C' };
     const $list = signal<Item[]>([A, B]);
     const disposed: string[] = [];
@@ -78,9 +82,10 @@ describe('M1: by-reference keyed map (computedKeyedMap)', () => {
     });
     expect(rows()).toEqual(['row:A', 'row:B']);
     failSchedule = true;
-    $list.set([C, B, A]); // A moves → its index write throws after C's row was created
-    expect(readSafe(rows)).toBe('threw');
-    expect(disposed).toEqual(['C']); // the row created in the failed pass did not leak
+    $list.set([C, B, A]); // A moves → the scheduler of its index effect throws during the write
+    expect(readSafe(rows)).toEqual(['row:C', 'row:B', 'row:A']);
+    expect(err).toHaveBeenCalled(); // reported as the effect's error
+    expect(disposed).toEqual([]);
     $list.set([B, A]);
     expect(rows()).toEqual(['row:B', 'row:A']);
     expect(disposed).toEqual(['C']);
@@ -126,7 +131,8 @@ describe('M1: keyed-by-function map (computedKeyedMapBy)', () => {
     expect(err).toHaveBeenCalled();
   });
 
-  it('is transactional: a pass that throws keeps the previous state and disposes the rows it created', () => {
+  // (Was "is transactional…": see the note on the keyed-by-reference test above.)
+  it('a scheduler throwing from an item write mid-pass does not abort the pass: rows stay consistent', () => {
     const $list = signal<Item[]>([{ id: 'a', text: '1' }]);
     const disposed: string[] = [];
     let failSchedule = false;
@@ -145,9 +151,11 @@ describe('M1: keyed-by-function map (computedKeyedMapBy)', () => {
     );
     expect(rows().map((r) => r.text)).toEqual(['1']);
     failSchedule = true;
-    $list.set([{ id: 'n', text: 'new' }, { id: 'a', text: '2' }]); // a's item write throws
-    expect(readSafe(rows)).toBe('threw');
-    expect(disposed).toEqual(['n']);
+    $list.set([{ id: 'n', text: 'new' }, { id: 'a', text: '2' }]); // a's item write: scheduler throws
+    const r = readSafe(rows);
+    expect(r === 'threw' ? r : r.map((x) => x.text)).toEqual(['new', '2']);
+    expect(err).toHaveBeenCalled();
+    expect(disposed).toEqual([]);
     $list.set([{ id: 'a', text: '3' }, { id: 'm', text: 'm' }]);
     expect(rows().map((r) => r.text)).toEqual(['3', 'm']);
     expect(disposed).toEqual(['n']);

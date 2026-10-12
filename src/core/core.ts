@@ -32,9 +32,9 @@ const NOOP = () => {};
  * clears both on exit) — true while update() runs the compute / a signal write landed meanwhile.
  * F_REENTERED: per-run — something read the node while its update() was running (a synchronous
  * effect woken by a write the compute made); at the end a first result is announced to subscribers.
- * F_UNSURE: the node is CHECK/DIRTY but some of its subscribers may be CLEAN — a pull through it
- * threw (the reader handled the error and is CLEAN), or a notify walk was cut short by a throwing
- * scheduler before it visited them. The next walk reaching it descends into its subscribers even
+ * F_UNSURE (safety net): the node is CHECK/DIRTY but some of its subscribers may be CLEAN — a pull
+ * or a notify walk was cut short by an unexpected throw (memo computes hold their errors and
+ * schedulers' errors are reported, so by design neither escapes into a pull or a walk). The next walk reaching it descends into its subscribers even
  * though it is already dirty (and clears the flag); update() clears it too (the node is CLEAN
  * after, and a CLEAN node is always descended into when marked).
  * F_THREW: the node's last compute threw (it kept its previous value, CLEAN). Its next check
@@ -1035,8 +1035,9 @@ function notify(node: Computation, state: number, latch: boolean, via: Link | nu
       state = STATE_CHECK;
     }
   } catch (error) {
-    // A throwing scheduler cut the walk short: the level being visited and every level waiting
-    // on the stack have subscribers it never reached. Let the next walk descend there again.
+    // Safety net: nothing in the walk throws by design (effects.ts reports a throwing scheduler
+    // instead of rethrowing). If something did, the level being visited and every level waiting
+    // on the stack would have subscribers it never reached: let the next walk descend there.
     if (l !== null) l.dep._flags |= F_UNSURE;
     for (let i = base; i < notifyTop; i += 2) (notifyStack[i] as Link).dep._flags |= F_UNSURE;
     throw error;

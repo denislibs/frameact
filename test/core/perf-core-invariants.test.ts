@@ -578,7 +578,7 @@ describe('a synchronous custom schedule', () => {
     err.mockRestore();
   });
 
-  it('a custom schedule that throws from a write: the error reaches the writer, the next change schedules again', () => {
+  it('a custom schedule that throws from a write: reported as the effect\'s error (not the writer\'s), the next change schedules again', () => {
     const $s = signal(0);
     const applied: number[] = [];
     let fail = false;
@@ -590,8 +590,11 @@ describe('a synchronous custom schedule', () => {
       createEffect(() => $s(), (v) => { applied.push(v); }, flaky);
       return d;
     });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     fail = true;
-    expect(() => $s.set(1)).toThrow('schedule boom');
+    expect(() => $s.set(1)).not.toThrow(); // (review fix round 1, Minor 6: was thrown to the writer)
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
     fail = false;
     $s.set(2); // the failed scheduling must not leave the node dirty with no run booked
     expect(applied).toEqual([0, 2]);

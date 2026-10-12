@@ -4,6 +4,7 @@ import {
   callUnowned,
   computationPrototype,
   F_INIT,
+  F_THREW,
   handleError,
   initComputationNode,
   isFunction,
@@ -348,10 +349,18 @@ setEffectScheduler((raw) => {
   try {
     node._schedule(node._run, node);
   } catch (error) {
-    // notify() marked the node dirty before calling us: with no run booked it would stay dirty and
-    // never be scheduled again (only the CLEAN → dirty edge schedules). Undo that, then rethrow.
-    if (node._state !== STATE_DISPOSED) node._state = STATE_CLEAN;
-    throw error;
+    // A throwing custom Schedule (built-in ones never throw). It is this effect's error: reported,
+    // never thrown into the notify() walk — that would cut the walk short (the remaining
+    // subscribers would miss the write) and, from a memo's result write, surface as that memo's
+    // compute error. notify() marked the node dirty before calling us: with no run booked it would
+    // stay dirty and never be scheduled again (only the CLEAN → dirty edge schedules), so it goes
+    // back to CLEAN, with F_THREW: its next change re-runs its compute even if the deps it saw
+    // look unchanged by then.
+    if (node._state !== STATE_DISPOSED) {
+      node._state = STATE_CLEAN;
+      node._flags |= F_THREW;
+    }
+    logEffectError(node, error);
   }
 });
 

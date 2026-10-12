@@ -7,7 +7,8 @@
 // recomputed memo's CHECK subscribers relies on it). Pre-existing since the vendored maverick
 // (995e983): an effect whose source threw two levels down never ran again when it recovered.
 import { computed, signal } from '../../src/core/signals';
-import { onError, root } from '../../src/core/core';
+import { getScope, onError, root, STATE_CLEAN } from '../../src/core/core';
+import type { Computation } from '../../src/core/types';
 import { createEffect, type Schedule } from '../../src/core/effects';
 
 function queue() {
@@ -73,7 +74,7 @@ it('a memo that caught a throwing read two levels down recomputes when the sourc
   expect($r()).toBe(20);
 });
 
-it('a walk cut short by a throwing scheduler: the next write through the dirty memo reaches the rest', () => {
+it('a throwing scheduler is reported; the walk goes on, and that effect re-runs on its next change (review Minor 6)', () => {
   const { schedule, flush } = queue();
   let armed = false;
   const throwing: Schedule = (run, node) => {
@@ -95,12 +96,48 @@ it('a walk cut short by a throwing scheduler: the next write through the dirty m
   });
   flush();
   armed = true;
-  expect(() => $a.set(1)).toThrow('scheduler'); // the walk stops at the first effect
+  expect(() => $a.set(1)).not.toThrow(); // the writer does not get another effect's scheduler error
+  expect(errorSpy).toHaveBeenCalled();
   flush();
-  expect(seen).toEqual([[0], [0], [0]]);
-  $b.set(1); // $m is already DIRTY: this walk must still reach all three
+  // The walk reached the other two; the first one, back to CLEAN, was reached again by $m's
+  // result write when the others pulled $m (a CLEAN subscriber gets a full notify).
+  expect(seen).toEqual([[0, 1], [0, 1], [0, 1]]);
+  $b.set(1);
   flush();
-  expect(seen).toEqual([[0, 2], [0, 2], [0, 2]]);
+  expect(seen).toEqual([[0, 1, 2], [0, 1, 2], [0, 1, 2]]);
+});
+
+it('a scheduler throwing during a memo result write is not that memo compute error', () => {
+  const { schedule, flush } = queue();
+  let armed = false;
+  const throwing: Schedule = (run, node) => {
+    if (armed) {
+      armed = false;
+      throw new Error('scheduler');
+    }
+    schedule(run, node);
+  };
+  const $s = signal(0);
+  const $m = computed(() => $s() * 2);
+  const handled: unknown[] = [];
+  let effect!: Computation;
+  root(() => {
+    onError((e) => { handled.push(e); });
+    createEffect(() => {
+      effect = getScope() as Computation;
+      return $m();
+    }, () => {}, throwing);
+  });
+  flush();
+  $s.set(1); // the walk marks the effect CHECK and books its run
+  // White-box: a subscriber that is CLEAN when the memo's update() writes its result gets a full
+  // notify — its scheduler then runs inside that update() (re-entry by a synchronous effect is the
+  // natural way there). Simulate it.
+  effect._state = STATE_CLEAN;
+  armed = true;
+  expect($m()).toBe(2); // the memo is fine whatever its subscribers' schedulers do
+  expect(handled).toEqual([]); // and its owner's onError did not get the scheduler's error
+  expect(errorSpy).toHaveBeenCalled(); // (reported as the effect's)
 });
 
 it('while a dep holds an error, the reader catching it keeps its fallback; recovery brings the other input in', () => {
