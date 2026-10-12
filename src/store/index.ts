@@ -3,6 +3,7 @@
 // animations (gate.ts, installed by this import).
 import './gate';
 export { reconcile, type ReconcileOptions, type Mutable } from './reconcile';
+export { defineActions, afterActions, type Actions } from './actions';
 export {
   createStore, merge, produce, unwrap, snapshot, live, ungated, $RAW, $TRACK,
   type Store, type StoreArray, type SetStoreFunction, type Updater, type Merger, type Part, type At,

@@ -28,8 +28,9 @@ behind Telegram Web A:
 > the DOM runtime are implemented: `frameact/dom` for the Solid 2.0 JSX compiler
 > (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (including `order="manual"`),
 > `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, controlled inputs (`use:value` / `use:checked`),
-> `HeavyAnimationScope`, a context `Provider` and the `frameact/vite` plugin. Next: the store and
-> stricterdom. Not published to npm yet. APIs may change.
+> `HeavyAnimationScope`, a context `Provider` and the `frameact/vite` plugin; the store (`frameact/store`,
+> a signal tree with cause-tagged parking during heavy animations) is in. Next: stricterdom. Not published
+> to npm yet. APIs may change.
 
 ## Why
 
@@ -140,6 +141,27 @@ spread bag (`{...bag}` can name `innerHTML`, `prop:*`, `use:*`), a string `compo
 `<script src>` with an untrusted URL (the scheme filter cannot help there; a CSP `script-src` does). Keep their
 inputs under your control. `<iframe srcdoc=…>` is refused and not typed; write `prop:srcdoc` to opt in.
 
+## Store
+
+`frameact/store` is a tree of plain objects whose properties become signals lazily, on their first tracked read.
+`state.chats[id].title` subscribes to exactly that path; `setState('chats', id, 'title', t)` writes the raw object in
+place and wakes that leaf only — one row out of a thousand recomputes, nothing is copied, identities (proxies, `For`
+rows) are kept. Server data merges by key with `reconcile`, drafts mutate through `produce`, shallow merges are
+explicit (`merge()`), a value at a path replaces, `undefined` deletes the key. Actions are plain typed functions
+(`defineActions`); a nested call runs after the current one, `afterActions(cb)` after the cascade.
+
+Store-driven frame effects inside a subtree that runs a heavy animation are *parked* by cause: an effect waits only
+while store writes are the sole reason it is dirty. A local signal, a user event or a `live()` read runs it at once,
+and it reads the current store — no computation ever sees two moments of the store. tickEnd logic is never parked,
+controlled inputs (`use:value` / `use:checked`) never wait, `ungated(() => setState(…))` bypasses the gate on write.
+
+```ts
+const [state, setState] = createStore(INITIAL_STATE);
+setState('chats', id, 'unread', (n) => n + 1);
+setState('messages', chatId, reconcile(chunk)); // immutable data from the server, matched by `id`
+<For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
+```
+
 ## Inspiration and credits
 
 - **[teact](https://github.com/Ajaxy/teact)** by Alexander Zinchuk — the frame discipline, fasterdom,
@@ -164,7 +186,7 @@ Third-party code is MIT-licensed (udomdiff: ISC) and attributed in each adapted 
 |---|---|---|
 | 1 · core | signals, two-phase effects, frame queues, heavy-animation gating, `mapArray`, context | ✅ done — [PR #1](https://github.com/denislibs/frameact/pull/1) |
 | 2 · dom | runtime for the JSX compiler, `For`/`Show`/`Switch`, controlled inputs, manual-order lists, Vite plugin | ✅ done |
-| 3 · store | global store on signals: entity subscriptions, structural-sharing writes, animation-aware updates | ⏳ |
+| 3 · store | signal tree store: per-leaf subscriptions, in-place path writes, `reconcile`, cause-tagged parking during animations, typed actions | ✅ done |
 | 4 · stricterdom | dev-mode phase checks with effect attribution | ⏳ |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact on messenger scenarios (Chromium + WebKit, CPU ×4) | ⏳ |
 

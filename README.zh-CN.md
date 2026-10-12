@@ -25,8 +25,8 @@ frameact 是一个面向"每一帧都很重要"的应用的响应式 UI 框架�
 > **状态：早期开发。** 响应式内核（[PR #1](https://github.com/denislibs/frameact/pull/1)）与 DOM 运行时已实现：
 > 面向 Solid 2.0 JSX 编译器（`@solidjs/babel-plugin@2.0.0-rc.14`）的 `frameact/dom`、`render`、
 > `For`（含 `order="manual"`）、`Show`/`Switch`/`Match`/`Dynamic`/`Portal`、受控输入（`use:value` / `use:checked`）、
-> `HeavyAnimationScope`、context `Provider`，以及 `frameact/vite` 插件。接下来是 store 与 stricterdom。
-> 尚未发布到 npm，API 可能变化。
+> `HeavyAnimationScope`、context `Provider`，以及 `frameact/vite` 插件；store（`frameact/store`：在重动画期间
+> 按原因停靠的 signal 树）也已完成。接下来是 stricterdom。尚未发布到 npm，API 可能变化。
 
 ## 为什么
 
@@ -128,6 +128,25 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 `<Dynamic>` 的字符串 `component`，以及带有不受信任 URL 的 `<script src>`（协议过滤对此无能为力，需要 CSP `script-src`）。
 请确保它们的输入受你控制。`<iframe srcdoc=…>` 会被拒绝且没有类型定义；如需显式写入，请使用 `prop:srcdoc`。
 
+## Store
+
+`frameact/store` 是一棵由普通对象组成的树，其属性在第一次被追踪读取时惰性地变成 signal。`state.chats[id].title`
+恰好订阅这一条路径；`setState('chats', id, 'title', t)` 就地写入原始对象，只唤醒这一个叶子：一千行里只有一行重算，
+不复制任何东西，身份（代理、`For` 行）保持不变。服务端数据按键 diff 合并（`reconcile`），草稿通过 `produce` 修改，
+浅合并只能显式进行（`merge()`），路径上的值直接替换，`undefined` 删除键。action 是普通的带类型函数（`defineActions`）；
+嵌套调用在当前 action 之后执行，`afterActions(cb)` 在整个级联之后执行。
+
+在正在进行重动画的子树中，由 store 驱动的帧 effect 会*按原因停靠*：只有当 store 写入是它变脏的唯一原因时才等待。
+本地 signal、用户事件或通过 `live()` 的读取会让它立即运行，并读取当前的 store —— 任何计算都不会看到 store 的两个时刻。
+tickEnd 逻辑从不停靠，受控输入（`use:value` / `use:checked`）从不等待，`ungated(() => setState(…))` 在写入侧绕过闸门。
+
+```ts
+const [state, setState] = createStore(INITIAL_STATE);
+setState('chats', id, 'unread', (n) => n + 1);
+setState('messages', chatId, reconcile(chunk)); // 来自服务端的不可变数据，按 `id` 匹配
+<For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
+```
+
 ## 灵感与致谢
 
 - **[teact](https://github.com/Ajaxy/teact)**（作者 Alexander Zinchuk）—— 帧调度纪律、fasterdom、stricterdom
@@ -151,7 +170,7 @@ solidjs/solid，以 `SOURCE` 文件代替逐文件头部声明。
 |---|---|---|
 | 1 · core | 信号、两阶段 effect、帧队列、重动画闸门、`mapArray`、context | ✅ 完成 —— [PR #1](https://github.com/denislibs/frameact/pull/1) |
 | 2 · dom | JSX 编译器运行时、`For`/`Show`/`Switch`、受控输入、手动排序列表、Vite 插件 | ✅ 完成 |
-| 3 · store | 基于 signal 的全局 store：实体级订阅、结构共享写入、感知动画的更新 | ⏳ |
+| 3 · store | signal 树 store：叶子级订阅、就地路径写入、`reconcile`、动画期间按原因停靠、带类型的 action | ✅ 完成 |
 | 4 · stricterdom | 开发模式阶段检查，定位到具体 effect | ⏳ |
 | 5 · benchmark | 在即时通讯场景下对比 teact、Solid 2.0 与 frameact（Chromium + WebKit，CPU ×4） | ⏳ |
 
