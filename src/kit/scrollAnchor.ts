@@ -10,7 +10,9 @@
 // Under heavy-animation parking the three effects park together and are released in one frame in
 // phase order (the store-gate release goes through a measure task — audit R1): create the anchor under
 // the same heavy-animation scope as the list it anchors, so that they park and release together.
-import { createEffect, createMeasureEffect, createMemo, createMutationEffect, createSignal, frameForcedReflow, untrack, type Accessor } from '../index';
+import {
+  createEffect, createMeasureEffect, createMemo, createMutationEffect, createSignal, frameForcedReflow, requestMeasure, untrack, type Accessor,
+} from '../index';
 import { SHAPE, TRACK } from '../core/symbols';
 
 /**
@@ -159,7 +161,14 @@ export function createScrollAnchor(options: ScrollAnchorOptions): ScrollAnchor {
       const el = untrack(container);
       if (fix === undefined || !el) return;
       el.scrollTop = fix.top;
+      // The scroll event of this write is not the user's. A write the browser clamps (to the end of
+      // the content) or rounds away fires none, and the flag would swallow the user's next scroll:
+      // scroll events are dispatched before the next frame's callbacks, so by the next measure phase
+      // the flag has been consumed or never will be.
       restored = true;
+      requestMeasure(() => {
+        restored = false;
+      });
     },
     { name: 'scrollAnchor.write' },
   );

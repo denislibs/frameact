@@ -121,3 +121,22 @@ describe('the list of item elements', () => {
     expect(listings(all)).toBe(0);
   });
 });
+
+describe('the restore flag', () => {
+  it('is true right after a restore wrote scrollTop, and gone one frame later even if no scroll event consumed it (a clamped write fires none)', async () => {
+    const { root, items, setItems, anchor } = mountList(ids(0, 20));
+    await frame();
+    root.scrollTop = 80;
+    setItems([...ids(-5, 0), ...items()]);
+    await frame();
+    expect(root.scrollTop).toBe(280);
+    expect(anchor.consumeRestored()).toBe(true); // the scroll event of that write would be ignored
+    expect(anchor.consumeRestored()).toBe(false); // once
+
+    setItems([...ids(-10, -5), ...items()]);
+    await frame();
+    expect(root.scrollTop).toBe(480);
+    await frame(); // no scroll event came: the next user scroll must not be swallowed
+    expect(anchor.consumeRestored()).toBe(false);
+  });
+});
