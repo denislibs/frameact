@@ -1,5 +1,5 @@
 import {
-  createEffect, createHeavyAnimationScope, createMemo, createMutationEffect, createRoot, createSignal, getPhase,
+  createEffect, createHeavyAnimationScope, getOwner, createMemo, createMutationEffect, createRoot, createSignal, getPhase,
   onCleanup, onDestroy, onMount, provideHeavyAnimationScope, watchHeavyAnimation,
 } from '../../src/index';
 import { createComponent } from '../../src/dom/component';
@@ -56,6 +56,56 @@ describe('onMount', () => {
     disposeEarly(); // before the first frame: the measure effect is disposed with its owner
     await frame();
     expect(early).toEqual([]);
+  });
+});
+
+describe('onMount — owner and node lifetime', () => {
+  it('fn runs under the owner: onCleanup and createEffect inside it belong to the component (no DEV error), and die with it', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const [n, setN] = createSignal(0);
+    const log: string[] = [];
+    const dispose = createRoot((d) => {
+      onMount(() => {
+        onCleanup(() => log.push('cleanup'));
+        createEffect(() => n(), (v) => { log.push(`effect:${v}`); });
+      });
+      return d;
+    });
+    await frame();
+    setN(1);
+    await flushMicrotasks();
+    expect(log).toEqual(['effect:0', 'effect:1']);
+    dispose();
+    expect(log).toEqual(['effect:0', 'effect:1', 'cleanup']);
+    setN(2);
+    await flushMicrotasks();
+    expect(log).toHaveLength(3); // the effect died with the owner
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('releases its measure-effect node after the first run: the owner holds no child for it any more', async () => {
+    const owner = createRoot(() => {
+      onMount(() => {});
+      return getOwner() as unknown as { _lastChild: unknown };
+    });
+    expect(owner._lastChild).not.toBeNull(); // waiting for the first frame
+    await frame();
+    expect(owner._lastChild).toBeNull();
+  });
+
+  it('still waits for a blocking heavy animation of the owner\'s scope', async () => {
+    const scope = createHeavyAnimationScope();
+    const log: string[] = [];
+    createRoot(() => {
+      provideHeavyAnimationScope(scope);
+      onMount(() => { log.push('mounted'); });
+    });
+    const end = scope.begin(Infinity, true);
+    await frame();
+    expect(log).toEqual([]);
+    end();
+    await frame();
+    expect(log).toEqual(['mounted']);
   });
 });
 

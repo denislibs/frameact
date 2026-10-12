@@ -2,7 +2,7 @@
 // a teact component cares about — "my nodes are attached" (`useEffect(fn, [])`) and "I am gone"
 // (the unmount cleanup) — plus the heavy-animation listener that unsubscribes with its owner.
 import { DEV } from '../env';
-import { getScope, onDispose, scoped } from './core';
+import { dispose, getScope, onDispose, scoped } from './core';
 import { createMeasureEffect } from './frame';
 import type { Computation, Scope } from './types';
 import { currentHeavyAnimationScope, onHeavyAnimation, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
@@ -14,26 +14,49 @@ function isComputation(owner: Scope): boolean {
 }
 
 /**
- * Run `fn` once, after the owner's nodes are attached, in the **measure phase** of the next frame
- * (real layout: `focus()`, `scrollTop`, `getBoundingClientRect` are fine; stricterdom-safe). Never
- * re-runs: it is a measure effect with no dependencies (`fn` runs untracked, inside the apply half).
- * `fn` may return a cleanup, registered on the owner that called `onMount` (it runs on dispose; a
- * DOM write in it goes through `requestMutation`, see `onDestroy`). Replaces teact's
- * `useEffect(fn, [])` and `useLayoutEffect(fn, [])` for mount-time work.
+ * Run `fn` once, after the owner's nodes are attached, in the **measure phase** of the next frame:
+ * it sees real layout (`focus()`, `getBoundingClientRect`, reading `scrollTop`; stricterdom-safe) and
+ * must not write the DOM. A write after mounting (restoring `scrollTop`, a class) goes through
+ * `requestMutation(() => …)`. Never re-runs: `fn` runs untracked, under the owner that called
+ * `onMount`, so `onCleanup`, `createEffect` and friends inside it belong to the component and
+ * go with it (Solid parity). `fn` may also return a cleanup, registered on that owner (it runs on
+ * dispose, whatever the phase: do not read layout in it, and write the DOM through `requestMutation`;
+ * save state like a scroll position from an event handler instead, see `onDestroy`). Replaces
+ * teact's `useEffect(fn, [])` and `useLayoutEffect(fn, [])` for mount-time work.
+ *
+ * A blocking heavy animation of the owner's scope delays `fn` until it ends (the usual gating). The
+ * effect that carries `fn` frees itself after that first run: a mounted component keeps nothing.
+ *
+ * ```ts
+ * onMount(() => {
+ *   const top = state.ui.chatListScroll; // read in the measure phase
+ *   requestMutation(() => { list.scrollTop = top; }); // write in the mutate phase
+ * });
+ * ```
  */
 export function onMount(fn: () => void | (() => void)): void {
   const owner = getScope();
+  let carrier: Scope | null = null;
   createMeasureEffect(
-    () => undefined,
     () => {
-      const cleanup = fn();
-      if (typeof cleanup === 'function') {
-        if (owner === null) {
-          if (DEV) console.warn('[frameact] onMount: the cleanup returned has no owner to run on (onMount was called outside a component).');
-          return;
-        }
-        scoped(() => onDispose(cleanup), owner);
+      carrier = getScope(); // inside a compute the current scope is the effect node itself
+      return undefined;
+    },
+    () => {
+      // One run is all it does: release the node now (the owner's child list, its dependency links).
+      if (carrier !== null) {
+        const self = carrier;
+        carrier = null;
+        dispose.call(self);
       }
+      scoped(() => {
+        const cleanup = fn();
+        if (typeof cleanup === 'function') {
+          if (owner === null) {
+            if (DEV) console.warn('[frameact] onMount: the cleanup returned has no owner to run on (onMount was called outside a component).');
+          } else onDispose(cleanup);
+        }
+      }, owner);
     },
     { name: 'onMount' },
   );
@@ -46,7 +69,9 @@ export function onMount(fn: () => void | (() => void)): void {
  * synchronously at dispose, whatever the phase; the owner's own DOM is detached by its slot's
  * apply-cleanup (deferred to the mutate phase by the core), but a write `fn` makes to the live DOM
  * outside that subtree (`document.body.classList`, a portal target) must be wrapped in
- * `requestMutation(() => …)`.
+ * `requestMutation(() => …)`. `fn` often runs in the mutate phase, so it must not read layout
+ * (`scrollTop`, `getBoundingClientRect`: a forced reflow there): keep what you need to save, such as
+ * a scroll position, up to date from an event handler (where reading is legal) and save that value.
  */
 export function onDestroy(fn: () => void): void {
   const owner = getScope();
