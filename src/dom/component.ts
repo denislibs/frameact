@@ -1,28 +1,27 @@
 import { DEV } from '../env';
 import { compute, createScope, getScope } from '../core/core';
 import { createRenderEffect } from '../core/frame';
-import type { Computation } from '../core/types';
-import { createMemo, untrack } from '../index';
+import type { Scope } from '../core/types';
+import { createMemo } from '../index';
 import { flatten } from './insert';
 
 export type Component<P = Record<string, never>> = (props: P) => unknown;
 
 /**
  * Compiler primitive: `createComponent(Comp, props, name)`. Runs the component once, untracked
- * (reads inside the body never subscribe the caller). In DEV every component gets its own owner
- * scope labelled with `name` (the tag as written, from the compiler's sourceNames) — the
+ * (reads inside the body never subscribe the caller). Every component gets its own owner scope; in
+ * DEV it is labelled with `name` (the tag as written, from the compiler's sourceNames) — the
  * attribution path `Message > MessageMeta > span.textContent` (plan 4) walks these labels.
  */
 export function createComponent<P>(Comp: Component<P>, props: P, name?: string): unknown {
-  if (DEV) {
-    if (typeof Comp !== 'function') {
-      throw new Error(`[frameact] createComponent: <${name ?? String(Comp)}> is not a component function`);
-    }
-    const scope = createScope();
-    (scope as Computation).id = name ?? (Comp.name || 'component');
-    return compute(scope, () => Comp(props || ({} as P)), null);
+  if (DEV && typeof Comp !== 'function') {
+    throw new Error(`[frameact] createComponent: <${name ?? String(Comp)}> is not a component function`);
   }
-  return untrack(() => Comp(props || ({} as P)));
+  // The scope exists in prod too: provideContext/onError/onCleanup in a component body must stay
+  // local to the component, and DEV and prod must not differ in owner structure.
+  const scope = createScope() as Scope & { id?: string };
+  if (DEV) scope.id = name ?? (Comp.name || 'component');
+  return compute(scope, () => Comp(props || ({} as P)), null);
 }
 
 /** Compiler primitive: a binding effect. `options.name` is the compiler's binding label (`div.class`). */
