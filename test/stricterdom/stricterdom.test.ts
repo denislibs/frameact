@@ -381,3 +381,34 @@ it('a throwing console.error (a "fail on console" setup) with the default handle
   await flushMicrotasks();
   expect(el.className).toBe('c1'); // the applies ran
 });
+
+it('a handler that writes to <body> (an overlay) or reads layout does not re-enter itself: one call per violation, no loop, no recursion', async () => {
+  const el = attached();
+  let calls = 0;
+  setHandler((error) => {
+    calls++;
+    const row = document.createElement('div'); // the natural overlay: a row per violation, appended to <body>
+    row.textContent = error.message;
+    document.body.appendChild(row);
+    void row.getBoundingClientRect(); // ... positioned by measuring it
+  });
+  el.className = 'x'; // a mutation violation (phase: measure)
+  for (let i = 0; i < 20; i++) await flushMicrotasks();
+  expect(calls).toBe(1);
+  requestMutation(() => { void el.offsetHeight; }); // a measurement violation: the handler's own layout read is not reported
+  flushSync();
+  for (let i = 0; i < 20; i++) await flushMicrotasks();
+  expect(calls).toBe(2);
+  // a throwing handler still reaches the layout read's caller, and the guard is released afterwards
+  setHandler(() => { throw new Error('boom'); });
+  let thrown: unknown;
+  requestMutation(() => {
+    try { void el.offsetHeight; } catch (error) { thrown = error; }
+  });
+  flushSync();
+  expect((thrown as Error).message).toBe('boom');
+  setHandler((error) => { violations.push(error); });
+  requestMutation(() => { void el.offsetHeight; });
+  flushSync();
+  expect(violations.map(summary)).toEqual(['measure:offsetHeight:mutate:-']);
+});

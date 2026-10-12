@@ -66,6 +66,8 @@ let isStrict = false;
 let forcedPhase: Phase | null = null;
 /** `suppressStrict` nesting depth: > 0 silences both checks. */
 let suppressed = 0;
+/** True while the violation handler runs: what it reads or writes (an overlay in <body>) is not a violation. */
+let reporting = false;
 let observer: MutationObserver | undefined;
 let unsubscribePhase: (() => void) | undefined;
 /** The phase the pending mutation records were produced in (mirrors the scheduler; updated by the phase listener). */
@@ -239,11 +241,27 @@ function clearLayoutDetectors() {
 }
 
 function onMeasure(name: string) {
-  if (suppressed > 0) return;
+  if (!isStrict || suppressed > 0 || reporting) return;
   const phase = effectivePhase();
   if (phase === 'measure') return;
   // Called synchronously from the patched getter: a throwing handler reaches the caller.
-  onError(new StrictViolationError('measure', name, phase, runningPath(), null));
+  report(new StrictViolationError('measure', name, phase, runningPath(), null));
+}
+
+/**
+ * Hand a violation to the handler. Re-entrancy guard: a handler that writes to <body> (a dev
+ * overlay) or reads layout (to position it) would otherwise report itself forever / recurse; its
+ * own records are discarded, its reads are not checked.
+ */
+function report(error: StrictViolationError) {
+  if (reporting) return;
+  reporting = true;
+  try {
+    onError(error);
+  } finally {
+    reporting = false;
+    observer?.takeRecords();
+  }
 }
 
 // ---- mutation observer --------------------------------------------------------
@@ -298,7 +316,7 @@ function checkRecords(records: MutationRecord[], phase: Phase) {
     if (attributeName === 'open' && target instanceof HTMLDetailsElement) continue; // toggled by the user agent
     const detail = type === 'attributes' ? attributeName! : type;
     try {
-      onError(new StrictViolationError('mutation', detail, phase, path, target));
+      report(new StrictViolationError('mutation', detail, phase, path, target));
     } catch (error) {
       // A throwing handler must not break a drain or the observer callback (nor a throwing console.error under it).
       reportDevHookError('stricterdom violation handler', error);
