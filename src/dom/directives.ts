@@ -8,16 +8,30 @@ import { untrack } from '../index';
  */
 export type Directive = (el: Element, value: unknown) => void;
 
+// Two tables: the built-ins (controlled inputs have invariants — rollback, caret, IME — that a
+// same-named user directive would silently break) and the user's. A user registration can neither
+// take a reserved or built-in name nor replace an earlier one, whatever the module load order.
+const RESERVED = new Set(['value', 'checked']);
+const builtins = new Map<string, Directive>();
 const registry = new Map<string, Directive>();
 
-/** Register `use:<name>` (built-ins: `value`, `checked`). */
+/** Register `use:<name>`. `value` and `checked` are built in; a taken name is a DEV error and is ignored. */
 export function defineDirective(name: string, fn: Directive): void {
+  if (RESERVED.has(name) || builtins.has(name) || registry.has(name)) {
+    if (DEV) console.error(`[frameact] defineDirective('${name}') ignored: the name is ${RESERVED.has(name) || builtins.has(name) ? 'a built-in' : 'already registered'}. Pick another name.`);
+    return;
+  }
   registry.set(name, fn);
+}
+
+/** Internal: the built-ins (`value`, `checked`, registered by the module that implements them). */
+export function defineBuiltinDirective(name: string, fn: Directive): void {
+  builtins.set(name, fn);
 }
 
 /** `setAttribute(el, 'use:<name>', value)` lands here. */
 export function runDirective(el: Element, name: string, value: unknown): void {
-  const directive = registry.get(name);
+  const directive = builtins.get(name) ?? registry.get(name);
   if (!directive) {
     if (DEV) console.error(`[frameact] unknown directive use:${name} — register it with defineDirective('${name}', fn)`);
     return;
