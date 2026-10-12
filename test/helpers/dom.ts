@@ -1,6 +1,7 @@
 import { installFakeRaf } from './raf';
 import { frame as fireFrame } from './frame';
 import { flushMicrotasks } from './micro';
+import { clearDelegatedEvents } from '../../src/dom/events';
 
 /**
  * Per-file DOM harness: fake rAF (frames fire only through `frame()`), pending frames drained in
@@ -17,6 +18,7 @@ export function useDomHarness() {
       await flushMicrotasks();
     }
     raf.uninstall();
+    clearDelegatedEvents();
     document.body.textContent = '';
   });
   return {
