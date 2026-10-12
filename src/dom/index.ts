@@ -1,3 +1,5 @@
+// frameact/dom — the runtime the compiler targets (`moduleName: "frameact/dom"`) plus render, the
+// flow components, controlled-input directives and imperative helpers (spec §3.3).
 export { template, type TemplateFactory } from './template';
 export { strictHooks } from './strict';
 export {
@@ -9,7 +11,7 @@ export { render } from './render';
 export {
   createComponent, effect, memo, getOwner, claimElement, children, type Component, type ChildrenReturn,
 } from './component';
-export { mergeProps, type PropsSource } from './props';
+export { mergeProps, spread, assign, ref, applyRef, readShallow, type PropsSource } from './props';
 export { For, type ForBaseProps, type Accessor, type Each } from './list';
 export {
   className, classList, toggleClassToken, classTokens, addExtraClass, removeExtraClass, toggleExtraClass,
@@ -18,3 +20,5 @@ export { style, setStyleProperty, setExtraStyles } from './styles';
 export { setAttribute, setAttributeNS, setBoolAttribute, setProperty } from './attributes';
 export { addEvent, delegateEvents, clearDelegatedEvents, setListener, EVENT_KEY } from './events';
 export { defineDirective, use, type Directive } from './directives';
+export { Show, Switch, Match, Dynamic, Portal, type MatchProps } from './flow';
+export { HeavyAnimationScope } from './scope';
