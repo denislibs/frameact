@@ -442,6 +442,31 @@ acceptance-тестом (§5); ожидаемый состав: `template`, `ins
   всё равно применяется через дифф токенов (фикстуры компилятора должны работать).
 - **Стили.** Объектная форма — per-property дифф; строковая — `cssText`.
   Документируется: строковый `style` несовместим с `setExtraStyles`.
+- **Безопасность записи атрибутов.** Рантайм не отправляет строку в HTML-приёмник, кроме
+  статического HTML `template()` и явно названных `innerHTML` / `textContent` / `prop:srcdoc`.
+  `setAttribute` (в него компилятор опускает `attr:`, `bool:`, spread и голые атрибуты)
+  проверяет каждую запись, имена — без учёта регистра (`HREF`, `formAction`, `ONCLICK`),
+  значения — после приведения к строке один раз (`URL`, `String`, объект с `toString`):
+  - `on*` (`onclick`, в том числе через `attr:`): отказ для любого значения, кроме
+    `null`/`undefined`/`false` (удаление). Обработчики задаются только через `onClick={fn}`.
+  - URL-атрибуты (`href`, `src`, `action`, `formaction`, `xlink:href`, `poster`, `srcset`,
+    `data`, `background`, `codebase`, `manifest`, `longdesc`, `cite`, `ping`): `javascript:`
+    и `vbscript:` отклоняются везде; `data:` отклоняется на навигационных атрибутах и
+    допускается на `src`/`poster`/`srcset` только для MIME `image/`, `audio/`, `video/`;
+    остальные схемы (http, https, mailto, tel, blob, относительные, свои вроде `tg:`)
+    разрешены. Перед проверкой снимаются C0-символы и ведущие пробелы, схема приводится к
+    нижнему регистру (как это делает парсер URL). В SVG-анимации (`to`, `from`, `by`,
+    `values`) `javascript:`/`vbscript:` отклоняются всегда.
+  - `srcdoc` — HTML-приёмник, как `innerHTML`: через `setAttribute` отклоняется (DEV
+    `console.error`); осознанная запись — `prop:srcdoc={html}` (только доверенный HTML).
+  - Что рантайм не контролирует: `prop:href` и всё, что компилятор опускает в прямую
+    запись свойства, а также `setProperty`. Не подставляйте туда недоверенные значения.
+  - Делегирование событий устойчиво к DOM clobbering (`<form><input name="parentNode">`):
+    структура читается через геттеры прототипов, портальный host принимается только как
+    Node вне поддерева, обработчик — только функция или объект с `handleEvent`.
+    `currentTarget`/`target` после диспетчеризации возвращаются к нативным значениям.
+  - Директивы `value` и `checked` зарезервированы; `defineDirective` на занятое имя —
+    DEV `console.error`, регистрация игнорируется.
 - `render(code, el)`: `createRoot` → создать поддерево; первый apply корневого
   `insert` синхронный (§3.2), attach в attached-контейнер — через
   `forceMutation(cb, el)` stricterdom'а. Монтирование синхронное, `flushSync` не нужен.
