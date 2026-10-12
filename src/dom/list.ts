@@ -1,6 +1,7 @@
 // Manual order adapted from teact (MIT, © 2022 Alexander Zinchuk) — renderFastListChildren / teactOrderKey.
 import { DEV } from '../env';
-import { createMemo, mapArray, untrack, type Accessor } from '../index';
+import { handleError } from '../core/core';
+import { createMemo, getOwner, mapArray, untrack, type Accessor } from '../index';
 import { tagManualOrder } from './reconcile';
 
 export type { Accessor };
@@ -61,6 +62,15 @@ export function For<T>(
 
 let warnedManualRow = false;
 
+/** Through the owner's `onError` handlers (as mapArray reports a failed row), else the console. */
+function reportOrderKeyError(error: unknown): void {
+  try {
+    handleError(getOwner(), error);
+  } catch (unhandled) {
+    console.error('[frameact] <For order="manual">: orderKey failed', unhandled);
+  }
+}
+
 const isNode = (row: unknown): row is Node => row != null && !!(row as Node).nodeType;
 
 /**
@@ -102,7 +112,7 @@ function manualOrder<T>(
         key = untrack(() => keyFn(items[j]));
       } catch (error) {
         // a throwing orderKey must not lose the list update: that row keeps its place
-        console.error('[frameact] <For order="manual">: orderKey failed', error);
+        reportOrderKeyError(error);
         key = prevKeys.has(row) ? prevKeys.get(row) : undefined;
       }
       nextKeys.set(row, key);

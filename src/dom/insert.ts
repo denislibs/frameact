@@ -63,6 +63,8 @@ export function flatten(children: any, skipNonRendered: boolean, doNotUnwrap: bo
   return children;
 }
 
+let warnedNestedManual = false;
+
 function flattenArray(children: any[], results: any[], skipNonRendered: boolean, doNotUnwrap: boolean): boolean {
   let needsUnwrap = false;
   for (let i = 0; i < children.length; i++) {
@@ -77,6 +79,10 @@ function flattenArray(children: any[], results: any[], skipNonRendered: boolean,
       while (typeof child === 'function' && !child.length);
     }
     if (Array.isArray(child)) {
+      if (DEV && !warnedNestedManual && manualOrderOf(child)) {
+        warnedNestedManual = true;
+        console.warn('[frameact] <For order="manual"> nested in a larger array loses its manual order (it needs its own slot); the ordinary diff is used');
+      }
       needsUnwrap = flattenArray(child, results, skipNonRendered, doNotUnwrap) || needsUnwrap;
     } else if (skipNonRendered && (child == null || child === true || child === false || child === '')) {
       // not rendered

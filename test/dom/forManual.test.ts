@@ -1,4 +1,4 @@
-import { createRoot, createSignal, untrack } from '../../src/index';
+import { createRoot, createSignal, onError, untrack } from '../../src/index';
 import { insert } from '../../src/dom/insert';
 import { createComponent } from '../../src/dom/component';
 import { For } from '../../src/dom/list';
@@ -241,12 +241,10 @@ it('[1,2,3] -> [100,101,1,102,3]: every contiguous run goes before one anchor, k
   const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2), chat(3)));
   mount(ul, list, (c) => c.rank);
   const [l1, l2, l3] = Array.from(ul.children);
-  const [c1, c2, c3] = list();
+  const [c1, , c3] = list();
   const w = watch(ul);
   setList([chat(100, 0), chat(101, 0), c1, chat(102, 0), c3]);
   await frame();
-  // row 2 is dropped from the new list
-  expect(c2.id).toBe(2);
   expect(ids(ul)).toEqual(['100', '101', '1', '102', '3']);
   expect(w.spies.replaceChild).not.toHaveBeenCalled();
   expect(w.spies.insertBefore.mock.calls.map((c) => c[1])).toEqual([l1, l1, l3]);
@@ -280,14 +278,13 @@ it('an orderKey change moves exactly that one row, once, and nothing else is tou
   const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2), chat(3), chat(4)));
   mount(ul, list, (c) => c.rank);
   const [l1, l2, l3, l4] = Array.from(ul.children);
-  const [c1, c2, c3, c4] = list();
+  const [c1, c2, c3] = list();
   const w = watch(ul);
   setList([chat(4, 0), c1, c2, c3]); // row 4 jumps to the top
   await frame();
   expect(Array.from(ul.children)).toEqual([l4, l1, l2, l3]);
   expect(w.spies.insertBefore).toHaveBeenCalledTimes(1);
   expect(w.touched().filter((n) => n !== l4)).toEqual([]);
-  void c4;
   w.spies.insertBefore.mockClear();
   const [d4, d1, d2, d3] = list();
   setList([d4, d2, d3, { ...d1, rank: 99 }]); // row 1 goes to the bottom
@@ -444,4 +441,62 @@ it('reconcileManual moves a kept node that is out of DOM order but not listed as
   expect(parent.textContent).toBe('bca');
   expect(ins).toHaveBeenCalledTimes(1);
   expect(ins.mock.calls[0][0]).toBe(a);
+});
+
+it('a throwing orderKey reaches onError (no console fallback)', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const ul = container();
+  const handler = vi.fn();
+  const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2)));
+  createRoot(() => {
+    onError(handler);
+    insert(
+      ul,
+      createComponent(
+        () =>
+          For({
+            get each() { return list(); },
+            keyed: (c: Chat) => c.id,
+            order: 'manual',
+            orderKey: (c: Chat) => {
+              if (c.rank === 66) throw new Error('bad key');
+              return c.rank;
+            },
+            children: row,
+          }),
+        {},
+      ),
+    );
+  });
+  const [c1] = list();
+  setList([chat(5, 0), c1, chat(2, 66)]);
+  await frame();
+  expect(ids(ul)).toEqual(['5', '1', '2']);
+  expect(handler).toHaveBeenCalledTimes(1);
+  expect((handler.mock.calls[0][0] as Error).message).toBe('bad key');
+  expect(err.mock.calls.some((c) => String(c[0]).includes('orderKey failed'))).toBe(false);
+});
+
+it('DEV: For order="manual" nested in a larger array warns once and still renders (ordinary diff)', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const ul = container();
+  const header = document.createElement('h1');
+  const [list, setList] = createSignal<Chat[]>(rows(chat(1), chat(2)));
+  createRoot(() => {
+    insert(
+      ul,
+      createComponent(
+        () => [
+          header,
+          For({ get each() { return list(); }, keyed: (c: Chat) => c.id, order: 'manual', orderKey: (c: Chat) => c.rank, children: row }),
+        ],
+        {},
+      ),
+    );
+  });
+  const [c1] = list();
+  setList([chat(3, 0), c1]);
+  await frame();
+  expect(Array.from(ul.children).map((e) => (e as HTMLElement).dataset.id ?? e.tagName)).toEqual(['H1', '3', '1']);
+  expect(warn.mock.calls.filter((c) => String(c[0]).includes('nested in a larger array'))).toHaveLength(1);
 });

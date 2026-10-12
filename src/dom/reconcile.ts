@@ -155,6 +155,9 @@ export function reconcileManual(
   }
   // Stable nodes: already in the DOM, not moved, in increasing DOM order. Walking backwards gives
   // every position the anchor to insert before.
+  // The `at > last` test is the safety branch for a `next` that is not in DOM order (the memo ran
+  // ahead of the applied DOM): theoretical for `For`, and greedy, not an LIS, so it may move more
+  // nodes than the minimum. `moved` carries the intended moves.
   const length = next.length;
   const stable: boolean[] = [];
   let last = -1;
