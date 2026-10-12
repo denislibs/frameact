@@ -653,3 +653,42 @@ describe('is-mode on customized built-ins: native names keep the policy (URL com
     }
   });
 });
+
+describe('is-mode details', () => {
+  beforeEach(expectDevErrors);
+
+  it('a native name goes through the aliases: htmlFor → for', () => {
+    const label = document.createElement('label');
+    createRoot(() => spread(label, { is: 'x-label', htmlFor: 'field' }, true));
+    expect(label.getAttribute('for')).toBe('field');
+  });
+
+  it('a failing native-prototype probe routes the name through setAttribute', () => {
+    const el = document.createElement('section');
+    const doc = el.ownerDocument;
+    const spy = vi.spyOn(doc, 'createElementNS').mockImplementation(() => {
+      throw new Error('probe failed');
+    });
+    try {
+      createRoot(() => spread(el, { is: 'x-s', someName: 'v' }, true));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(el.getAttribute('someName')).toBe('v');
+    expect((el as any).someName).toBeUndefined();
+  });
+
+  it('the spread slot cannot collide with an event literally named s:scroll via on:', async () => {
+    const el = container();
+    const log: string[] = [];
+    const [props, setProps] = createSignal<Record<string, unknown>>({ onScroll: () => log.push('spread') });
+    createRoot(() => spread(el, () => props(), true));
+    setAttribute(el, 'on:s:scroll', () => log.push('colon'));
+    el.dispatchEvent(new Event('s:scroll'));
+    expect(log).toEqual(['colon']);
+    setProps({}); // must find and remove its own listener
+    await frame();
+    el.dispatchEvent(new Event('scroll'));
+    expect(log).toEqual(['colon']);
+  });
+});

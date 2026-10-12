@@ -246,15 +246,25 @@ function setProp(node: Element, name: string, value: unknown): void {
 
 const HYPERLINK_TAGS = new Set(['a', 'area']);
 const URL_SETTERS = new Set(['protocol', 'host', 'hostname', 'pathname', 'search', 'hash', 'port', 'username', 'password', 'origin']);
-const nativePrototypes = new Map<string, object>();
+const nativePrototypes = new WeakMap<Document, Map<string, object | null>>();
 
-/** The prototype of a freshly made element of the same tag: what the browser itself defines on it. */
-function nativePrototype(node: Element): object {
+/**
+ * The prototype of a freshly made element of the same tag: what the browser itself defines on it.
+ * `null` when the probe fails; the caller then treats every name as native (the safe path).
+ */
+function nativePrototype(node: Element): object | null {
+  const doc = node.ownerDocument;
+  let byTag = nativePrototypes.get(doc);
+  if (!byTag) nativePrototypes.set(doc, (byTag = new Map()));
   const key = `${node.namespaceURI}|${node.localName}`;
-  let proto = nativePrototypes.get(key);
-  if (!proto) {
-    proto = Object.getPrototypeOf(node.ownerDocument.createElementNS(node.namespaceURI, node.localName)) as object;
-    nativePrototypes.set(key, proto);
+  let proto = byTag.get(key);
+  if (proto === undefined) {
+    try {
+      proto = Object.getPrototypeOf(doc.createElementNS(node.namespaceURI, node.localName)) as object;
+    } catch {
+      proto = null;
+    }
+    byTag.set(key, proto);
   }
   return proto;
 }
@@ -283,14 +293,17 @@ function assignCustomProp(node: Element, prop: string, value: unknown): void {
     }
     // ...and any name the native element already has (reflecting or not) takes the normal path, the
     // attribute with its policy. Only names the built-in does not know are custom properties.
-    if (isPolicedName(name) || isPolicedName(prop) || name in nativePrototype(node)) {
-      return setAttribute(node, isPolicedName(name) || !isPolicedName(prop) ? name : prop, value);
+    const native = nativePrototype(node);
+    if (isPolicedName(name) || isPolicedName(prop) || native === null || name in native) {
+      const attribute = isPolicedName(name) || !isPolicedName(prop) ? name : prop;
+      return setAttribute(node, Aliases[attribute] || attribute, value);
     }
   }
   setProp(node, name, value);
 }
 
-const SPREAD_SLOT = 's:';
+// A NUL cannot occur in an event name written in a template, so this slot never collides with `on:<name>`.
+const SPREAD_SLOT = '\u0000s:';
 
 function assignProp(
   node: Element,
