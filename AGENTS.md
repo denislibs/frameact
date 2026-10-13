@@ -20,17 +20,17 @@ split into phases. The target consumer is a Telegram Web A–class messenger. MI
 | `src/dom/` | runtime the Solid 2.0 JSX compiler targets (`frameact/dom`): `template`, `insert`, `spread`, `For`/`Show`/`Switch`/`Dynamic`/`Portal`, controlled inputs, classes/styles/attributes, event delegation, `natives.ts` |
 | `src/store/` | `frameact/store`: signal-tree store (model B), `reconcile`, actions, heavy-animation parking gate |
 | `src/stricterdom/` | `frameact/stricterdom`: DEV phase checks with effect attribution, run profiler |
-| `src/kit/` | `frameact/kit`: `Transition`, `ShowTransition`, `InfiniteScroll`, `createScrollAnchor` (arrives with PR #11) |
+| `src/kit/` | `frameact/kit`: `Transition`, `ShowTransition`, `InfiniteScroll`, `createScrollAnchor` |
 | `src/vite/` | `frameact/vite`: Vite plugin = Solid babel plugin pinned to `moduleName: "frameact/dom"` + DEV source lints |
 | `src/jsx/`, `src/jsx-runtime.ts` | JSX types only (`jsx: "preserve"`, the compiler lowers JSX) |
 | `src/env.ts` | the `DEV` flag |
 | `test/` | vitest + jsdom, mirrors `src/` (`test/core`, `test/dom`, `test/store`, …); `test/helpers/`; `test/chrome/` is the real-Chrome lane |
 | `bench/` | `reactivity/` (js-reactivity-benchmark adapter), `store/` (micro-benches), `dom/` (vitest benches) |
-| `docs/` | `superpowers/specs` (design), `superpowers/plans` (per-feature plans), `guides/` (porting guide, after PR #11), `assets/` (README media; do not touch) |
+| `docs/` | `superpowers/specs` (design), `superpowers/plans` (per-feature plans), `guides/` (porting guide), `assets/` (README media; do not touch) |
 | `.claude/skills/` | `perf-review`, `appsec-review` (see "Review skills") |
 
 Public entry points are listed in `package.json` `exports`: `frameact`, `frameact/dom`, `frameact/scheduler`,
-`frameact/store`, `frameact/stricterdom`, `frameact/vite`, `frameact/jsx-runtime` (+ `frameact/kit` after PR #11). A new
+`frameact/store`, `frameact/stricterdom`, `frameact/vite`, `frameact/jsx-runtime`, `frameact/kit`. A new
 entry needs the `exports` line, a `paths` entry in `tsconfig.json` and an alias in `vitest.config.ts`.
 
 ## Commands
