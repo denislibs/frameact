@@ -1,0 +1,1 @@
+{"framework":"frameact-v0.0.0-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":1.0921335220336914,"max":1.0921335220336914,"median":1.0921335220336914,"mean":1.0921335220336914,"stddev":null,"values":[1.0921335220336914]}}}
