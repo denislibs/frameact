@@ -2,6 +2,7 @@ import { DEV } from '../env';
 import {
   assertApplyOwner,
   callUnowned,
+  computationConstructor,
   computationPrototype,
   F_INIT,
   F_LIVE,
@@ -279,6 +280,7 @@ function Effect(
   if (storeGatedSchedules.has(schedule)) this._flags |= F_STORE_GATED;
 }
 Effect.prototype = computationPrototype;
+Object.setPrototypeOf(Effect, computationConstructor); // V8 counts the base fields towards the in-object size (core.ts)
 
 /**
  * Recompute the node's compute half. Returns false if the node died or threw, and also when the

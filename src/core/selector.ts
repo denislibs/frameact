@@ -1,5 +1,5 @@
 // Adapted from maverick-js/signals v6 (MIT, © 2022 Rahim Alwer) — https://github.com/maverick-js/signals
-import { computationPrototype, initComputationNode, onDispose, read, write } from './core';
+import { computationConstructor, computationPrototype, initComputationNode, onDispose, read, write } from './core';
 import { createEffect } from './effects';
 import { Computation, ReadSignal } from './types';
 
@@ -58,6 +58,7 @@ function Selector<T>(this: Selector<T>, key: T, initialValue: boolean, nodes: Ma
 }
 
 const SelectorProto = (Selector.prototype = Object.create(computationPrototype));
+Object.setPrototypeOf(Selector, computationConstructor); // V8 counts the base fields towards the in-object size (core.ts)
 // `call` is the disposal entry (the node registers itself with onDispose); reads go through read.bind.
 SelectorProto.call = function (this: Selector) {
   this._refs -= 1;

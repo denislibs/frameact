@@ -614,21 +614,25 @@ function notifySubsAs(node: Computation, asStore: boolean) {
  * one kind share one hidden class (the vendored version left some fields on the prototype and
  * added others later — signals, `dirty` signals, computeds and effects all ended up with
  * different shapes, making read/write/notify polymorphic). Scope fields come first.
+ *
+ * Memory pass (frameact): the assignments are written out as `this.x = …` statements INSIDE the
+ * constructors, not in a helper, and a constructor that extends another node kind (Effect, Selector)
+ * has that constructor as its own prototype. V8 sizes a constructor's in-object area from the
+ * syntactic `this.x =` count summed over the constructor's own prototype chain; fields assigned by a
+ * helper are not counted, and the overflow lands in an out-of-object PropertyArray (a second
+ * allocation per node, slower field access). Measured in Chrome: an effect node was 108 B in-object
+ * + a 56 B PropertyArray; now 140 B in one object.
  */
-function initScope(node: Scope) {
-  node[SCOPE] = null;
-  node._state = STATE_CLEAN;
-  node._lastChild = null;
-  node._prevSibling = null;
-  node._nextSibling = null;
-  node._context = defaultContext;
-  node._handlers = null;
-  node._disposal = null;
-  node._compute = null;
-}
-
 const ScopeNode = function Scope(this: Scope) {
-  initScope(this);
+  this[SCOPE] = null;
+  this._state = STATE_CLEAN;
+  this._lastChild = null;
+  this._prevSibling = null;
+  this._nextSibling = null;
+  this._context = defaultContext;
+  this._handlers = null;
+  this._disposal = null;
+  this._compute = null;
   this._mapMemo = undefined; // one hidden class for every ScopeNode (map scopes included)
   if (currentScope) currentScope.append(this);
 };
@@ -660,42 +664,58 @@ export function createScope(): Scope {
 }
 
 /**
- * @internal Initialise `node` with the complete computation field set (scope fields first), as the
- * Computation constructor does. Effects and selector nodes have their own constructors (sharing
- * the Computation prototype chain) and call this first. `owned`: append to the current scope.
+ * The computation constructor: the complete field set (scope fields first), as before through
+ * `initComputationNode`. `owned`: append to the current scope. Effects and selector nodes have their
+ * own constructors (sharing the Computation prototype chain): they call this one with `.call(this, …)`
+ * and set it as their constructor's prototype (`Object.setPrototypeOf(Effect, ComputeNode)`), so V8
+ * counts these assignments towards their in-object size too (see above).
  */
-export function initComputationNode(
+const ComputeNode = function Computation(
+  this: Computation,
+  initialValue: any,
+  compute: any,
+  options: ComputedSignalOptions<any, any> | undefined,
+  owned = true,
+) {
+  if (DEV && compute) assertApplyOwner();
+  this[SCOPE] = null;
+  this._state = compute ? STATE_DIRTY : STATE_CLEAN;
+  this._lastChild = null;
+  this._prevSibling = null;
+  this._nextSibling = null;
+  this._context = defaultContext;
+  this._handlers = null;
+  this._disposal = null;
+  this._compute = compute || null;
+  if (owned && currentScope) currentScope.append(this);
+  this._flags = 0;
+  this._effect = false;
+  this._writtenAt = 0;
+  this._deps = null;
+  this._depsTail = null;
+  this._subs = null;
+  this._subsTail = null;
+  this._value = initialValue;
+  this._changed = (options && options.dirty) || isNotEqual;
+  if (DEV) this.id = options?.id ?? (compute ? 'computed' : 'signal');
+};
+
+/**
+ * @internal Initialise `node` with the complete computation field set, as the Computation
+ * constructor does (it IS the constructor, called as a function). Effects and selector nodes call it
+ * first; their constructors must also have `computationConstructor` as prototype (in-object sizing).
+ */
+export const initComputationNode: (
+  this: void,
   node: Computation,
   initialValue: any,
   compute: any,
   options: ComputedSignalOptions<any, any> | undefined,
   owned: boolean,
-) {
-  initScope(node);
-  if (owned && currentScope) currentScope.append(node);
-  node._state = compute ? STATE_DIRTY : STATE_CLEAN;
-  node._flags = 0;
-  node._effect = false;
-  node._writtenAt = 0;
-  node._deps = null;
-  node._depsTail = null;
-  node._subs = null;
-  node._subsTail = null;
-  node._value = initialValue;
-  node._compute = compute || null;
-  node._changed = (options && options.dirty) || isNotEqual;
-  if (DEV) node.id = options?.id ?? (compute ? 'computed' : 'signal');
-}
+) => void = (node, initialValue, compute, options, owned) => (ComputeNode as any).call(node, initialValue, compute, options, owned);
 
-const ComputeNode = function Computation(
-  this: Computation,
-  initialValue: any,
-  compute: any,
-  options?: ComputedSignalOptions<any, any>,
-) {
-  if (DEV && compute) assertApplyOwner();
-  initComputationNode(this, initialValue, compute, options, true);
-};
+/** @internal the constructor function node kinds extend (prototype of their constructor, not of their instances) */
+export const computationConstructor: Function = ComputeNode;
 
 /** @internal the prototype every computation kind (signals, computeds, effects, selector nodes) shares */
 export const computationPrototype: Computation = ComputeNode.prototype;
