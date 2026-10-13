@@ -230,6 +230,27 @@ describe('arrays', () => {
   });
 });
 
+describe('shape version (Symbol.for("frameact.shape"), the kit\'s O(1) change detector)', () => {
+  const SHAPE = Symbol.for('frameact.shape');
+
+  it('subscribes to the shape only, copies nothing, and changes on every shape write; undefined on objects', () => {
+    const [state, setState] = createStore(initial());
+    let runs = 0;
+    const version = createRoot(() => createMemo(() => { runs++; return (state.messages.a as any)[SHAPE] as number; }));
+    const before = storeStats.leafSignals;
+    const v0 = version();
+    expect(typeof v0).toBe('number');
+    expect(storeStats.leafSignals - before).toBe(3); // `messages`, `a` and the shape signal
+    setState('messages', 'a', 0, 'text', 'ONE');
+    expect(version()).toBe(v0);
+    expect(runs).toBe(1); // item edit: not a shape change
+    setState('messages', 'a', produce((l) => { l.push({ id: 3, text: 'three' }); }));
+    expect(version()).not.toBe(v0);
+    expect(runs).toBe(2);
+    expect((state.messages as any)[SHAPE]).toBeUndefined(); // an object, not an array
+  });
+});
+
 describe('snapshots and user objects (req. 8)', () => {
   it('no service fields on raw objects; toEqual/JSON work on the proxy; structuredClone via unwrap/snapshot', () => {
     const init = initial();

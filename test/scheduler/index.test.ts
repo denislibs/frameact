@@ -5,7 +5,7 @@ import pkg from '../../package.json';
 it('frameact/scheduler exposes the fasterdom and scheduler utilities', () => {
   for (const name of [
     'requestMeasure', 'requestMutation', 'requestNextMutation', 'requestForcedReflow', 'getPhase', 'onPhaseChange',
-    'flushFrameSync', 'onTickEnd', 'onIdle', 'throttleWith', 'throttle',
+    'flushFrameSync', 'onTickEnd', 'onIdle', 'throttleWith', 'throttle', 'throttleWithTickEnd', 'debounce', 'fastRaf',
   ]) {
     expect(typeof (scheduler as any)[name], name).toBe('function');
   }

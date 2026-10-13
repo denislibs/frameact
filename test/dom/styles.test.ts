@@ -26,7 +26,7 @@ it('null removes only the properties the binding applied; imperative extra style
   expect(el.style.marginTop).toBe('2px');
 });
 
-it('string form writes cssText (documented: incompatible with setExtraStyles) and transitions back to objects', () => {
+it('string form writes cssText and transitions back to objects', () => {
   const el = document.createElement('div');
   style(el, 'color: red; margin: 1px');
   expect(el.style.getPropertyValue('color')).toBe('red');
@@ -100,4 +100,72 @@ it('a custom property value with ";" does not set other properties and is DEV-fl
   expect(el.style.background).toBe('');
   expect(err).toHaveBeenCalledTimes(1);
   err.mockRestore();
+});
+
+it('extra styles survive string style= writes (teact parity): set before or between, re-applied after every cssText write, removed on null', () => {
+  const el = document.createElement('div');
+  setExtraStyles(el, { height: '40px', '--x': 1 });
+  style(el, 'color: red');
+  expect(el.style.color).toBe('red');
+  expect(el.style.height).toBe('40px');
+  expect(el.style.getPropertyValue('--x')).toBe('1');
+  setExtraStyles(el, { transition: 'none' }); // accumulates: height stays registered
+  style(el, 'color: blue; margin: 1px');
+  expect(el.style.color).toBe('blue');
+  expect(el.style.height).toBe('40px');
+  expect(el.style.transition).toBe('none');
+  expect(el.style.getPropertyValue('--x')).toBe('1');
+  style(el, null); // cssText cleared: the extras come back
+  expect(el.style.color).toBe('');
+  expect(el.style.height).toBe('40px');
+  style(el, { padding: '2px' }, 'color: blue; margin: 1px'); // string -> object clears cssText too
+  expect(el.style.padding).toBe('2px');
+  expect(el.style.height).toBe('40px');
+  setExtraStyles(el, { height: null, '--x': undefined });
+  expect(el.style.height).toBe('');
+  style(el, 'color: green');
+  expect(el.style.height).toBe(''); // removed from the registry: not re-applied
+  expect(el.style.getPropertyValue('--x')).toBe('');
+  expect(el.style.transition).toBe('none');
+});
+
+it('a bound string style= and the extras of another element do not mix; the registry is per element', () => {
+  const a = document.createElement('div');
+  const b = document.createElement('div');
+  setExtraStyles(a, { height: '1px' });
+  style(b, 'color: red');
+  expect(b.style.height).toBe('');
+});
+
+describe('setExtraStyles: names are CSS properties, never JS properties of the declaration', () => {
+  it('cssText, setProperty and removeProperty as keys are inert: no overlay is written, no method is shadowed', () => {
+    const el = document.createElement('div');
+    setExtraStyles(el, { cssText: 'position:fixed;inset:0;background:red', setProperty: 'x', removeProperty: 'y', item: 'z' } as never);
+    style(el, 'color: blue');
+    expect(el.style.cssText).toBe('color: blue;');
+    expect(el.style.position).toBe('');
+    style(el, { width: '1px' }); // would throw "setProperty is not a function" if the method were shadowed
+    expect(el.style.width).toBe('1px');
+    expect(typeof el.style.setProperty).toBe('function');
+    expect(Object.hasOwn(el.style, 'setProperty')).toBe(false);
+  });
+
+  it('__proto__ as a key (JSON) touches no prototype', () => {
+    const el = document.createElement('div');
+    const styles = JSON.parse('{"__proto__": "polluted", "color": "red"}') as Record<string, string>;
+    setExtraStyles(el, styles);
+    expect(el.style.color).toBe('red');
+    expect(Object.getPrototypeOf(el.style)).toBe(Object.getPrototypeOf(document.createElement('p').style));
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+
+  it('camelCase, kebab-case and vendor spellings of one property are one registry entry', () => {
+    const el = document.createElement('div');
+    setExtraStyles(el, { backgroundColor: 'red' });
+    setExtraStyles(el, { 'background-color': null }); // another spelling removes it
+    style(el, 'color: blue');
+    expect(el.style.backgroundColor).toBe('');
+    setExtraStyles(el, { cssFloat: 'left', WebkitTransform: 'none' });
+    expect(el.style.getPropertyValue('float')).toBe('left');
+  });
 });

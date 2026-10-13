@@ -302,6 +302,29 @@ it('R1: an animation that ends from a timer (outside any frame phase) still rele
   expect(order).toEqual(['measure:1', 'mutate:1']);
 });
 
+it('R1: an animation ended from inside a mutation apply (an applier calling end()) releases the parked set in the next frame, measure before mutate', async () => {
+  const [state, setState] = createStore({ n: 0 });
+  const [local, setLocal] = createSignal(0);
+  const scope = createHeavyAnimationScope();
+  const order: string[] = [];
+  inScope(scope, () => {
+    createMeasureEffect(() => state.n, (v) => { order.push(`measure:${v}`); });
+    createMutationEffect(() => state.n, (v) => { order.push(`mutate:${v}`); });
+  });
+  await settle();
+  order.length = 0;
+  const end = scope.begin(Infinity);
+  setState('n', 1);
+  await settle();
+  expect(order).toEqual([]); // parked
+  createRoot(() => createMutationEffect(local, (v) => { if (v === 1) end(); })); // outside the scope: never parked
+  setLocal(1);
+  await settle(); // the frame whose mutate phase ends the animation: nothing of the set runs in it
+  expect(order).toEqual([]);
+  await settle();
+  expect(order).toEqual(['measure:1', 'mutate:1']); // together, in phase order
+});
+
 it('P4: the gate walks a scope chain once per scope per drain, not once per effect (and still notices a scope that ended mid-drain)', async () => {
   const COUNT = 30;
   const [state, setState] = createStore({ v: Array.from({ length: COUNT }, () => 0) });
