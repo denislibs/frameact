@@ -1,4 +1,5 @@
-import { createMeasureEffect, createMutationEffect, createRenderEffect, drainHooks, frameForcedReflow, frameMutation, gateOnHeavyAnimation } from '../../src/core/frame';
+import { createMeasureEffect, createMutationEffect, createRenderEffect, drainHooks, frameForcedReflow, frameMutation } from '../../src/core/frame';
+import { gateOnHeavyAnimation } from '../../src/scheduler/heavyAnimation';
 import { createEffect } from '../../src/core/effects';
 import { signal } from '../../src/core/signals';
 import { root } from '../../src/core/core';
@@ -192,14 +193,15 @@ it('an error thrown inside the drain loop is isolated per entry; the rest of the
     createMutationEffect(() => $a(), (v) => { if (v) applied.push('first'); });
     createMutationEffect(() => $a(), (v) => { if (v) applied.push('second'); });
   });
+  // The gate hook is only consulted while some scope blocks: block an unrelated scope (this also
+  // installs the gate into the drains, so `original` below is the real hook).
+  const endUnrelated = createHeavyAnimationScope(null).begin(Infinity, true);
   const original = drainHooks.blockingScopeFor;
   let calls = 0;
-  drainHooks.blockingScopeFor = (scope, cache) => {
+  drainHooks.blockingScopeFor = (node, cache) => {
     if (calls++ === 0) throw new Error('hook boom');
-    return original(scope, cache);
+    return original(node, cache);
   };
-  // The gate hook is only consulted while some scope blocks: block an unrelated scope.
-  const endUnrelated = createHeavyAnimationScope(null).begin(Infinity, true);
   try {
     $a.set(1);
     await frame(raf);

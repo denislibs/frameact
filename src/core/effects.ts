@@ -29,7 +29,6 @@ import { reportDevHookError } from './debug';
 import { SCOPE } from './symbols';
 import type { Computation } from './types';
 import { getTickDrainEpoch, isTickDraining, onTickEnd } from '../scheduler/schedulers';
-import { currentHeavyAnimationScope, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
 
 export const NOT_APPLIED: unique symbol = Symbol('frameact.notApplied');
 
@@ -41,7 +40,6 @@ export interface EffectNode<T = any> extends Computation<T> {
   _applied: T | typeof NOT_APPLIED;
   _applyCleanup: (() => void) | null;
   _schedule: Schedule;
-  _scope: HeavyAnimationScope;
   _bailed: EffectNode[] | null;
   _run: () => void;
   _name: string | undefined;
@@ -261,7 +259,6 @@ function Effect(
   this._applied = NOT_APPLIED;
   this._applyCleanup = null;
   this._schedule = schedule;
-  this._scope = currentHeavyAnimationScope(this); // after the append: reads the owner's context
   this._bailed = null;
   const node = this;
   this._run = () => runEffect(node);
@@ -338,11 +335,6 @@ export function rebookParked(node: EffectNode): boolean {
 /** @internal store gate: still parked (not disposed, not unparked by a plain walk). */
 export function isParked(node: EffectNode): boolean {
   return node._state !== STATE_DISPOSED && (node._flags & F_PARKED) !== 0;
-}
-
-/** @internal the heavy-animation scope snapped when the effect was created. */
-export function effectScopeOf(node: EffectNode): HeavyAnimationScope {
-  return node._scope;
 }
 
 function runEffect(node: EffectNode) {

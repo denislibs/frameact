@@ -4,8 +4,8 @@
 // hook is never consulted. The core decides WHETHER a run is a candidate (F_STORE, store-gated schedule,
 // not live); this module decides WHERE it waits and releases it.
 import { releaseInFrame } from '../core/frame';
-import { effectScopeOf, isParked, parkEffect, rebookParked, setStoreGate, type EffectNode } from '../core/effects';
-import { firstAnimatingScopeSampled, isAnyScopeAnimating, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
+import { isParked, parkEffect, rebookParked, setStoreGate, type EffectNode } from '../core/effects';
+import { effectScopeOf, firstAnimatingScopeSampled, installGating, isAnyScopeAnimating, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
 
 /**
  * Effects parked on a scope, in first-park order (a Set: an effect that a plain walk unparked and
@@ -38,6 +38,8 @@ function release(scope: HeavyAnimationScope) {
     for (const node of p.effects) rebookParked(node);
   });
 }
+
+installGating(); // the store gate samples animations per drain: the drains must open a sample from now on
 
 setStoreGate((node) => {
   if (!isAnyScopeAnimating()) return false;
