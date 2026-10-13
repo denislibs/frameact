@@ -318,6 +318,7 @@ void Composer;
 signal ignored an input event. Passing `value={text()}` is a plain property write, not controlled; the Vite plugin warns.
 `use:value` also works on `<textarea>` and `<select>`; `use:checked` on checkboxes/radios. Custom directives:
 `defineDirective('name', (el, value) => …)` then `<div use:name={…}>`.
+The Vite plugin registers `use:value` / `use:checked` per module that uses them; code that sets them by hand (`setAttribute(el, 'use:value', …)`, spreads outside compiled JSX) calls `registerControlledDirectives()` from `frameact/dom` once.
 
 ## 8. Store (model B)
 

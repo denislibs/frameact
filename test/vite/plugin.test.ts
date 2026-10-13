@@ -206,3 +206,15 @@ describe('dev lint: destructuring props inside event handlers', () => {
     expect(dev.warnings[0]).toContain('event handler');
   });
 });
+
+it('registers the built-in controlled-input directives in modules whose JSX uses use:value / use:checked, before the module body', async () => {
+  const withInput = await compile('const a = <input use:value={s} />;\nconst b = <input type="checkbox" use:checked={c} />;', '/app/x.jsx', false);
+  const m = withInput.code.match(/^import \{ registerControlledDirectives as (\w+) \} from "frameact\/dom";\n\1\(\);$/m);
+  expect(m).not.toBeNull();
+  // the call precedes the first directive write of the module body (the compiler's hoisted imports and template declarations may come before it)
+  expect(withInput.code.indexOf(`${m![1]}();`)).toBeLessThan(withInput.code.indexOf('_$setAttribute('));
+  expect(withInput.code.match(/registerControlledDirectives/g)!.length).toBe(1);
+  // a module without controlled inputs (even one mentioning value= or a user directive) is left alone
+  const without = await compile('const a = <input value="x" use:focus={f} onInput={h} />;', '/app/y.jsx', false);
+  expect(without.code).not.toContain('registerControlledDirectives');
+});

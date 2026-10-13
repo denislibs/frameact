@@ -74,6 +74,8 @@ const CONTROLLED_PROP =
 const STRING_HANDLER = /<[a-z][\w-]*\b(?:=>|[^<>])*?\s(on[A-Za-z]+)=["']/g;
 const DESTRUCTURED_PARAM = /\b(?:function\s+([A-Z][\w$]*)\s*\(|(?:const|let|var)\s+([A-Z][\w$]*)\s*(?::[^=;\n]{0,200})?=\s*(?:function\s*\(|\())\s*\{/g;
 const DESTRUCTURED_BODY = /\b(?:const|let|var)\s*\{[^}]{0,500}\}\s*=\s*props\b/g;
+/** A module whose JSX binds a controlled input gets the built-in directives registered (see registerControlled). */
+const CONTROLLED_DIRECTIVE = /\buse:(?:value|checked)\s*=/;
 
 interface Lint {
   index: number;
@@ -130,6 +132,29 @@ function insideHandlerAttribute(code: string, index: number): boolean {
   return true;
 }
 
+/**
+ * Babel plugin: prepend `import { registerControlledDirectives } from 'frameact/dom'; registerControlledDirectives();`
+ * to a module whose source uses `use:value` / `use:checked`. The runtime no longer registers the built-in
+ * controlled-input directives at load (an app without inputs does not bundle them); the call runs before the
+ * module body, so the first `setAttribute(el, 'use:value', …)` the compiled JSX makes finds them.
+ */
+function registerControlled({ types: t }: { types: any }) {
+  return {
+    name: 'frameact-register-controlled',
+    visitor: {
+      Program(path: any, state: any) {
+        const code: string = state.file.code;
+        if (!CONTROLLED_DIRECTIVE.test(code)) return;
+        const local = path.scope.generateUidIdentifier('registerControlled');
+        path.unshiftContainer('body', [
+          t.importDeclaration([t.importSpecifier(local, t.identifier('registerControlledDirectives'))], t.stringLiteral('frameact/dom')),
+          t.expressionStatement(t.callExpression(local, [])),
+        ]);
+      },
+    },
+  };
+}
+
 /** Rollup position (1-based line, 0-based column) of a character index; one scan for the newlines, a binary search per finding. */
 function createPositioner(code: string) {
   let newlines: number[] | undefined;
@@ -178,7 +203,7 @@ export default function frameact(options: FrameactPluginOptions = {}): Plugin {
         configFile: false,
         sourceMaps: true,
         presets: file.endsWith('.tsx') ? [[typescript, {}]] : [],
-        plugins: [[solid, compilerOptions(dev)]],
+        plugins: [[solid, compilerOptions(dev)], registerControlled],
       });
       if (!result || result.code == null) return null;
       return { code: result.code, map: result.map as any };

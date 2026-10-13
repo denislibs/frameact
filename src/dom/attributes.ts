@@ -6,13 +6,10 @@
 import { DEV } from '../env';
 import { className, classList, toggleClassToken } from './classes';
 import { SVGNamespace } from './constants';
-import { registerControlledDirectives } from './controlled';
 import { runDirective } from './directives';
 import { setListener } from './events';
 import { getNatives } from './natives';
 import { setStyleProperty } from './styles';
-
-registerControlledDirectives(); // the built-in use:value / use:checked
 
 // URL policy. Every attribute below holds a URL the browser may navigate to or load.
 //   - `javascript:` and `vbscript:` are refused everywhere.

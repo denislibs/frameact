@@ -33,7 +33,13 @@ export function defineBuiltinDirective(name: string, fn: Directive): void {
 export function runDirective(el: Element, name: string, value: unknown): void {
   const directive = builtins.get(name) ?? registry.get(name);
   if (!directive) {
-    if (DEV) console.error(`[frameact] unknown directive use:${name} — register it with defineDirective('${name}', fn)`);
+    if (DEV) {
+      console.error(
+        RESERVED.has(name)
+          ? `[frameact] use:${name} is not registered: call registerControlledDirectives() from 'frameact/dom' once (the Vite plugin does it for modules whose JSX uses use:${name})`
+          : `[frameact] unknown directive use:${name} — register it with defineDirective('${name}', fn)`,
+      );
+    }
     return;
   }
   directive(el, value);

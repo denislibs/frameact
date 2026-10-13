@@ -426,9 +426,17 @@ function onChange(e: Event): void {
  * registration order, so the controlled check always follows the delegated `onInput` dispatcher
  * (and element-level `on:input` listeners, which bubble first).
  */
+let clearHooked = false;
+
 function installListeners(doc: Document): void {
   if (installed.has(doc)) return;
   installed.add(doc);
+  if (!clearHooked) {
+    // Registered on first use, not at module load: this module has no top-level side effect, so an app
+    // without controlled inputs does not bundle it (see registerControlledDirectives).
+    clearHooked = true;
+    onClearDelegated(uninstallListeners);
+  }
   delegateEvents(['input'], doc);
   const { addEventListener: add } = getNatives();
   add.call(doc, 'input', swallowWhileForcing, true);
@@ -441,7 +449,7 @@ function installListeners(doc: Document): void {
   add.call(doc, 'selectionchange', onSelectionChange);
 }
 
-onClearDelegated((doc) => {
+function uninstallListeners(doc: Document): void {
   if (!installed.has(doc)) return;
   installed.delete(doc);
   const { removeEventListener: remove } = getNatives();
@@ -453,7 +461,7 @@ onClearDelegated((doc) => {
   remove.call(doc, 'compositionend', onCompositionEnd);
   remove.call(doc, 'focusout', onFocusOut);
   remove.call(doc, 'selectionchange', onSelectionChange);
-});
+}
 
 // ---- the directive entry (three forms, shared by value and checked) ----
 
@@ -555,9 +563,10 @@ function checkedDirective(el: Element, value: unknown): void {
 }
 
 /**
- * Registers the built-in `use:value` / `use:checked`. `attributes.ts` calls it (a used symbol, not a
- * bare side-effect import, so a `"sideEffects": false` package cannot tree-shake the registration
- * away). Idempotent.
+ * Registers the built-in `use:value` / `use:checked`. Not called by the runtime itself: the Vite plugin
+ * injects the call into every module whose JSX uses `use:value` / `use:checked`, so an app without
+ * controlled inputs does not bundle this module. Hand-written `setAttribute(el, 'use:value', …)` /
+ * spreads outside compiled JSX call it once themselves. Idempotent.
  */
 export function registerControlledDirectives(): void {
   defineBuiltinDirective('value', valueDirective);
