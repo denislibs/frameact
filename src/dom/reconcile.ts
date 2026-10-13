@@ -141,12 +141,15 @@ export function manualOrderOf(array: any[]): ReadonlySet<unknown> | undefined {
 type ManualReconciler = (parentNode: any, prev: any[], next: any[], marker: Node | null | undefined, moved: ReadonlySet<unknown>) => void;
 let manualReconciler: ManualReconciler | undefined;
 
-/** @internal manualFor.ts registers the insert-only reconciler when the module is evaluated. */
+/**
+ * @internal manualFor.ts registers the insert-only reconciler when `ManualFor` RUNS, not at module evaluation:
+ * a top-level call would be a side effect that keeps the module in apps that never render a manual-order list.
+ */
 export function setManualReconciler(fn: ManualReconciler): void {
   manualReconciler = fn;
 }
 
-/** A tagged array only exists once manualFor.ts ran (and registered); the fallback keeps the DOM right regardless. */
+/** A tagged array only exists once `ManualFor` ran (and registered); the fallback keeps the DOM right regardless. */
 export function applyManualOrder(parentNode: any, prev: any[], next: any[], marker: Node | null | undefined, moved: ReadonlySet<unknown>): void {
   if (manualReconciler) manualReconciler(parentNode, prev, next, marker, moved);
   else reconcileArrays(parentNode, prev, next, marker);

@@ -421,13 +421,14 @@ function onChange(e: Event): void {
   if (b) verify(b);
 }
 
+/** `installListeners` hooks `uninstallListeners` into `clearDelegatedEvents` once, on first use. */
+let clearHooked = false;
+
 /**
  * Document listeners, registered AFTER `input` delegation: on one document, listeners run in
  * registration order, so the controlled check always follows the delegated `onInput` dispatcher
  * (and element-level `on:input` listeners, which bubble first).
  */
-let clearHooked = false;
-
 function installListeners(doc: Document): void {
   if (installed.has(doc)) return;
   installed.add(doc);

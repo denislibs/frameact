@@ -270,7 +270,12 @@ export function onFullyIdle(cb: () => void, scope: HeavyAnimationScope = rootSco
 
 const HEAVY_SCOPE_KEY = Symbol('frameact.heavyAnimationScope');
 
-/** Make `scope` the heavy-animation scope for every effect created under the current owner. */
+/**
+ * Make `scope` the heavy-animation scope for every effect created under the current owner. Call it in the body
+ * of a component or scope (as `HeavyAnimationScope` and the kit's `Transition` do), not inside the compute of an
+ * effect: an effect's scope is read from its own context record at drain time, so a call made while an effect
+ * is the current owner replaces that effect's record and the effect starts waiting for `scope` as well.
+ */
 export function provideHeavyAnimationScope(scope: HeavyAnimationScope) {
   setContext(HEAVY_SCOPE_KEY, scope);
 }
@@ -283,7 +288,10 @@ export function currentHeavyAnimationScope(owner: Scope | null = getScope()): He
  * @internal The heavy-animation scope of an effect: the one provided by its owner when it was created.
  * Read from the node's own context record (set when it was appended to its owner and never replaced:
  * `provideHeavyAnimationScope` gives the owner a NEW record), so this is the scope the effect saw at
- * creation — no per-effect field. A disposed node reads the default record: the root scope.
+ * creation — no per-effect field. A disposed node reads the default record: the root scope, so a
+ * `gateOnHeavyAnimation` re-entry (from `once`) for an already disposed effect gates on the root scope
+ * instead of its own; harmless, since running a disposed effect is a no-op, but the closure lives until
+ * the root animation ends. Caveat above: `provideHeavyAnimationScope` called inside the effect's own compute.
  */
 export function effectScopeOf(node: Computation): HeavyAnimationScope {
   return getContext<HeavyAnimationScope>(HEAVY_SCOPE_KEY, node) ?? rootScope;
@@ -401,7 +409,8 @@ export function createIdleEffect<T>(
 
 /**
  * Wrap a scheduler so the run also waits for heavy animations in the node's scope chain
- * (non-blocking by default; frame queues already wait for blocking ones).
+ * (non-blocking by default; frame queues already wait for blocking ones). The scope is read from the node's
+ * context at each attempt (`effectScopeOf`): a node disposed while it waits re-checks against the root scope.
  */
 export function gateOnHeavyAnimation(schedule: Schedule, options: { blocking?: boolean } = {}): Schedule {
   const blocking = options.blocking ?? false;
