@@ -242,7 +242,7 @@ void [List, Rows, ChatList, Box, merged, render];
 
 - `For`: default `keyed` is by reference; `keyed={false}` by index; `keyed={fn}` by key (for immutable data). `keyed`
   and `children` are read once; `each` and `fallback` are reactive.
-- `ManualFor` (same props as `For` plus `orderKey`; `For order="manual"` is gone and throws in DEV): every row must be a single
+- `ManualFor` (same props as `For` plus `orderKey`; `For order="manual"` is gone and throws): every row must be a single
   DOM node and `ManualFor` must be the sole content of its slot; kept rows are never moved, only a row whose `orderKey`
   changes moves (return a primitive). It is a separate component so apps without manual-order lists do not bundle it.
 - `Show`: a function child gets an accessor (`u().name`); with `keyed` it gets the value and the child is recreated when the

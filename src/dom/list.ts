@@ -38,8 +38,13 @@ export function For<T>(
 export function For<T>(
   props: ForBaseProps<T> & { keyed?: boolean | ((item: T) => unknown); children: (item: any, index: any) => unknown },
 ): unknown {
-  if (DEV && (props as { order?: unknown }).order !== undefined) {
-    throw new Error('[frameact] <For order="manual"> no longer exists: use <ManualFor> (manual-order lists live in their own component so apps without them do not bundle the code)');
+  if ((props as { order?: unknown }).order !== undefined) {
+    // Both modes throw (a prod build must not quietly render a manual-order list with keyed semantics); prod has a short text.
+    throw new Error(
+      DEV
+        ? '[frameact] <For order="manual"> no longer exists: use <ManualFor> (manual-order lists live in their own component so apps without them do not bundle the code)'
+        : 'frameact: <For order> was removed, use <ManualFor>',
+    );
   }
   return withFallback(mapArray<T, unknown>(() => props.each, props.children, { keyed: props.keyed }), props);
 }
