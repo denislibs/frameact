@@ -1,0 +1,60 @@
+# frameact CI: `pnpm check` (oxlint + tsc + vitest/jsdom) on two Node versions, and the headless-Chrome lane.
+# No release/publish job on purpose: the package is `private` and its exports are `.ts` sources, so an npm
+# release needs a build step first (see AGENTS.md).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch/PR supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.12 is the floor in package.json `engines`; 24 is what development runs on.
+        node: ['22.12', '24']
+    steps:
+      - uses: actions/checkout@v7
+      # No `packageManager` field in package.json: pin the pnpm major that wrote pnpm-lock.yaml (lockfileVersion 9.0).
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  # stricterdom against real layout and real MutationObserver timing (test/chrome). Uses the Google Chrome
+  # preinstalled on the runner image; test/chrome/run.mjs finds it on PATH or via CHROME_BIN.
+  chrome:
+    name: chrome (stricterdom lane)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Chrome version
+        run: google-chrome --version
+      - run: pnpm test:chrome

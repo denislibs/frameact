@@ -1,0 +1,33 @@
+# Correctness checks of the js-reactivity-benchmark adapter (bench/reactivity): clones the upstream benchmark
+# at its pinned commit, patches it, runs its adapter tests, typecheck, build and a frameact smoke run.
+# It does NOT run the full benchmark (~10 min, and CI timings are not comparable). Not part of PR checks:
+# it needs the network and tracks upstream's toolchain, so it runs weekly and on demand.
+name: Bench check
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1' # Mondays 05:23 UTC
+
+concurrency:
+  group: bench-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node bench/reactivity/run.mjs --check
