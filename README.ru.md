@@ -269,6 +269,8 @@ pnpm test:chrome  # stricterdom в headless Chrome (настоящий layout и
 
 Тулчейн: TypeScript 7 (нативный), Vite 8 / Vitest 5 + jsdom, oxlint.
 
+**Для AI-ассистентов.** Вклад в frameact: [`AGENTS.md`](AGENTS.md). Приложение на frameact: [`llms.txt`](llms.txt) и [`docs/llms-full.md`](docs/llms-full.md).
+
 ## Лицензия
 
 [MIT](LICENSE). Вендоренный и адаптированный сторонний код (maverick-js/signals, teact, dom-expressions, solidjs/solid — части
