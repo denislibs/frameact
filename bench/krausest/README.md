@@ -36,6 +36,8 @@ node bench/krausest/run.mjs --frameworks frameact --benchmark 01_ --keep   # п�
 node bench/krausest/run.mjs --report                   # только пересобрать results/latest.md из results/raw/
 ```
 
+Диагностика памяти и first paint тем же способом, что у апстрима, но с несколькими замерами, таймингами ресурса и снимками кучи по конструкторам: `node bench/krausest/heap.mjs --fw frameact,solid --fp 7 --trace | --mem 3 | --snap <dir>` (нужен поднятый сервер апстрима: `(cd bench/krausest/.upstream/server && PORT=8080 node_modules/.bin/tsx index.ts &)`; описание флагов — в шапке скрипта).
+
 Нужны git, pnpm, npm, Node ≥ 22.12, сеть (клон и npm) и Google Chrome. Во время замеров держите окно Chrome на виду и
 не трогайте мышь/клавиатуру (требование апстрима: иначе пропускаются paint-события), закройте тяжёлые программы.
 
