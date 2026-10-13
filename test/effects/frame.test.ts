@@ -1,6 +1,6 @@
-import { createMeasureEffect, createMutationEffect, createRenderEffect, drainHooks, frameForcedReflow, frameMutation } from '../../src/core/frame';
+import { createMeasureEffect, createMutationEffect, createRenderEffect, drainHooks, frameForcedReflow, frameMeasure, frameMutation } from '../../src/core/frame';
 import { gateOnHeavyAnimation } from '../../src/scheduler/heavyAnimation';
-import { createEffect } from '../../src/core/effects';
+import { createEffect, RUN_NODE, tickEnd, type Schedule } from '../../src/core/effects';
 import { signal } from '../../src/core/signals';
 import { root } from '../../src/core/core';
 import { getPhase, flushSync } from '../../src/scheduler/fasterdom';
@@ -377,4 +377,34 @@ it('the public flushSync inside a frame pass throws before it runs any pending t
   expect(ran).toEqual([0]);
   flushAll();
   expect(ran).toEqual([0, 1]);
+});
+
+it('RUN_NODE reaches only node-aware schedules: a custom schedule over every built-in (and its gated wrapper) gets a real `run`', async () => {
+  // RUN_NODE is a no-op in prod (only DEV throws): this test is what keeps the marker from leaking into a custom schedule.
+  const builtins: Array<[string, Schedule]> = [
+    ['tickEnd', tickEnd],
+    ['frameMeasure', frameMeasure],
+    ['frameMutation', frameMutation],
+    ['frameForcedReflow', frameForcedReflow],
+    ['gated(tickEnd)', gateOnHeavyAnimation(tickEnd)],
+    ['gated(frameMutation)', gateOnHeavyAnimation(frameMutation)],
+    ['gated(gated(frameMeasure))', gateOnHeavyAnimation(gateOnHeavyAnimation(frameMeasure, { blocking: true }))],
+  ];
+  const $a = signal(0);
+  const applied: string[] = [];
+  const received: Array<[string, unknown]> = [];
+  root(() => {
+    for (const [name, inner] of builtins) {
+      const custom: Schedule = (run, node) => { received.push([name, run]); inner(run, node); };
+      createEffect(() => $a(), (v) => { applied.push(`${name}:${v}`); }, custom, { immediateApply: false });
+    }
+  });
+  $a.set(1);
+  for (let i = 0; i < 4; i++) { await frame(raf); await flushMicrotasks(); }
+  expect(received.length).toBe(builtins.length * 2);
+  for (const [name, run] of received) {
+    expect(run, name).not.toBe(RUN_NODE);
+    expect(typeof run, name).toBe('function');
+  }
+  for (const [name] of builtins) expect(applied, name).toContain(`${name}:1`);
 });

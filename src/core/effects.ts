@@ -152,7 +152,13 @@ export function isNodeSchedule(schedule: Schedule) {
   return nodeSchedules.has(schedule);
 }
 
-/** @internal the `run` a node-aware schedule receives: a marker, never called by them. */
+/**
+ * @internal the `run` a node-aware schedule receives: a marker, never called by them. Calling it is a bug and
+ * only DEV says so (a prod no-op would leave the effect dirty). It cannot happen today: `bookRun` hands it
+ * only to schedules marked with `markNodeSchedule`, which compare it by identity and queue the node; every
+ * custom schedule, and every `gateOnHeavyAnimation` wrapper's inner call, gets the real `runOf(node)`.
+ * test/effects/frame.test.ts pins that for each built-in schedule.
+ */
 export const RUN_NODE: () => void = () => {
   if (DEV) throw new Error('[frameact] internal: a node-aware schedule must run the node it was given, not `run`');
 };

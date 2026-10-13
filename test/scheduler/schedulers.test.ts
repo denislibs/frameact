@@ -30,6 +30,16 @@ describe('fastRaf', () => {
 });
 
 describe('onTickEnd', () => {
+  it('DEV: a non-function callback is a TypeError at the call site, not an "effect node" in the queue', async () => {
+    const cb = vi.fn();
+    for (const bad of [undefined, null, 'alert(1)', {}, { _state: 0, _flags: 0 }]) {
+      expect(() => onTickEnd(bad as never)).toThrow(TypeError);
+    }
+    onTickEnd(cb);
+    await flushMicrotasks();
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
   it('batches into one microtask, in order', async () => {
     const calls: number[] = [];
     onTickEnd(() => calls.push(1));

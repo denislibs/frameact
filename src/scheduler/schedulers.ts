@@ -1,4 +1,5 @@
 // Adapted from teact (MIT, © 2022 Alexander Zinchuk) — https://github.com/Ajaxy/teact src/util/schedulers.ts
+import { DEV } from '../env';
 
 export type NoneToVoidFunction = () => void;
 export type AnyToVoidFunction = (...args: any[]) => void;
@@ -203,6 +204,9 @@ function flushTickEndMicrotask() {
 }
 
 export function onTickEnd(callback: NoneToVoidFunction) {
+  // The queue tells callbacks from effect nodes by `typeof`: a value that is not a function (a missed
+  // lookup in app data) must fail here, not be read as a node by the drain.
+  if (DEV && typeof callback !== 'function') throw new TypeError('[frameact] onTickEnd expects a function');
   tickQueue[tickLen++] = callback;
   // While draining, the running drain picks the new callback up: no extra microtask.
   if (!tickBooked && tickDrainDepth === 0) {
