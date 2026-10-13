@@ -17,7 +17,7 @@ split into phases. The target consumer is a Telegram Web A–class messenger. MI
 |---|---|
 | `src/core/` | signals, memos, two-phase effects, frame queues, owner tree, context, `mapArray`; adapted maverick-js/signals |
 | `src/scheduler/` | fasterdom phases (`requestMeasure`/`requestMutation`/…), `tickEnd`/idle schedulers, heavy-animation scopes |
-| `src/dom/` | runtime the Solid 2.0 JSX compiler targets (`frameact/dom`): `template`, `insert`, `spread`, `For`/`Show`/`Switch`/`Dynamic`/`Portal`, controlled inputs, classes/styles/attributes, event delegation, `natives.ts` |
+| `src/dom/` | runtime the Solid 2.0 JSX compiler targets (`frameact/dom`): `template`, `insert`, `spread`, `For`/`ManualFor`/`Show`/`Switch`/`Dynamic`/`Portal`, controlled inputs, classes/styles/attributes, event delegation, `natives.ts` |
 | `src/store/` | `frameact/store`: signal-tree store (model B), `reconcile`, actions, heavy-animation parking gate |
 | `src/stricterdom/` | `frameact/stricterdom`: DEV phase checks with effect attribution, run profiler |
 | `src/kit/` | `frameact/kit`: `Transition`, `ShowTransition`, `InfiniteScroll`, `createScrollAnchor` |

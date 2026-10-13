@@ -21,7 +21,7 @@ frameact (keyed) в [js-framework-benchmark](https://github.com/krausest/js-fram
 Стартовые метрики lighthouse (`30_startup`) апстрим из набора по умолчанию убрал — здесь их нет.
 
 **Не измеряется:** реальное приложение, фазы кадра (measure → mutate, heavy-animation gating, stricterdom), стор
-(`frameact/store`), SSR, динамические списки с `order="manual"`. Бенчмарк — одна таблица из 1–10 тысяч однотипных строк;
+(`frameact/store`), SSR, динамические списки `ManualFor` (ручной порядок). Бенчмарк — одна таблица из 1–10 тысяч однотипных строк;
 итог не равен скорости мессенджера, ради которого frameact сделан.
 
 ## Запуск

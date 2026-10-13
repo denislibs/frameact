@@ -24,7 +24,7 @@ frameact 是一个面向"每一帧都很重要"的应用的响应式 UI 框架�
 
 > **状态：早期开发。** 响应式内核（[PR #1](https://github.com/denislibs/frameact/pull/1)）与 DOM 运行时已实现：
 > 面向 Solid 2.0 JSX 编译器（`@solidjs/babel-plugin@2.0.0-rc.14`）的 `frameact/dom`、`render`、
-> `For`（含 `order="manual"`）、`Show`/`Switch`/`Match`/`Dynamic`/`Portal`、受控输入（`use:value` / `use:checked`）、
+> `For` 与 `ManualFor`（手动排序列表）、`Show`/`Switch`/`Match`/`Dynamic`/`Portal`、受控输入（`use:value` / `use:checked`）、
 > `HeavyAnimationScope`、context `Provider`，以及 `frameact/vite` 插件；store（`frameact/store`：在重动画期间
 > 按原因停靠的 signal 树）也已完成，stricterdom（`frameact/stricterdom`：开发模式阶段检查并定位到 effect，运行分析器）也已完成。接下来是基准测试。尚未发布到 npm，API 可能变化。
 

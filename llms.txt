@@ -22,7 +22,7 @@ Notes for writing code with frameact:
 ## Entry points (source)
 
 - [frameact](https://raw.githubusercontent.com/denislibs/frameact/main/src/index.ts): signals, memos, effects, context, frame and heavy-animation API, lifecycle primitives
-- [frameact/dom](https://raw.githubusercontent.com/denislibs/frameact/main/src/dom/index.ts): render, For, Show, Switch, Dynamic, Portal, mergeProps, class and style helpers
+- [frameact/dom](https://raw.githubusercontent.com/denislibs/frameact/main/src/dom/index.ts): render, For, ManualFor, Show, Switch, Dynamic, Portal, mergeProps, class and style helpers
 - [frameact/store](https://raw.githubusercontent.com/denislibs/frameact/main/src/store/index.ts): createStore, merge, produce, reconcile, defineActions
 - [frameact/kit](https://raw.githubusercontent.com/denislibs/frameact/main/src/kit/index.ts): Transition, ShowTransition, InfiniteScroll, createScrollAnchor
 - [frameact/stricterdom](https://raw.githubusercontent.com/denislibs/frameact/main/src/stricterdom/index.ts): DEV phase-violation checks with effect attribution

@@ -6,6 +6,7 @@ import { createEffect, createRoot, createSignal, flushSync, mapArray, onCleanup 
 import { createComponent } from '../../src/dom/component';
 import { insert } from '../../src/dom/insert';
 import { For } from '../../src/dom/list';
+import { ManualFor } from '../../src/dom/manualFor';
 import { container, useDomHarness } from '../helpers/dom';
 
 const { frame } = useDomHarness();
@@ -310,17 +311,16 @@ it('a row under a dirty owner effect bails onto it (the map is not pulled by the
   expect(titles).toEqual(['0:1:a', '0:2:b', '1:1:a']);
 });
 
-it('For order="manual": a row looking an entity up by id is disposed, not run, when both are deleted', async () => {
+it('ManualFor: a row looking an entity up by id is disposed, not run, when both are deleted', async () => {
   const ul = container();
   const [ids, setIds] = createSignal([1, 2]);
   const [chats, setChats] = createSignal<Chats>({ 1: { title: 'a' }, 2: { title: 'b' } });
   const errors: unknown[] = [];
-  const ForC = For as (props: any) => unknown;
+  const ForC = ManualFor as (props: any) => unknown;
   createRoot(() =>
     insert(
       ul,
       createComponent(ForC, {
-        order: 'manual',
         get each() { return ids(); },
         orderKey: (id: number) => id,
         children: (id: number) => {

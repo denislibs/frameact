@@ -15,6 +15,7 @@ export {
 export { mergeProps, splitProps, spread, assign, ref, applyRef, readShallow, type PropsSource } from './props';
 export { lazy, type LazyComponent, type LazyOptions } from './lazy';
 export { For, type ForBaseProps, type Accessor, type Each } from './list';
+export { ManualFor, type ManualForBaseProps } from './manualFor';
 export {
   className, classList, toggleClassToken, classTokens, addExtraClass, removeExtraClass, toggleExtraClass,
 } from './classes';

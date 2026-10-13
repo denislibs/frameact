@@ -26,7 +26,7 @@ behind Telegram Web A:
 
 > **Status: early development.** The reactive core ([PR #1](https://github.com/denislibs/frameact/pull/1)) and
 > the DOM runtime are implemented: `frameact/dom` for the Solid 2.0 JSX compiler
-> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (including `order="manual"`),
+> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` and `ManualFor` (manual-order lists),
 > `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, controlled inputs (`use:value` / `use:checked`),
 > `HeavyAnimationScope`, a context `Provider` and the `frameact/vite` plugin; the store (`frameact/store`,
 > a signal tree with cause-tagged parking during heavy animations) is in, and so is stricterdom (`frameact/stricterdom`:

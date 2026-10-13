@@ -1,5 +1,5 @@
 import { beginHeavyAnimation, createMeasureEffect, createMutationEffect, createSignal, flushSync, onCleanup } from 'frameact';
-import { delegateEvents, Dynamic, For, Portal, render, Show, Switch, Match } from 'frameact/dom';
+import { delegateEvents, Dynamic, For, ManualFor, Portal, render, Show, Switch, Match } from 'frameact/dom';
 import { createStore } from 'frameact/store';
 import { disableStrict, enableStrict, setHandler, suppressStrict, type StrictViolationError } from 'frameact/stricterdom';
 import { container, useDomHarness } from '../helpers/dom';
@@ -116,9 +116,9 @@ function App(props: { items: () => Item[]; mode: () => 'list' | 'grid' | 'none';
           </ul>
         </Match>
         <Match when={props.mode() === 'grid'}>
-          <For each={props.items()} order="manual" orderKey={(item) => item.id}>
+          <ManualFor each={props.items()} orderKey={(item) => item.id}>
             {(item, i) => <div style={{ transform: `translateY(${i() * 10}px)` }}>{item.label}</div>}
-          </For>
+          </ManualFor>
         </Match>
       </Switch>
       <Show when={props.items().length > 2}>

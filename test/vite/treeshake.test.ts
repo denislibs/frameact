@@ -51,3 +51,13 @@ it('an app without controlled inputs or heavy animations bundles neither; one th
   expect(animation).toContain('isBlockingAnimating');
   expect(animation).not.toContain('compositionend');
 }, 30_000);
+
+it('manual-order lists are bundled only through <ManualFor>: an app with just <For> has no reconcileManual / orderKey code', async () => {
+  const plain = await bundle('plain.jsx'); // uses <For>
+  expect(plain).toContain('mapArray');
+  expect(plain).not.toContain('reconcileManual');
+  expect(plain).not.toContain('orderKey failed'); // manualFor.ts
+  const manual = await bundle('manual.jsx');
+  expect(manual).toContain('reconcileManual');
+  expect(manual).toContain('orderKey failed');
+}, 30_000);

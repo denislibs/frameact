@@ -184,7 +184,7 @@ event handlers, store actions and tickEnd effects, and **throws inside a frame p
 
 ```tsx
 import { createSignal, createSelector } from 'frameact';
-import { For, Show, Switch, Match, Dynamic, Portal, children, mergeProps, render } from 'frameact/dom';
+import { For, ManualFor, Show, Switch, Match, Dynamic, Portal, children, mergeProps, render } from 'frameact/dom';
 
 interface Chat { id: string; title: string; unread: number }
 
@@ -210,12 +210,12 @@ function Rows(props: { chats: Chat[] }) {
 }
 
 // keyed={false}: by index, `item` is an accessor and `index` a number.
-// order="manual": the DOM order is NOT the list order (rows are positioned by CSS transforms of index()).
+// <ManualFor>: the DOM order is NOT the list order (rows are positioned by CSS transforms of index()).
 function ChatList(props: { chats: Chat[] }) {
   return (
-    <For each={props.chats} keyed={(c) => c.id} order="manual" orderKey={(c) => c.unread}>
+    <ManualFor each={props.chats} keyed={(c) => c.id} orderKey={(c) => c.unread}>
       {(chat, index) => <div style={{ transform: `translateY(${index() * 72}px)` }}>{chat().title}</div>}
-    </For>
+    </ManualFor>
   );
 }
 
@@ -240,10 +240,11 @@ const merged = mergeProps({ size: 1 }, { size: undefined, color: 'red' }); // la
 void [List, Rows, ChatList, Box, merged, render];
 ```
 
-- `For`: default `keyed` is by reference; `keyed={false}` by index; `keyed={fn}` by key (for immutable data). `keyed`,
-  `children` and `order` are read once; `each` and `fallback` are reactive. With `order="manual"` every row must be a single
-  DOM node and `For` must be the sole content of its slot; kept rows are never moved, only a row whose `orderKey` changes
-  moves (return a primitive).
+- `For`: default `keyed` is by reference; `keyed={false}` by index; `keyed={fn}` by key (for immutable data). `keyed`
+  and `children` are read once; `each` and `fallback` are reactive.
+- `ManualFor` (same props as `For` plus `orderKey`; `For order="manual"` is gone and throws in DEV): every row must be a single
+  DOM node and `ManualFor` must be the sole content of its slot; kept rows are never moved, only a row whose `orderKey`
+  changes moves (return a primitive). It is a separate component so apps without manual-order lists do not bundle it.
 - `Show`: a function child gets an accessor (`u().name`); with `keyed` it gets the value and the child is recreated when the
   identity changes. Reading the accessor after the condition turned falsy throws.
 - `Dynamic`: a **string** `component` is a tag name and a trust boundary: it must come from your code, never from

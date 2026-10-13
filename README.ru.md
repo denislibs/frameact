@@ -26,7 +26,7 @@ frameact — реактивный UI-фреймворк для приложен�
 
 > **Статус: ранняя разработка.** Реактивное ядро ([PR #1](https://github.com/denislibs/frameact/pull/1)) и
 > DOM-рантайм реализованы: `frameact/dom` для JSX-компилятора Solid 2.0
-> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (включая `order="manual"`),
+> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` и `ManualFor` (списки с ручным порядком),
 > `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, контролируемые инпуты (`use:value` / `use:checked`),
 > `HeavyAnimationScope`, context `Provider` и Vite-плагин `frameact/vite`; стор (`frameact/store`: дерево
 > сигналов с парковкой по причине на время тяжёлых анимаций) тоже готов, как и stricterdom (`frameact/stricterdom`:

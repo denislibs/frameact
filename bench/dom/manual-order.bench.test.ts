@@ -1,9 +1,10 @@
-// ChatList scenario: 1000 rows, `For order="manual"`, edit ONE item's non-order field (the order
+// ChatList scenario: 1000 rows, `ManualFor`, edit ONE item's non-order field (the order
 // does not change). Cost per edit = signal write + flushSync (jsdom DOM, no layout).
 import { createRoot, createSignal, flushSync, untrack } from '../../src/index';
 import { insert } from '../../src/dom/insert';
 import { createComponent } from '../../src/dom/component';
 import { For } from '../../src/dom/list';
+import { ManualFor } from '../../src/dom/manualFor';
 
 type Chat = { id: number; text: string };
 const N = 1000;
@@ -22,10 +23,9 @@ it('manual order: edit one row (order unchanged)', () => {
         ul,
         createComponent(
           () =>
-            For({
+            (mode === 'keyed-fn' ? For : ManualFor)({
               get each() { return list(); },
               keyed: (c: Chat) => c.id,
-              order: mode === 'keyed-fn' ? undefined : 'manual',
               orderKey: mode === 'manual' ? (c: Chat) => c.id : undefined,
               children: (item: () => Chat) => {
                 const li = document.createElement('li');
