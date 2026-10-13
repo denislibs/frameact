@@ -29,8 +29,14 @@ const CHROME = process.env.CHROME_BINARY ?? '/Applications/Google Chrome.app/Con
 const HOST = `http://localhost:${Number(process.env.PORT) > 0 ? Number(process.env.PORT) : 8080}`;
 
 const argv = process.argv.slice(2);
-const opt = (n, d) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : d);
+// A flag given as the last argument (or followed by another flag) falls back to its default instead of crashing on `undefined`.
+const opt = (n, d) => {
+  const value = argv[argv.indexOf(n) + 1];
+  return argv.includes(n) && value !== undefined && !value.startsWith('--') ? value : d;
+};
 const fws = opt('--fw', 'frameact').split(',');
+// --fw names end up in a URL path and in a file name under --snap: plain directory names only.
+for (const fw of fws) if (!/^[\w.-]+$/.test(fw) || fw === '.' || fw === '..') throw new Error(`--fw: "${fw}" is not a framework directory name`);
 const fpN = Number(opt('--fp', 0));
 const memN = Number(opt('--mem', 0));
 const snapDir = opt('--snap', null);
@@ -44,7 +50,8 @@ async function startBrowser() {
     '--ash-no-nudges', '--disable-extensions', '--disable-features=Translate,PrivacySandboxSettings4,IPH_SidePanelGenericMenuFeature',
   ];
   if (headless) args.push('--headless=new');
-  return puppeteer.launch({ headless: false, executablePath: CHROME, args, defaultViewport: { width: 1280, height: 800 } });
+  // pipe: CDP over stdio, not a WebSocket on 127.0.0.1:<random port> that any local process could attach to.
+  return puppeteer.launch({ headless: false, pipe: true, executablePath: CHROME, args, defaultViewport: { width: 1280, height: 800 } });
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function click(page, sel) {
@@ -95,11 +102,12 @@ async function firstPaint(fw) {
           if ((e.name === 'v8.compile' || e.name === 'V8.CompileScript' || e.name === 'v8.compileModule') && e.dur) compileMs += e.dur / 1000;
         }
       }
-      await fetch(`${HOST}/disableCompression`);
       samples.fp.push(info.fp); samples.fcp.push(info.fcp ?? NaN); samples.jsDur.push(info.jsEnd - info.jsStart); samples.jsEnd.push(info.jsEnd);
       samples.domInteractive.push(info.domInteractive); samples.evalMs.push(evalMs); samples.compileMs.push(compileMs);
       if (i === 0) console.log(`  ${fw}: main.js encoded ${info.jsSize} B, decoded ${info.jsDecoded} B`);
     } finally {
+      // Always back to the server's default, or later runs of run.mjs measure with compression still on.
+      await fetch(`${HOST}/disableCompression`).catch(() => {});
       await browser.close();
     }
   }
