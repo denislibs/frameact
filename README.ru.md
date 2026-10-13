@@ -128,6 +128,17 @@ render(() => <Composer />, document.getElementById('app')!);
 затем вызовите `forceControlledValue(el)` из обработчика пользовательского события (`isForcingControlledValue`
 позволяет распознать этот цикл в ваших `blur`/`focus`).
 
+**Как регистрируются `use:value` / `use:checked`.** Рантайм не регистрирует их при загрузке (приложение без контролируемых
+инпутов не включает этот код в бандл), поэтому до первой записи кто-то должен вызвать `registerControlledDirectives()`.
+Vite-плагин делает это сам: добавляет вызов в каждый модуль, в скомпилированном выводе которого есть строка `"use:value"` /
+`"use:checked"` (JSX-атрибут, `mergeProps(props, { 'use:value': v })`, `<input {...{ 'use:value': s }} />`), а также в обычные
+`.js`/`.mjs`/`.ts`-модули, включая `node_modules`, где она встречается (библиотека компонентов, собранная отдельно). Вне Vite
+подключите Babel-плагин: `plugins: babelPlugins(dev)` (компилятор плюс регистрация) или только `registerControlledBabelPlugin`,
+оба из `frameact/vite`. Если сборка не видит запись (имя собирается в рантайме, предсобранная зависимость в dev-режиме Vite,
+минифицированная библиотека), есть запасной выход: один раз при старте `import 'frameact/dom/controlled'` или вызов
+`registerControlledDirectives()` из `frameact/dom`. Если незарегистрированный `use:value` всё же записан, DEV пишет ошибку с
+подсказкой, а production — одну короткую `console.error` на имя директивы.
+
 **Безопасность.** Запись атрибутов отклоняет URL `javascript:` / `vbscript:`, `data:` не для медиа, строковые
 обработчики `on*` и `srcdoc=`; явный выход для доверенного HTML — `prop:srcdoc`. В production отказы тихие, в DEV — это
 `console.error`.

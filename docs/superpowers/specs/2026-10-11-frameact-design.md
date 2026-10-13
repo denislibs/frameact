@@ -1226,6 +1226,9 @@ measure-задачу) — якорь скролла и список под па�
 что у `For`, плюс `orderKey`; `order="manual"` у `For` убран, в DEV `For` бросает ошибку с указанием на `ManualFor`).
 Причина: `order` читается в рантайме, поэтому `reconcileManual` и сборка порядка попадали в каждое приложение
 (≈1,5 КБ brotli); теперь `insert` знает только пометку «ручной порядок» и хук, который регистрирует `ManualFor`.
-Остальное: встроенные директивы `use:value`/`use:checked` регистрирует Vite-плагин в модулях, где они используются
-(`registerControlledDirectives` экспортируется из `frameact/dom` для ручного `setAttribute`); heavy-animation gating
+Остальное: встроенные директивы `use:value`/`use:checked` регистрирует Vite-плагин (или Babel-плагин `babelPlugins`/
+`registerControlledBabelPlugin` из `frameact/vite`) в каждом модуле, где в скомпилированном коде есть строковый литерал
+`"use:value"`/`"use:checked"` (JSX-атрибут, ключ спреда/`mergeProps`, предкомпилированная библиотека в `node_modules`);
+запасной выход: `import 'frameact/dom/controlled'` или `registerControlledDirectives()` из `frameact/dom`; в prod
+незарегистрированная запись даёт одну короткую `console.error` на имя; heavy-animation gating
 подключается первым `begin()` (или store-гейтом); состояние канала `class` хранится на элементе.

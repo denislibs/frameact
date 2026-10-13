@@ -14,6 +14,7 @@ export type Directive = (el: Element, value: unknown) => void;
 const RESERVED = new Set(['value', 'checked']);
 const builtins = new Map<string, Directive>();
 const registry = new Map<string, Directive>();
+const reported = new Set<string>();
 
 /** Register `use:<name>`. `value` and `checked` are built in; a taken name is a DEV error and is ignored. */
 export function defineDirective(name: string, fn: Directive): void {
@@ -24,7 +25,7 @@ export function defineDirective(name: string, fn: Directive): void {
   registry.set(name, fn);
 }
 
-/** Internal: the built-ins (`value`, `checked`, registered by `./controlled`, which `./attributes` loads). */
+/** Internal: the built-ins (`value`, `checked`), registered by `registerControlledDirectives()` (`./controlled`). */
 export function defineBuiltinDirective(name: string, fn: Directive): void {
   builtins.set(name, fn);
 }
@@ -36,9 +37,13 @@ export function runDirective(el: Element, name: string, value: unknown): void {
     if (DEV) {
       console.error(
         RESERVED.has(name)
-          ? `[frameact] use:${name} is not registered: call registerControlledDirectives() from 'frameact/dom' once (the Vite plugin does it for modules whose JSX uses use:${name})`
+          ? `[frameact] use:${name} is not registered: call registerControlledDirectives() from 'frameact/dom' once, or import 'frameact/dom/controlled' (the Vite plugin does it for every module that mentions "use:${name}")`
           : `[frameact] unknown directive use:${name} — register it with defineDirective('${name}', fn)`,
       );
+    } else if (RESERVED.has(name) && !reported.has(name)) {
+      // Prod: a controlled input nobody registered must not be silent. One short line per name.
+      reported.add(name);
+      console.error(`frameact: use:${name} needs registerControlledDirectives()`);
     }
     return;
   }

@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [frameact({ dev: true })],
   resolve: {
     alias: [
+      { find: 'frameact/dom/controlled', replacement: src('dom/controlledRegister.ts') },
       { find: 'frameact/dom', replacement: src('dom/index.ts') },
       { find: 'frameact/kit', replacement: src('kit/index.ts') },
       { find: 'frameact/store', replacement: src('store/index.ts') },

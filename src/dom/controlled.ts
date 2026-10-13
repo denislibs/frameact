@@ -563,10 +563,10 @@ function checkedDirective(el: Element, value: unknown): void {
 }
 
 /**
- * Registers the built-in `use:value` / `use:checked`. Not called by the runtime itself: the Vite plugin
- * injects the call into every module whose JSX uses `use:value` / `use:checked`, so an app without
- * controlled inputs does not bundle this module. Hand-written `setAttribute(el, 'use:value', …)` /
- * spreads outside compiled JSX call it once themselves. Idempotent.
+ * Registers the built-in `use:value` / `use:checked`. The runtime never calls it itself, so an app without
+ * controlled inputs does not bundle this module. Three ways it gets called: the Vite plugin (or the exported
+ * Babel plugin) injects it into every module whose compiled code contains the quoted directive name,
+ * `import 'frameact/dom/controlled'` runs it as a side effect, or call it once at startup. Idempotent.
  */
 export function registerControlledDirectives(): void {
   defineBuiltinDirective('value', valueDirective);

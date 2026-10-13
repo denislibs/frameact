@@ -319,7 +319,7 @@ void Composer;
 signal ignored an input event. Passing `value={text()}` is a plain property write, not controlled; the Vite plugin warns.
 `use:value` also works on `<textarea>` and `<select>`; `use:checked` on checkboxes/radios. Custom directives:
 `defineDirective('name', (el, value) => …)` then `<div use:name={…}>`.
-The Vite plugin registers `use:value` / `use:checked` per module that uses them; code that sets them by hand (`setAttribute(el, 'use:value', …)`, spreads outside compiled JSX) calls `registerControlledDirectives()` from `frameact/dom` once.
+The runtime does not register `use:value` / `use:checked` at load (an app without controlled inputs does not bundle them), so `registerControlledDirectives()` must run before the first write. The Vite plugin prepends it to every JSX/TSX module whose compiled output contains the string literal `"use:value"` / `"use:checked"` (the JSX attribute, `mergeProps(props, { 'use:value': v })`, a JSX spread with that key) and to plain `.js`/`.mjs`/`.ts` modules, `node_modules` included, that contain it (a pre-compiled component library). Without Vite: `plugins: babelPlugins(dev)` or `registerControlledBabelPlugin` from `frameact/vite`. What the build cannot see (a name assembled at run time, a prebundled dependency in Vite dev): `import 'frameact/dom/controlled'` once at startup, or `registerControlledDirectives()` from `frameact/dom`. An unregistered write is a DEV error naming the fix and, in production, one short `console.error` per directive name; the input is then not controlled.
 
 ## 8. Store (model B)
 

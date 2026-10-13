@@ -1,4 +1,4 @@
-import frameact, { compilerOptions } from '../../src/vite/index';
+import frameact, { babelPlugins, compilerOptions, registerControlledBabelPlugin } from '../../src/vite/index';
 
 type Pos = { line: number; column: number } | number | undefined;
 
@@ -217,4 +217,114 @@ it('registers the built-in controlled-input directives in modules whose JSX uses
   // a module without controlled inputs (even one mentioning value= or a user directive) is left alone
   const without = await compile('const a = <input value="x" use:focus={f} onInput={h} />;', '/app/y.jsx', false);
   expect(without.code).not.toContain('registerControlledDirectives');
+});
+
+const registered = (code: string) => /^import \{ registerControlledDirectives as (\w+) \} from ["']frameact\/dom["'];\s*\1\(\);/m.test(code);
+
+async function transformPlain(code: string, id: string) {
+  const plugin = frameact({ dev: false });
+  const run = plugin.transform as unknown as (this: unknown, code: string, id: string) => Promise<{ code: string; map?: unknown } | null | undefined> | { code: string } | null | undefined;
+  return (await run.call({ warn() {} }, code, id)) ?? null;
+}
+
+describe('controlled-input registration reaches every path that can write use:value / use:checked', () => {
+  it('string keys in a JSX spread and in mergeProps are detected (no use:value= in the source)', async () => {
+    const spread = await compile(`const a = <input {...{ "use:value": s }} />;`, '/app/x.jsx', false);
+    expect(registered(spread.code)).toBe(true);
+    const merged = await compile(
+      `import { mergeProps } from 'frameact';\nexport const Field = (props) => { const p = mergeProps(props, { 'use:checked': c }); return <input type="checkbox" {...p} />; };`,
+      '/app/field.jsx',
+      false,
+    );
+    expect(registered(merged.code)).toBe(true);
+    expect(merged.code.match(/registerControlledDirectives/g)!.length).toBe(1);
+  });
+
+  it('a .tsx helper that only builds the object (no JSX use:value=) registers too', async () => {
+    const helper = await compile(`export const bind = (s: () => string) => ({ 'use:value': s }); const x = <div />;`, '/app/bind.tsx', false);
+    expect(registered(helper.code)).toBe(true);
+  });
+
+  it('a comment or an unrelated string mentioning use:value= does not register', async () => {
+    const quiet = await compile(`// <input use:value={s} />\nconst t = "use:value=";\nconst a = <input value="x" />;`, '/app/y.jsx', false);
+    expect(quiet.code).not.toContain('registerControlledDirectives');
+  });
+
+  it('asset queries (?raw, ?url, ?inline) are not compiled', async () => {
+    for (const q of ['?raw', '?url', '?inline', '?v=1&raw']) {
+      expect((await compile('export default "<input use:value={s} />";', `/app/x.jsx${q}`)).code).toBe('');
+    }
+  });
+
+  describe('modules outside the JSX pipeline (pre-compiled libraries, plain .js/.ts helpers)', () => {
+    const library = 'import { setAttribute } from "frameact/dom";\nexport function bind(el, s) { setAttribute(el, "use:value", s); }\n';
+
+    it('injects the registration into an ESM module in node_modules that mentions "use:value" / "use:checked"', async () => {
+      const out = await transformPlain(library, '/app/node_modules/ui-kit/dist/input.js');
+      expect(out).not.toBeNull();
+      expect(registered(out!.code)).toBe(true);
+      // line structure is kept (the injection stays on line 1), so the module's own source map stays valid
+      expect(out!.code.split('\n').length).toBe(library.split('\n').length);
+      expect(out!.code.endsWith(library)).toBe(true);
+      for (const [file, text] of [
+        ['a.mjs', library],
+        ['b.ts', library.replace('use:value', 'use:checked')],
+        ['c.cjs', "export const k = 'use:value';"],
+      ] as const) {
+        expect(registered((await transformPlain(text, `/app/node_modules/ui-kit/${file}`))!.code)).toBe(true);
+      }
+    });
+
+    it('leaves alone: modules without the literal, CommonJS, already-registering modules, virtual modules and asset queries', async () => {
+      expect(await transformPlain('export const a = "use:focus"; export const b = "xuse:value";', '/app/node_modules/k/a.js')).toBeNull();
+      expect(await transformPlain('module.exports = { k: "use:value" };', '/app/node_modules/k/cjs.js')).toBeNull();
+      expect(await transformPlain(`import { registerControlledDirectives } from "frameact/dom";\nregisterControlledDirectives();\n${library}`, '/app/node_modules/k/b.js')).toBeNull();
+      expect(await transformPlain(library, '\0virtual:lib.js')).toBeNull();
+      for (const q of ['?raw', '?url', '?inline', '?worker']) expect(await transformPlain(library, `/app/node_modules/k/a.js${q}`)).toBeNull();
+      expect(await transformPlain(library, '/app/node_modules/k/data.json')).toBeNull();
+      expect(await transformPlain(library, '/app/node_modules/k/style.css')).toBeNull();
+    });
+
+    it('frameact\'s own sources never carry the quoted names (they would register the directives in every app)', async () => {
+      const { readdirSync, readFileSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const walk = (dir: string): string[] =>
+        readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
+      const offenders = walk('src')
+        .filter((f) => /\.[cm]?[jt]s$/.test(f) && !f.endsWith('.d.ts'))
+        .filter((f) => /(["'])use:(?:value|checked)\1/.test(readFileSync(f, 'utf8')));
+      expect(offenders).toEqual([]);
+    });
+  });
+
+  describe('Babel plugin for non-Vite pipelines', () => {
+    it('babelPlugins(dev) compiles JSX and registers; registerControlledBabelPlugin alone registers a plain module that sets the string key', async () => {
+      const { transformAsync } = await import('@babel/core');
+      const both = await transformAsync(`const a = <input {...{ 'use:value': s }} />;`, {
+        filename: '/lib/x.jsx',
+        babelrc: false,
+        configFile: false,
+        plugins: babelPlugins(false),
+      });
+      expect(both!.code).toContain('_$template');
+      expect(registered(both!.code!)).toBe(true);
+      const plain = await transformAsync(`import { setAttribute } from "frameact/dom";\nsetAttribute(el, "use:checked", c);`, {
+        filename: '/lib/y.js',
+        babelrc: false,
+        configFile: false,
+        plugins: [registerControlledBabelPlugin],
+      });
+      expect(registered(plain!.code!)).toBe(true);
+      const none = await transformAsync(`export const a = 1;`, { filename: '/lib/z.js', babelrc: false, configFile: false, plugins: [registerControlledBabelPlugin] });
+      expect(none!.code).not.toContain('registerControlledDirectives');
+      // idempotent: a module that already imports and calls it is not registered twice
+      const twice = await transformAsync(`import { registerControlledDirectives as r } from "frameact/dom";\nr();\nsetAttribute(el, "use:value", s);`, {
+        filename: '/lib/w.js',
+        babelrc: false,
+        configFile: false,
+        plugins: [registerControlledBabelPlugin],
+      });
+      expect(twice!.code!.match(/registerControlledDirectives/g)!.length).toBe(1);
+    });
+  });
 });

@@ -127,6 +127,17 @@ a value through an active IME composition (e.g. clearing the field on Send), upd
 `forceControlledValue(el)` from the user event handler (`isForcingControlledValue` detects the forced cycle in your
 `blur`/`focus` handlers).
 
+**How `use:value` / `use:checked` get registered.** The runtime does not register them at load (an app without controlled
+inputs does not bundle the code), so something must call `registerControlledDirectives()` before the first write. The
+Vite plugin does it for you: it prepends the call to every module whose compiled output contains the string `"use:value"` /
+`"use:checked"` (the JSX attribute, `mergeProps(props, { 'use:value': v })`, `<input {...{ 'use:value': s }} />`), and to
+plain `.js`/`.mjs`/`.ts` modules, `node_modules` included, that contain it (a component library compiled elsewhere).
+Outside Vite use the Babel plugin: `plugins: babelPlugins(dev)` (the compiler plus the registration) or just
+`registerControlledBabelPlugin`, both from `frameact/vite`. A call the build cannot see (a name assembled at run time, a
+prebundled dependency in Vite dev, a library minified past recognition) takes the escape hatch: `import 'frameact/dom/controlled'`
+once at startup, or call `registerControlledDirectives()` from `frameact/dom`. If an unregistered `use:value` is
+written anyway, DEV logs an error naming the fix and production logs one short `console.error` per directive name.
+
 **Security.** Attribute writes refuse `javascript:` / `vbscript:` URLs, non-media `data:` URLs, string `on*`
 handlers and `srcdoc=`; the explicit escape hatch for trusted HTML is `prop:srcdoc`. Refusals are silent in
 production and a `console.error` in DEV.
