@@ -2,7 +2,7 @@
 // Generalised to scopes: the global API is the root scope.
 import { getContext, getScope, peek, setContext } from '../core/core';
 import {
-  createEffect, isDomWritingSchedule, isDrainGuardedSchedule, markDrainGuarded, markStoreGated, markWritesDom,
+  createEffect, isDomWritingSchedule, isDrainGuardedSchedule, isNodeSchedule, markDrainGuarded, markNodeSchedule, markStoreGated, markWritesDom,
   type EffectNode, type EffectOptions, type Schedule,
 } from '../core/effects';
 import { drainHooks, releaseInFrame, requeueParked, type FrameEntry } from '../core/frame';
@@ -412,6 +412,7 @@ export function gateOnHeavyAnimation(schedule: Schedule, options: { blocking?: b
   };
   if (isDomWritingSchedule(schedule)) markWritesDom(gated);
   if (isDrainGuardedSchedule(schedule)) markDrainGuarded(gated);
+  if (isNodeSchedule(schedule)) markNodeSchedule(gated); // it hands `run` through untouched
   markStoreGated(gated); // an explicit opt-in into waiting for animations: store-caused runs park here too
   return gated;
 }

@@ -168,7 +168,21 @@ export function fastRaf(callback: NoneToVoidFunction, withTimeoutFallback = fals
  * allocations per write.) A re-entrant drain (a callback calling flushSync()) takes only what was
  * queued after the running batch was taken: the rest of that batch stays with its own loop.
  */
-const tickQueue: (NoneToVoidFunction | undefined)[] = [];
+const tickQueue: (NoneToVoidFunction | object | undefined)[] = [];
+/** Runs a queued node (effects.ts installs it): the core books its effects as nodes, not closures. */
+let tickNodeRunner: (node: object) => void = () => {};
+/** @internal effects.ts */
+export function setTickNodeRunner(fn: (node: object) => void) {
+  tickNodeRunner = fn;
+}
+/** Runs one queued node; a throw is reported, never allowed to drop the rest of its batch. */
+function safeRunNode(node: object) {
+  try {
+    tickNodeRunner(node);
+  } catch (error) {
+    console.error('[frameact] scheduled callback failed', error);
+  }
+}
 let tickNext = 0;
 let tickLen = 0;
 /**
@@ -197,6 +211,15 @@ export function onTickEnd(callback: NoneToVoidFunction) {
   }
 }
 
+/** @internal effects.ts (tickEnd): queue an effect node; the drain runs it through the installed node runner. */
+export function onTickEndNode(node: object) {
+  tickQueue[tickLen++] = node;
+  if (!tickBooked && tickDrainDepth === 0) {
+    tickBooked = true;
+    Promise.resolve().then(flushTickEndMicrotask);
+  }
+}
+
 /**
  * Run pending onTickEnd callbacks until none are left: callbacks queued while flushing run in this
  * same flush, so a cascade (effect → write → effect ...) completes in one drain. Used by the
@@ -217,7 +240,8 @@ export function flushTickEnd() {
       while (i < end) {
         const callback = tickQueue[i]!;
         tickQueue[i++] = undefined; // (let the callback go: the slot is reused later)
-        safeExec(callback);
+        if (typeof callback === 'function') safeExec(callback as NoneToVoidFunction);
+        else safeRunNode(callback);
       }
     }
   } finally {

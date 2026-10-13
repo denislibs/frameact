@@ -1,11 +1,15 @@
 import { DEV } from '../env';
-import { STATE_DISPOSED } from './core';
+import { F_WRITES_DOM, STATE_DISPOSED } from './core';
 import {
   createEffect,
   markDrainGuarded,
+  markNodeSchedule,
   markStoreGated,
   markWritesDom,
   NOT_APPLIED,
+  RUN_NODE,
+  runEffectNode,
+  runOf,
   setApplyCleanupDisposer,
   type EffectNode,
   type EffectOptions,
@@ -28,7 +32,7 @@ export interface FrameEntry {
 }
 
 /**
- * P3b: queues hold the EffectNode itself in the common case (its `_run` is the run), plain
+ * P3b: queues hold the EffectNode itself in the common case (booked with RUN_NODE, or with its own `run`), plain
  * functions for detached work (deferred apply-cleanups), and FrameEntry objects only as above —
  * no per-entry allocation on the hot path.
  */
@@ -95,7 +99,7 @@ function push(phase: FramePhase, item: QueueItem) {
 
 /** @internal used by Task 10's release path */
 export function enqueue(phase: FramePhase, run: () => void, node: EffectNode | null) {
-  push(phase, node === null ? run : run === node._run ? node : { run, node, phase });
+  push(phase, node === null ? run : run === RUN_NODE || run === node._run ? node : { run, node, phase });
   // Only re-dirties warn: a measure effect created during a mutate drain legitimately schedules its first run.
   if (DEV && phase === 'measure' && getPhase() === 'mutate' && node !== null && node._applied !== NOT_APPLIED) {
     console.warn(
@@ -158,7 +162,7 @@ export function drain(phase: FramePhase) {
           if (gating) {
             const blocker = drainHooks.blockingScopeFor(node, (blockCache ??= new Map()));
             if (blocker !== null) {
-              drainHooks.park(blocker, isNode ? { run: node._run, node, phase } : (item as FrameEntry));
+              drainHooks.park(blocker, isNode ? { run: runOf(node), node, phase } : (item as FrameEntry));
               continue;
             }
           }
@@ -177,7 +181,7 @@ export function drain(phase: FramePhase) {
           }
         }
         if (DEV) runs++;
-        if (isNode) node!._run();
+        if (isNode) runEffectNode(node!);
         else (item as FrameEntry).run();
       } catch (error) {
         console.error(`[frameact] ${phase} drain: entry failed`, error);
@@ -205,6 +209,10 @@ export const frameMeasure: Schedule = (run, node) => enqueue('measure', run, nod
 export const frameMutation: Schedule = (run, node) => enqueue('mutate', run, node);
 export const frameForcedReflow: Schedule = (run, node) => enqueue('reflow', run, node);
 markWritesDom(frameMutation);
+// Booked with the node itself: no per-effect `run` closure (effects.ts RUN_NODE).
+markNodeSchedule(frameMeasure);
+markNodeSchedule(frameMutation);
+markNodeSchedule(frameForcedReflow);
 // Each frame drain has its own per-effect LOOP_LIMIT: the generic self-dirty guard stays out.
 markDrainGuarded(frameMeasure);
 markDrainGuarded(frameMutation);
@@ -245,7 +253,7 @@ setApplyCleanupDisposer((node, cleanup) => {
       console.error(`[frameact] Error in effect cleanup${node._name ? ` "${node._name}"` : ''}`, error);
     }
   };
-  if (node._writesDom && getPhase() !== 'mutate') enqueue('mutate', run, null);
+  if (node._flags & F_WRITES_DOM && getPhase() !== 'mutate') enqueue('mutate', run, null);
   else run();
 });
 

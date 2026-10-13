@@ -71,7 +71,11 @@ export const F_INIT = 1,
   /** F_LIVE_PIN: the effect is never parked by the store gate, for its lifetime (controlled-input bindings). */
   F_LIVE_PIN = 1024,
   /** F_STORE_GATED: the effect's schedule is a frame queue or a gateOnHeavyAnimation wrapper — its store-caused runs wait for heavy animations (set once, in the constructor). */
-  F_STORE_GATED = 2048;
+  F_STORE_GATED = 2048,
+  /** F_WRITES_DOM: the effect's apply writes the live DOM — its apply-cleanup on dispose is deferred to the mutate phase (set once, in the constructor; was a boolean field). */
+  F_WRITES_DOM = 4096,
+  /** F_NODE_RUN: the effect's schedule is node-aware (the built-in queues): it is booked with the node itself and no per-effect `run` closure is ever created (effects.ts). */
+  F_NODE_RUN = 8192;
 
 /**
  * True while the running notify walk comes from a store leaf write (writeStoreNode), or from the
@@ -964,7 +968,7 @@ export function update(node: Computation) {
   // F_STORE and F_PARKED are cleared here; F_LIVE too — the compute sets it again if it reads live.
   const storeCause = (node._flags & F_STORE) !== 0;
   // (F_ERRORED stays until a compute succeeds: a re-entrant read meanwhile still gets the error)
-  node._flags = (node._flags & (F_INIT | F_ERRORED | F_LIVE_PIN | F_STORE_GATED)) | F_COMPUTING;
+  node._flags = (node._flags & (F_INIT | F_ERRORED | F_LIVE_PIN | F_STORE_GATED | F_WRITES_DOM | F_NODE_RUN)) | F_COMPUTING;
   let computeStarted = false;
   const prevScope = currentScope,
     prevObserver = currentObserver,
@@ -1044,7 +1048,7 @@ export function update(node: Computation) {
     }
   } finally {
     const missed = node._flags & F_MISSED;
-    node._flags &= F_INIT | F_THREW | F_ERRORED | F_LIVE | F_LIVE_PIN | F_STORE_GATED;
+    node._flags &= F_INIT | F_THREW | F_ERRORED | F_LIVE | F_LIVE_PIN | F_STORE_GATED | F_WRITES_DOM | F_NODE_RUN;
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;
       if (missed) {
