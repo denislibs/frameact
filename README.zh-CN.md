@@ -121,7 +121,7 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 `"use:checked"`（JSX 属性、`mergeProps(props, { 'use:value': v })`、`<input {...{ 'use:value': s }} />`），就会在模块开头加入该调用；
 对含有该字符串的普通 `.js`/`.mjs`/`.ts` 模块（包括 `node_modules` 中在别处编译好的组件库）也一样。不用 Vite 时请使用 Babel 插件：
 `plugins: babelPlugins(dev)`（编译器加注册），或只用 `registerControlledBabelPlugin`，二者均来自 `frameact/vite`。
-构建看不到的写入（运行时拼出的名字、Vite 开发模式下预构建的依赖、被压缩到无法识别的库）可使用后备方案：启动时 `import 'frameact/dom/controlled'`
+构建看不到的写入（运行时拼出的名字、Vite 开发模式下连同自带 frameact 副本一起预构建的依赖、被压缩到无法识别的库）可使用后备方案：启动时 `import 'frameact/dom/controlled'`
 一次，或调用 `frameact/dom` 的 `registerControlledDirectives()`。若仍写入了未注册的 `use:value`，开发模式会输出带修复提示的错误，
 生产环境对每个指令名只输出一条简短的 `console.error`。
 

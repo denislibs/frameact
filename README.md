@@ -134,7 +134,7 @@ Vite plugin does it for you: it prepends the call to every module whose compiled
 plain `.js`/`.mjs`/`.ts` modules, `node_modules` included, that contain it (a component library compiled elsewhere).
 Outside Vite use the Babel plugin: `plugins: babelPlugins(dev)` (the compiler plus the registration) or just
 `registerControlledBabelPlugin`, both from `frameact/vite`. A call the build cannot see (a name assembled at run time, a
-prebundled dependency in Vite dev, a library minified past recognition) takes the escape hatch: `import 'frameact/dom/controlled'`
+dependency prebundled together with its own copy of frameact in Vite dev, a library minified past recognition) takes the escape hatch: `import 'frameact/dom/controlled'`
 once at startup, or call `registerControlledDirectives()` from `frameact/dom`. If an unregistered `use:value` is
 written anyway, DEV logs an error naming the fix and production logs one short `console.error` per directive name.
 

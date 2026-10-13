@@ -253,7 +253,14 @@ export default function frameact(options: FrameactPluginOptions = {}): Plugin {
     async transform(code, id) {
       if (id.startsWith('\0') || ASSET_QUERY.test(id)) return null;
       const file = id.split('?')[0];
-      if (!include.test(file) || exclude.test(file)) return PLAIN_MODULE.test(file) ? registerInPlainModule(code) : null;
+      if (!include.test(file) || exclude.test(file)) {
+        if (!PLAIN_MODULE.test(file)) return null;
+        const registered = registerInPlainModule(code);
+        // A dependency that merely contains the literal but cannot see frameact (a strict pnpm layout) must not
+        // get an import it cannot resolve: that would break the build for a false positive.
+        if (registered === null || !(await this.resolve('frameact/dom', id, { skipSelf: true }))) return null;
+        return registered;
+      }
       if (dev) {
         const lints = lintSource(code);
         const position = createPositioner(code);

@@ -221,10 +221,11 @@ it('registers the built-in controlled-input directives in modules whose JSX uses
 
 const registered = (code: string) => /^import \{ registerControlledDirectives as (\w+) \} from ["']frameact\/dom["'];\s*\1\(\);/m.test(code);
 
-async function transformPlain(code: string, id: string) {
+async function transformPlain(code: string, id: string, frameactResolvable = true) {
   const plugin = frameact({ dev: false });
   const run = plugin.transform as unknown as (this: unknown, code: string, id: string) => Promise<{ code: string; map?: unknown } | null | undefined> | { code: string } | null | undefined;
-  return (await run.call({ warn() {} }, code, id)) ?? null;
+  const context = { warn() {}, resolve: async () => (frameactResolvable ? { id: '/app/node_modules/frameact/src/dom/index.ts' } : null) };
+  return (await run.call(context, code, id)) ?? null;
 }
 
 describe('controlled-input registration reaches every path that can write use:value / use:checked', () => {
@@ -278,6 +279,8 @@ describe('controlled-input registration reaches every path that can write use:va
     it('leaves alone: modules without the literal, CommonJS, already-registering modules, virtual modules and asset queries', async () => {
       expect(await transformPlain('export const a = "use:focus"; export const b = "xuse:value";', '/app/node_modules/k/a.js')).toBeNull();
       expect(await transformPlain('module.exports = { k: "use:value" };', '/app/node_modules/k/cjs.js')).toBeNull();
+      // A dependency that cannot resolve frameact (strict pnpm layout) is a false positive: no unresolvable import.
+      expect(await transformPlain(library, '/app/node_modules/unrelated/a.js', false)).toBeNull();
       expect(await transformPlain(`import { registerControlledDirectives } from "frameact/dom";\nregisterControlledDirectives();\n${library}`, '/app/node_modules/k/b.js')).toBeNull();
       expect(await transformPlain(library, '\0virtual:lib.js')).toBeNull();
       for (const q of ['?raw', '?url', '?inline', '?worker']) expect(await transformPlain(library, `/app/node_modules/k/a.js${q}`)).toBeNull();

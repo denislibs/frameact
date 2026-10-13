@@ -134,7 +134,7 @@ Vite-плагин делает это сам: добавляет вызов в �
 `"use:checked"` (JSX-атрибут, `mergeProps(props, { 'use:value': v })`, `<input {...{ 'use:value': s }} />`), а также в обычные
 `.js`/`.mjs`/`.ts`-модули, включая `node_modules`, где она встречается (библиотека компонентов, собранная отдельно). Вне Vite
 подключите Babel-плагин: `plugins: babelPlugins(dev)` (компилятор плюс регистрация) или только `registerControlledBabelPlugin`,
-оба из `frameact/vite`. Если сборка не видит запись (имя собирается в рантайме, предсобранная зависимость в dev-режиме Vite,
+оба из `frameact/vite`. Если сборка не видит запись (имя собирается в рантайме, зависимость, предсобранная в dev-режиме Vite вместе со своей копией frameact,
 минифицированная библиотека), есть запасной выход: один раз при старте `import 'frameact/dom/controlled'` или вызов
 `registerControlledDirectives()` из `frameact/dom`. Если незарегистрированный `use:value` всё же записан, DEV пишет ошибку с
 подсказкой, а production — одну короткую `console.error` на имя директивы.
