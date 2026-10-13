@@ -221,6 +221,8 @@ pnpm test:chrome  # 在 headless Chrome 中运行 stricterdom（真实布局、�
 
 工具链：TypeScript 7（原生）、Vite 8 / Vitest 5 + jsdom、oxlint。
 
+**面向 AI 助手。** 为 frameact 贡献代码：[`AGENTS.md`](AGENTS.md)。用 frameact 编写应用：[`llms.txt`](llms.txt) 与 [`docs/llms-full.md`](docs/llms-full.md)。
+
 ## 许可证
 
 [MIT](LICENSE)。内置和改编的第三方代码（maverick-js/signals、teact、dom-expressions、solidjs/solid 的 Web 客户端部分及编译器夹具）同样为 MIT，

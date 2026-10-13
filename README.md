@@ -251,6 +251,8 @@ pnpm test:chrome  # stricterdom in headless Chrome (real layout, real observer t
 
 Toolchain: TypeScript 7 (native), Vite 8 / Vitest 5 + jsdom, oxlint.
 
+**For AI assistants.** Contributing to frameact: [`AGENTS.md`](AGENTS.md). Writing an app with it: [`llms.txt`](llms.txt) and [`docs/llms-full.md`](docs/llms-full.md).
+
 ## License
 
 [MIT](LICENSE). Vendored and adapted third-party code (maverick-js/signals, teact, dom-expressions, solidjs/solid — web client
