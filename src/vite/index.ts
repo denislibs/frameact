@@ -53,10 +53,27 @@ export interface FrameactPluginOptions {
  *    positive: a constant identifier (`value={LABEL}`) is not distinguished from a signal read.
  * 2. A static string event attribute on an intrinsic element (`<div onclick="…">`): the compiler inlines
  *    it into the template HTML, so the runtime's "no string handlers" check never sees it.
+ * 3. Destructured props (trap no. 1 for a team coming from hooks): `function Chat({ isOpen })`,
+ *    `const Chat = ({ isOpen }) =>`, `const Chat: FC<P> = function ({ … })` and, in a body,
+ *    `const { isOpen } = props`. A component runs once, so a destructured prop is read once at creation
+ *    and never updates. Only capitalised names are checked (a helper named `Format({ a })` is a
+ *    known false positive; the message says so), and so is the body form inside a memo/effect compute,
+ *    where the read is tracked and re-runs. A type annotation containing `=` or `=>`, or longer than 200
+ *    characters, ends the declaration scan (known false negative). `props` is the conventional parameter
+ *    name for the body form. The body form is skipped inside an `on*={…}` attribute: a handler reads the
+ *    props fresh at event time, which is the right pattern (`onClick={() => { const { id } = props; … }}`).
+ *    Comments and strings are not masked: a match in either is a known false positive.
+ *
+ * Every pattern is linear on any input (a missing closing token cannot make a scan run to the end of
+ * the file from each start): the scans stop at the next `<` / `>` / `=` / `;` / newline or after a
+ * bounded span. The price is a few more false negatives (a `<` inside the tag's attributes ends the
+ * tag scan).
  */
 const CONTROLLED_PROP =
-  /<(input|textarea|select)\b(?:=>|[^>])*?\s(value|checked)=\{(?!\s*(?:"[^"]*"|'[^']*'|`[^`$]*`|-?\d[\d.]*|true|false|null|undefined)\s*\})/g;
-const STRING_HANDLER = /<[a-z][\w-]*\b(?:=>|[^>])*?\s(on[A-Za-z]+)=["']/g;
+  /<(input|textarea|select)\b(?:=>|[^<>])*?\s(value|checked)=\{(?!\s*(?:"[^"]{0,200}"|'[^']{0,200}'|`[^`$]{0,200}`|-?\d[\d.]*|true|false|null|undefined)\s*\})/g;
+const STRING_HANDLER = /<[a-z][\w-]*\b(?:=>|[^<>])*?\s(on[A-Za-z]+)=["']/g;
+const DESTRUCTURED_PARAM = /\b(?:function\s+([A-Z][\w$]*)\s*\(|(?:const|let|var)\s+([A-Z][\w$]*)\s*(?::[^=;\n]{0,200})?=\s*(?:function\s*\(|\())\s*\{/g;
+const DESTRUCTURED_BODY = /\b(?:const|let|var)\s*\{[^}]{0,500}\}\s*=\s*props\b/g;
 
 interface Lint {
   index: number;
@@ -77,18 +94,59 @@ function lintSource(code: string): Lint[] {
       message: `${match[1]}="…" is a static string attribute: the compiler inlines it into the template HTML, bypassing the runtime's check. Use onClick={fn}-style handlers.`,
     });
   }
+  for (const match of code.matchAll(DESTRUCTURED_PARAM)) {
+    const name = match[1] ?? match[2];
+    found.push({
+      index: match.index,
+      message: `<${name}> destructures its props: a component runs once, so a destructured prop is read at creation and never updates. Take \`props\` and read \`props.x\` where it is used (or splitProps). If ${name} is not a component, ignore this.`,
+    });
+  }
+  for (const match of code.matchAll(DESTRUCTURED_BODY)) {
+    if (insideHandlerAttribute(code, match.index)) continue;
+    found.push({
+      index: match.index,
+      message:
+        'const { … } = props reads the props once: the values never update. Read `props.x` where it is used (or splitProps). Inside an event handler this is fine (the read happens at event time); if this is one, ignore the warning.',
+    });
+  }
   return found;
 }
 
-/** Rollup position (1-based line, 0-based column) of a character index. */
-function position(code: string, index: number) {
-  let line = 1;
-  let last = -1;
-  for (let at = code.indexOf('\n'); at !== -1 && at < index; at = code.indexOf('\n', at + 1)) {
-    line++;
-    last = at;
+/**
+ * True when `index` lies inside the braces of an `on*={…}` attribute that opened before it (within
+ * the last 2000 characters): its code runs at event time, not at component creation.
+ */
+function insideHandlerAttribute(code: string, index: number): boolean {
+  const window = code.slice(Math.max(0, index - 2000), index);
+  let start = -1;
+  for (const open of window.matchAll(/\bon[A-Z][\w]*=\{/g)) start = open.index + open[0].length;
+  if (start === -1) return false;
+  let depth = 1;
+  for (let i = start; i < window.length; i++) {
+    const ch = window[i];
+    if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return false;
   }
-  return { line, column: index - last - 1 };
+  return true;
+}
+
+/** Rollup position (1-based line, 0-based column) of a character index; one scan for the newlines, a binary search per finding. */
+function createPositioner(code: string) {
+  let newlines: number[] | undefined;
+  return (index: number) => {
+    if (newlines === undefined) {
+      newlines = [];
+      for (let at = code.indexOf('\n'); at !== -1; at = code.indexOf('\n', at + 1)) newlines.push(at);
+    }
+    let lo = 0;
+    let hi = newlines.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (newlines[mid] < index) lo = mid + 1;
+      else hi = mid;
+    }
+    return { line: lo + 1, column: index - (lo === 0 ? -1 : newlines[lo - 1]) - 1 };
+  };
 }
 
 /**
@@ -110,7 +168,9 @@ export default function frameact(options: FrameactPluginOptions = {}): Plugin {
       const file = id.split('?')[0];
       if (!include.test(file) || exclude.test(file)) return null;
       if (dev) {
-        for (const lint of lintSource(code)) this.warn(lint.message, position(code, lint.index));
+        const lints = lintSource(code);
+        const position = createPositioner(code);
+        for (const lint of lints) this.warn(lint.message, position(lint.index));
       }
       const result = await transformAsync(code, {
         filename: file,

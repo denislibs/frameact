@@ -1,4 +1,4 @@
-import { fastRaf, onTickEnd, flushTickEnd, onIdle, throttleWith } from '../../src/scheduler/schedulers';
+import { debounce, fastRaf, onTickEnd, flushTickEnd, onIdle, throttleWith, throttleWithTickEnd } from '../../src/scheduler/schedulers';
 import { installFakeRaf } from '../helpers/raf';
 import { flushMicrotasks } from '../helpers/micro';
 
@@ -166,5 +166,65 @@ describe('onTickEnd queue (perf: one reused array, one microtask per tick)', () 
     onTickEnd(() => order.push('b'));
     flushTickEnd();
     expect(order).toEqual(['a', 'x', 'a-end', 'b']);
+  });
+});
+
+describe('debounce', () => {
+  it('leading + trailing by default; (true, false) fires once and ignores repeats for the window; the window restarts per call', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const both = vi.fn();
+    const d = debounce(both, 100);
+    d(1);
+    d(2);
+    expect(both).toHaveBeenCalledTimes(1);
+    expect(both).toHaveBeenLastCalledWith(1);
+    vi.advanceTimersByTime(99);
+    d(3); // restarts the window
+    vi.advanceTimersByTime(99);
+    expect(both).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(both).toHaveBeenCalledTimes(2);
+    expect(both).toHaveBeenLastCalledWith(3);
+
+    const first = vi.fn();
+    const loadMore = debounce(first, 1000, true, false);
+    loadMore();
+    loadMore();
+    vi.advanceTimersByTime(1000);
+    expect(first).toHaveBeenCalledTimes(1);
+    loadMore();
+    expect(first).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('debounce: a single call (N6)', () => {
+  it('with the default (true, true) one call runs fn exactly once — the leading edge, no trailing repeat (lodash semantics; teact would run it twice)', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fn = vi.fn();
+    const d = debounce(fn, 100);
+    d('a');
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(fn).toHaveBeenCalledTimes(1);
+    d('b', 'c'); // the next wait opens a fresh leading call
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(fn).toHaveBeenLastCalledWith('b', 'c');
+    d('d'); // a second call in the wait owes the trailing one
+    vi.advanceTimersByTime(100);
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(fn).toHaveBeenLastCalledWith('d');
+  });
+});
+
+describe('throttleWithTickEnd', () => {
+  it('runs once per tick with the last arguments', async () => {
+    const fn = vi.fn();
+    const t = throttleWithTickEnd(fn);
+    t(1);
+    t(2);
+    expect(fn).not.toHaveBeenCalled();
+    await flushMicrotasks();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledWith(2);
   });
 });
