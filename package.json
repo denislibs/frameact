@@ -23,7 +23,8 @@
     "lint": "oxlint src test",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "test:chrome": "node test/chrome/run.mjs",
-    "bench:reactivity": "node bench/reactivity/run.mjs"
+    "bench:reactivity": "node bench/reactivity/run.mjs",
+    "bench:krausest": "node bench/krausest/run.mjs"
   },
   "devDependencies": {
     "@types/babel__core": "^7.20.5",

@@ -1,0 +1,28 @@
+{
+  "name": "js-framework-benchmark-frameact",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/main.js",
+  "js-framework-benchmark": {
+    "frameworkVersionFromPackage": "frameact",
+    "frameworkHomeURL": "https://github.com/denislibs/frameact",
+    "repoURL": "https://github.com/denislibs/frameact",
+    "language": "JavaScript"
+  },
+  "scripts": {
+    "dev": "vite build --watch --configLoader runner",
+    "build-prod": "vite build --configLoader runner"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/krausest/js-framework-benchmark",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/krausest/js-framework-benchmark.git"
+  },
+  "dependencies": {
+    "frameact": "file:vendor/frameact.tgz"
+  },
+  "devDependencies": {
+    "vite": "8.3.4"
+  }
+}
