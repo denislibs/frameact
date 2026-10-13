@@ -122,7 +122,7 @@ render(() => <Composer />, document.getElementById('app')!);
 ```
 
 `class=` / `classList=` / спреды диффят токены классов, поэтому императивный `addExtraClass` переживает
-обновления; строковый `style=` пишет `cssText` и несовместим с `setExtraStyles`. Контролируемые инпуты —
+обновления; строковый `style=` пишет `cssText`, после чего стили из `setExtraStyles` накладываются заново. Контролируемые инпуты —
 `use:value` / `use:checked`: реактивный `value=` пишется как свойство, и Vite-плагин предупреждает об этом в dev. Чтобы
 протолкнуть значение через активную IME-композицию (например, очистить поле по «Отправить»), сначала обновите сигнал,
 затем вызовите `forceControlledValue(el)` из обработчика пользовательского события (`isForcingControlledValue`
@@ -169,6 +169,20 @@ setState('chats', id, 'unread', (n) => n + 1);
 setState('messages', chatId, reconcile(chunk)); // иммутабельные данные с сервера, сопоставление по `id`
 <For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
 ```
+
+## Кит
+
+`frameact/kit` — тонкий UI-слой, который нужен клиенту класса Telegram Web A до основных экранов, на тех
+же контрактах классов, что у telegram-tt (стили приносит клиент): `<Transition>` (слайды по ключу,
+предыдущий слайд остаётся живым (и после анимации, пока не сработает `shouldCleanup`), политики cleanup, scope heavy-animation на поддерево,
+`animationend` читается в событии и применяется в mutate-фазе), `createShowTransition` /
+`<ShowTransition>` / `createMediaTransition`, `<InfiniteScroll>` и `createScrollAnchor` (якорь снимается в
+measure-фазе, список обновляется в mutate, позиция восстанавливается в forced-reflow — один кадр, в том
+числе после релиза из-под heavy-animation). Примитивы под ним лежат в ядре: `onMount`, `onDestroy`,
+`previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation` (`frameact`), `lazy`, `splitProps`
+(`frameact/dom`), `debounce` / `fastRaf` / `throttleWithTickEnd` (`frameact/scheduler`). Vite-плагин
+предупреждает о деструктуризации пропсов, а `setExtraStyles` переживает строковый `style=`, как в teact.
+Гайд портирования (англ.): [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
 
 ## stricterdom (dev-режим)
 
@@ -238,6 +252,7 @@ Message > span.children [mutate]`), фаза кадра — тоже (`Slow muta
 | 3 · store | стор-дерево сигналов: подписки на листья, запись по пути на месте, `reconcile`, парковка по причине на время анимаций, типизированные экшены | ✅ готово |
 | 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта, профайлер прогонов, контракт `flushSync` для прода | ✅ готово |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact на сценариях мессенджера (Chromium + WebKit, CPU ×4) | ⏳ |
+| 6 · kit | кит готовности клиента: `Transition`, `ShowTransition`, `InfiniteScroll` + якорь скролла, `onMount`/`onDestroy`, `lazy`, `splitProps`, lint деструктуризации пропсов, гайд портирования | ✅ готово |
 
 Дизайн: [`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md) ·
 планы: [`docs/superpowers/plans/`](docs/superpowers/plans/).
@@ -253,6 +268,8 @@ pnpm test:chrome  # stricterdom в headless Chrome (настоящий layout и
 ```
 
 Тулчейн: TypeScript 7 (нативный), Vite 8 / Vitest 5 + jsdom, oxlint.
+
+**Для AI-ассистентов.** Вклад в frameact: [`AGENTS.md`](AGENTS.md). Приложение на frameact: [`llms.txt`](llms.txt) и [`docs/llms-full.md`](docs/llms-full.md).
 
 ## Лицензия
 

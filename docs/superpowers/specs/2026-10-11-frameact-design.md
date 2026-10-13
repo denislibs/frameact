@@ -469,8 +469,10 @@ acceptance-тестом (§5); ожидаемый состав: `template`, `ins
   реактивные обновления без реестра. `className=` на intrinsic-элементах у
   компилятора 2.0 — обычный атрибут → `console.error` «используй `class`», но значение
   всё равно применяется через дифф токенов (фикстуры компилятора должны работать).
-- **Стили.** Объектная форма — per-property дифф; строковая — `cssText`.
-  Документируется: строковый `style` несовместим с `setExtraStyles`.
+- **Стили.** Объектная форма — per-property дифф; строковая — `cssText`. Extra-стили
+  (`setExtraStyles`) хранятся в реестре на элементе и повторно применяются после каждой записи
+  `cssText` — паритет с `updateStyle` teact (план 6); реестр накапливается между вызовами, `null`
+  удаляет.
 - **Безопасность записи атрибутов.** Рантайм не отправляет строку в HTML-приёмник, кроме
   статического HTML `template()` и явно названных `innerHTML` / `textContent` / `prop:srcdoc`.
   `setAttribute` (в него компилятор опускает `attr:`, `bool:`, spread и голые атрибуты)
@@ -1009,24 +1011,28 @@ sourceNames: dev,                                                     // име�
 ```
 frameact/
   package.json            name: frameact; exports: ".", "./dom", "./scheduler",
-                          "./stricterdom", "./store", "./vite", "./jsx-runtime" (типы)
+                          "./stricterdom", "./store", "./kit", "./vite", "./jsx-runtime" (типы)
   src/
     core/                 форк maverick (+ правки §3.2), effects.ts (run, очереди run'ов,
                           планировщики, гейтинг), context.ts, map.ts (+key fn),
-                          debug.ts (dev-атрибуция: ownerPath/effectPath/describeNode)
+                          lifecycle.ts (onMount/onDestroy/watchHeavyAnimation), derive.ts (previous/currentOrPrev/frozenWhile),
+                          memo.ts (createMemo), debug.ts (dev-атрибуция: ownerPath/effectPath/describeNode)
     scheduler/            fasterdom.ts (+flushSync), schedulers.ts, heavyAnimation.ts (scope'ы)
     stricterdom/          stricterdom.ts, layoutCauses.ts, runlog.ts (профайлер), index.ts
     dom/                  template.ts, insert.ts, props.ts (class token diff, style),
                           events.ts, directives.ts (use:value/use:checked),
                           list.ts (For, manual order), flow.ts (Show/Switch/Dynamic/Portal),
-                          render.ts, index.ts
+                          lazy.ts, render.ts, index.ts
     store/                store.ts (дерево сигналов, setState, merge, produce, unwrap/snapshot, live/ungated),
                           reconcile.ts, gate.ts (парковка по причине), actions.ts
+    kit/                  animationEnd.ts, showTransition.ts, transition.ts, scrollAnchor.ts,
+                          infiniteScroll.ts, index.ts — UI-слой клиента (план 6; контракты классов tt)
     vite/                 index.ts
     jsx/                  jsx.d.ts (из dom-expressions) + типы директив
   test/                   vitest + jsdom; test/chrome — дорожка в headless Chrome (pnpm test:chrome)
   bench/                  teact/, solid2/, frameact/ — одно приложение, три реализации
-  examples/               чат-лист + список сообщений (оба паттерна из §3.5)
+  examples/               чат-лист + список сообщений (оба паттерна из §3.5) — демо на ките, не библиотека
+  docs/guides/            porting-from-teact.md — гайд портирования (хуки → примитивы, модель стора B)
   docs/superpowers/specs/
   THIRD_PARTY_LICENSES.md maverick, dom-expressions, teact (все MIT)
 ```
@@ -1202,3 +1208,13 @@ telegram-tt») сошлись на трёх критических дефект�
 деревом сигналов с парковкой по причине (`F_STORE`): листья вместо контейнеров и `mapStateToProps`,
 запись по пути на месте вместо иммутабельного `global`, гейт на уровне эффекта по причине грязности
 вместо bridge-сигнала на scope. Актуальное описание — §3.5; обоснование и замеры — §3.5 (блок «Стоимость»). §9 оставлен как журнал ревизии 2.
+
+## 11. Ревизия 4: кит готовности клиента (план 6)
+
+Добавлены: `frameact/kit` (переходы и бесконечный скролл на контрактах классов telegram-tt), примитивы
+жизненного цикла `onMount`/`onDestroy` и истории значений `previous`/`currentOrPrev`/`frozenWhile` в
+`frameact`, `lazy`/`splitProps` в `frameact/dom`, экспорт `debounce`/`fastRaf`/`throttleWithTickEnd` из
+`frameact/scheduler`, lint деструктуризации пропсов в `frameact/vite`, паритет extra-стилей (§3.3).
+Кит опирается на исправление R1 аудита из раунда фиксов стора (§3.5: релиз store-гейта через
+measure-задачу) — якорь скролла и список под парковкой отпускаются в один кадр в порядке фаз;
+план 6 добавляет тест на `end()` из mutation-apply. Гайд портирования — `docs/guides/porting-from-teact.md`.

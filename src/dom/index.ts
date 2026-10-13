@@ -12,7 +12,8 @@ export { render } from './render';
 export {
   createComponent, effect, memo, getOwner, claimElement, children, type Component, type ChildrenReturn,
 } from './component';
-export { mergeProps, spread, assign, ref, applyRef, readShallow, type PropsSource } from './props';
+export { mergeProps, splitProps, spread, assign, ref, applyRef, readShallow, type PropsSource } from './props';
+export { lazy, type LazyComponent, type LazyOptions } from './lazy';
 export { For, type ForBaseProps, type Accessor, type Each } from './list';
 export {
   className, classList, toggleClassToken, classTokens, addExtraClass, removeExtraClass, toggleExtraClass,

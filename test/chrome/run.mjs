@@ -1,21 +1,39 @@
 // The headless-Chrome lane: `pnpm test:chrome`. Builds test/chrome (a dev build through the frameact
 // Vite plugin), serves it with `vite preview`, dumps the DOM from headless Chrome and checks the
-// results the page published in `data-result`. Needs Google Chrome (CHROME_BIN overrides the path);
+// results the page published in `data-result`. Needs Google Chrome (CHROME_BIN overrides the path; on Linux it is
+// looked up on PATH as google-chrome / chromium); under CI or as root it runs with --no-sandbox;
 // not part of `pnpm check` (jsdom covers the patch logic; this lane covers real layout and timing).
 // Hardening: Chrome is killed after CHROME_TIMEOUT_MS (default 60 s) — a hung browser must not hang the lane —
 // the preview server and the throw-away profile are cleaned up on SIGINT/SIGTERM too, the server listens on
 // 127.0.0.1 only, and Chrome is started without background network traffic (component updates, sync).
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { accessSync, constants, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build, preview } from 'vite';
 
 const configFile = fileURLToPath(new URL('./vite.config.ts', import.meta.url));
 /** `data-result` is an HTML attribute: undo the serializer's escaping before parsing the JSON. */
 const unescapeAttr = (html) => html.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-const chrome = process.env.CHROME_BIN ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+
+/** CHROME_BIN, else the macOS app, else the first of the usual Linux names found on PATH. */
+function findChrome() {
+  if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
+  if (process.platform === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  for (const name of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']) {
+    for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+      try {
+        accessSync(join(dir, name), constants.X_OK);
+        return join(dir, name);
+      } catch {}
+    }
+  }
+  return 'google-chrome';
+}
+const chrome = findChrome();
+// A CI container or a root shell has no user namespaces for Chrome's sandbox; a developer machine keeps it.
+const noSandbox = Boolean(process.env.CI) || process.getuid?.() === 0;
 const timeout = Number(process.env.CHROME_TIMEOUT_MS) || 60_000;
 const host = '127.0.0.1';
 const port = 4178;
@@ -27,6 +45,7 @@ function dumpDom(profile, onChild) {
       chrome,
       [
         '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`,
+        ...(noSandbox ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
         '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-extensions', '--disable-default-apps',
         '--virtual-time-budget=10000', '--dump-dom', `http://${host}:${port}/`,
       ],

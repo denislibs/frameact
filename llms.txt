@@ -1,0 +1,35 @@
+# frameact
+
+> frameact is a fine-grained signals UI framework (SolidJS-style: no virtual DOM, components run once, only bindings update) with teact-style frame discipline: all reactive work and every DOM write is batched into one requestAnimationFrame pass with measure, mutate and forced-reflow phases. Built for messenger-class clients (long lists, high-frequency store updates, heavy animations). TypeScript, MIT, early development, not published to npm yet.
+
+Notes for writing code with frameact:
+- Components are plain functions that run once. Props are reactive getters: never destructure them, read `props.x` where it is used.
+- JSX is compiled by the Solid 2.0 compiler pointed at `frameact/dom` (Vite plugin `frameact/vite`; `jsx: "preserve"`, `jsxImportSource: "frameact"`). Client-side DOM only, no SSR.
+- Effects are two-phase: `createEffect(compute, apply, schedule?)`; `compute` is tracked and pure, `apply` does the side effect. The facade picks the phase: `createMeasureEffect` reads layout, `createMutationEffect` writes the DOM.
+- Controlled inputs use `use:value` / `use:checked`, not `value=`. Lists use `<For>`, conditionals `<Show>` / `<Switch>`.
+- State: `frameact/store` is a signal-tree store written in place with a path API (`setState('chats', id, 'title', t)`), `reconcile`, `produce`, `defineActions`.
+- Never feed untrusted content into `<Dynamic component>`, spread bags, `innerHTML=` or `prop:*`.
+- The API list in `docs/llms-full.md` is checked against the source; prefer it over memory of Solid, React or teact APIs.
+
+## Docs
+
+- [API guide for writing apps (self-contained)](https://raw.githubusercontent.com/denislibs/frameact/main/docs/llms-full.md): setup, signals and effects, phases, control flow, elements and controlled inputs, store, heavy animations, stricterdom, kit, common mistakes
+- [README](https://raw.githubusercontent.com/denislibs/frameact/main/README.md): what frameact is, how a frame works, security notes, store and stricterdom overview
+- [Porting a teact / telegram-tt client](https://raw.githubusercontent.com/denislibs/frameact/main/docs/guides/porting-from-teact.md): hooks to primitives table, traps, store model, scroll anchoring
+- [Design spec (Russian)](https://raw.githubusercontent.com/denislibs/frameact/main/docs/superpowers/specs/2026-10-11-frameact-design.md): architecture and decisions behind every module
+- [AGENTS.md](https://raw.githubusercontent.com/denislibs/frameact/main/AGENTS.md): for AI agents contributing to the framework itself (invariants, conventions, licensing)
+
+## Entry points (source)
+
+- [frameact](https://raw.githubusercontent.com/denislibs/frameact/main/src/index.ts): signals, memos, effects, context, frame and heavy-animation API, lifecycle primitives
+- [frameact/dom](https://raw.githubusercontent.com/denislibs/frameact/main/src/dom/index.ts): render, For, Show, Switch, Dynamic, Portal, mergeProps, class and style helpers
+- [frameact/store](https://raw.githubusercontent.com/denislibs/frameact/main/src/store/index.ts): createStore, merge, produce, reconcile, defineActions
+- [frameact/kit](https://raw.githubusercontent.com/denislibs/frameact/main/src/kit/index.ts): Transition, ShowTransition, InfiniteScroll, createScrollAnchor
+- [frameact/stricterdom](https://raw.githubusercontent.com/denislibs/frameact/main/src/stricterdom/index.ts): DEV phase-violation checks with effect attribution
+- [frameact/scheduler](https://raw.githubusercontent.com/denislibs/frameact/main/src/scheduler/index.ts): requestMeasure, requestMutation, debounce, throttle
+- [frameact/vite](https://raw.githubusercontent.com/denislibs/frameact/main/src/vite/index.ts): the Vite plugin
+
+## Optional
+
+- [Core benchmark notes](https://raw.githubusercontent.com/denislibs/frameact/main/bench/reactivity/README.md): reactive-graph results against Solid, Preact Signals, Alien Signals (Russian)
+- [Third-party licenses](https://raw.githubusercontent.com/denislibs/frameact/main/THIRD_PARTY_LICENSES.md): attributions for adapted MIT and ISC code
