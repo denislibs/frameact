@@ -1,1 +1,1 @@
-{"framework":"svelte-v5.42.1-keyed","keyed":true,"benchmark":"43_first-paint","type":"size","values":{"DEFAULT":{"min":83.7,"max":83.7,"median":83.7,"mean":83.7,"stddev":null,"values":[83.7]}}}
+{"framework":"svelte-v5.42.1-keyed","keyed":true,"benchmark":"43_first-paint","type":"size","values":{"DEFAULT":{"min":95.3,"max":95.3,"median":95.3,"mean":95.3,"stddev":null,"values":[95.3]}}}

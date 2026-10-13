@@ -1,1 +1,1 @@
-{"framework":"preact-signals-v11.0.0 + 2.3.1-keyed","keyed":true,"benchmark":"22_run-memory","type":"memory","values":{"DEFAULT":{"min":4.900789260864258,"max":4.900789260864258,"median":4.900789260864258,"mean":4.900789260864258,"stddev":null,"values":[4.900789260864258]}}}
+{"framework":"preact-signals-v11.0.0 + 2.3.1-keyed","keyed":true,"benchmark":"22_run-memory","type":"memory","values":{"DEFAULT":{"min":4.904926300048828,"max":4.904926300048828,"median":4.904926300048828,"mean":4.904926300048828,"stddev":null,"values":[4.904926300048828]}}}

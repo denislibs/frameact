@@ -1,1 +1,1 @@
-{"framework":"svelte-v5.42.1-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":0.9832801818847656,"max":0.9832801818847656,"median":0.9832801818847656,"mean":0.9832801818847656,"stddev":null,"values":[0.9832801818847656]}}}
+{"framework":"svelte-v5.42.1-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":0.9845771789550781,"max":0.9845771789550781,"median":0.9845771789550781,"mean":0.9845771789550781,"stddev":null,"values":[0.9845771789550781]}}}

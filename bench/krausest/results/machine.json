@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-13T04:01:25.284Z",
+  "date": "2026-10-13T08:43:34.914Z",
   "cpu": "Apple M1 Pro",
   "cores": 10,
   "memoryGB": 16,
@@ -18,54 +18,17 @@
     "preact-hooks",
     "vanillajs"
   ],
-  "uptimeBefore": "9:01  up 12:50, 1 user, load averages: 6.94 8.30 8.10",
+  "uptimeBefore": "13:43  up 17:32, 1 user, load averages: 6.62 12.21 18.70",
   "loadBefore": [
-    6.94,
-    8.3,
-    8.1
+    6.62,
+    12.21,
+    18.7
   ],
-  "uptimeAfter": "9:33  up 13:22, 1 user, load averages: 13.33 11.00 9.92",
+  "uptimeAfter": "14:18  up 18:07, 1 user, load averages: 9.06 7.38 8.78",
   "loadAfter": [
-    13.33,
-    11,
-    9.92
+    9.06,
+    7.38,
+    8.78
   ],
-  "failedPasses": [
-    "CPU"
-  ],
-  "reruns": [
-    {
-      "date": "2026-10-13T04:35:06.887Z",
-      "frameworks": [
-        "frameact"
-      ],
-      "benchmarks": [
-        "01_"
-      ],
-      "loadBefore": [
-        6.6,
-        9.35,
-        9.39
-      ],
-      "uptimeBefore": "9:35  up 13:23, 1 user, load averages: 6.60 9.35 9.39",
-      "failedPasses": []
-    },
-    {
-      "date": "2026-10-13T04:35:50.379Z",
-      "frameworks": [
-        "preact-signals",
-        "vanillajs"
-      ],
-      "benchmarks": [
-        "25_"
-      ],
-      "loadBefore": [
-        5.43,
-        8.6,
-        9.11
-      ],
-      "uptimeBefore": "9:35  up 13:24, 1 user, load averages: 5.43 8.60 9.11",
-      "failedPasses": []
-    }
-  ]
+  "failedPasses": []
 }

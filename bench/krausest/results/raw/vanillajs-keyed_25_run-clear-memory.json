@@ -1,1 +1,1 @@
-{"framework":"vanillajs-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":0.6433124542236328,"max":0.6433124542236328,"median":0.6433124542236328,"mean":0.6433124542236328,"stddev":null,"values":[0.6433124542236328]}}}
+{"framework":"vanillajs-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":0.6449069976806641,"max":0.6449069976806641,"median":0.6449069976806641,"mean":0.6449069976806641,"stddev":null,"values":[0.6449069976806641]}}}
