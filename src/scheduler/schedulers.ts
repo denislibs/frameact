@@ -42,6 +42,44 @@ export function throttle<F extends AnyToVoidFunction>(fn: F, ms: number, shouldR
   };
 }
 
+/**
+ * Original frameact implementation (written from the behaviour description, not from any source).
+ *
+ * `debounce(fn, ms, shouldRunFirst, shouldRunLast)`: a wrapper whose calls open a wait of `ms`;
+ * every call during the wait restarts it with the latest arguments.
+ * - `shouldRunFirst` (default true): the call that OPENS a wait runs `fn` at once (leading edge).
+ * - `shouldRunLast` (default true): when the wait ends, `fn` runs once more with the last arguments
+ *   (trailing edge) — unless the only call of the wait was the leading one that already ran.
+ * A SINGLE call with the defaults runs `fn` once (the leading edge; the trailing one is owed only when
+ * a second call lands inside the wait) — lodash's leading + trailing semantics. This differs from teact,
+ * whose default runs a single call twice (leading, then trailing). When porting, a call site that
+ * relied on the run after the quiet period alone should pass `shouldRunFirst = false`.
+ * `debounce(fn, 1000, true, false)` is "fire now, then ignore repeats for a second" (InfiniteScroll's
+ * load-more); `debounce(fn, 300, false)` is the classic "run once the input has been quiet for 300 ms".
+ */
+export function debounce<F extends AnyToVoidFunction>(fn: F, ms: number, shouldRunFirst = true, shouldRunLast = true) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let pendingArgs: Parameters<F> | undefined; // set when a trailing call is owed
+
+  return (...args: Parameters<F>) => {
+    if (timeout === undefined) {
+      // Opening a wait: the leading call runs now; the trailing call is owed only without it.
+      if (shouldRunFirst) fn(...args);
+      else pendingArgs = args;
+    } else {
+      // Inside a wait: restart it; the trailing call (if any) uses these, the latest, arguments.
+      clearTimeout(timeout);
+      pendingArgs = args;
+    }
+    timeout = setTimeout(() => {
+      timeout = undefined;
+      const trailing = pendingArgs;
+      pendingArgs = undefined;
+      if (shouldRunLast && trailing !== undefined) fn(...trailing);
+    }, ms);
+  };
+}
+
 export function throttleWithTickEnd<F extends AnyToVoidFunction>(fn: F) {
   return throttleWith(onTickEnd, fn);
 }

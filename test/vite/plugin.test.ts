@@ -139,3 +139,70 @@ it('derives dev from the resolved config when the option is omitted; the option 
   expect(await compileResolved({}, false)).toEqual({ named: true, warned: 1 });
   expect(await compileResolved({ dev: true }, true)).toEqual({ named: true, warned: 1 });
 });
+
+it('warns in dev about destructured props: in the signature (function, arrow, function expression, typed) and in the body; not in prod', async () => {
+  const code = [
+    'function Chat({ isOpen }: P) { return <div>{isOpen}</div>; }',
+    'const Panel = ({ title }) => <b>{title}</b>;',
+    'const Row: FC<P> = function ({ id }) { return <i>{id}</i>; };',
+    'export const Item = (props: P) => { const { id, title } = props; return <i>{id}</i>; };',
+    'const ok = (props: P) => <i>{props.id}</i>;',
+    'function helper({ a }) { return a; }', // lowercase: not a component
+    'const fine = ({ a }) => a;',
+  ].join('\n');
+  const dev = await compile(code, '/app/x.tsx');
+  expect(dev.warnings.length).toBe(4);
+  expect(dev.warnings[0]).toContain('<Chat> destructures its props');
+  expect(dev.warnings[1]).toContain('<Panel>');
+  expect(dev.warnings[2]).toContain('<Row>');
+  expect(dev.warnings[3]).toContain('const { … } = props');
+  expect(dev.positions).toEqual([
+    { line: 1, column: 0 },
+    { line: 2, column: 0 },
+    { line: 3, column: 0 },
+    { line: 4, column: 36 },
+  ]);
+  expect((await compile(code, '/app/x.tsx', false)).warnings).toEqual([]);
+});
+
+describe('dev lint on pathological sources', () => {
+  // The lints are regexes over the raw source: each must stay linear when the closing token is missing.
+  const cases: Record<string, string> = {
+    'unterminated type annotations': 'const A: x\n'.repeat(32_000),
+    'unterminated destructuring': 'const {\n'.repeat(32_000),
+    'tags without a closing >': '<input '.repeat(30_000),
+    'intrinsic tags without a closing >': '<div '.repeat(30_000),
+    'literal-looking values without a closing quote': '<input value={"'.repeat(30_000),
+    'declarations without an =': 'declare const Cn: T;\n'.repeat(8_000),
+  };
+  for (const [name, code] of Object.entries(cases)) {
+    it(`${name} (${Math.round(code.length / 1024)} KB) is linted in linear time`, async () => {
+      const start = performance.now();
+      await compile(code, '/app/x.tsx').catch(() => undefined); // invalid TSX: the compiler's error does not matter here
+      expect(performance.now() - start).toBeLessThan(2000);
+    });
+  }
+
+  it('thousands of findings are positioned in one pass', async () => {
+    const code = 'function Cn({ a }) { return a; }\n'.repeat(40_000);
+    const start = performance.now();
+    const { warnings, positions } = await compile(code, '/app/x.tsx').catch(() => ({ warnings: [] as string[], positions: [] as Pos[] }));
+    expect(performance.now() - start).toBeLessThan(2000);
+    expect(warnings.length === 0 || positions[39_999]).toBeTruthy();
+  });
+});
+
+describe('dev lint: destructuring props inside event handlers', () => {
+  it('const { x } = props inside an on* handler is a fresh read at event time: no warning; in the component body it still warns', async () => {
+    const handler = [
+      'export const Row = (props: P) => (',
+      '  <button onClick={() => { const { chatId } = props; open(chatId); }}>open</button>',
+      ');',
+    ].join('\n');
+    expect((await compile(handler, '/app/x.tsx')).warnings).toEqual([]);
+    const body = 'export const Row = (props: P) => { const { chatId } = props; return <i onClick={() => open(chatId)}>x</i>; };';
+    const dev = await compile(body, '/app/x.tsx');
+    expect(dev.warnings).toHaveLength(1);
+    expect(dev.warnings[0]).toContain('event handler');
+  });
+});
