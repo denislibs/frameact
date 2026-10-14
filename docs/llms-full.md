@@ -385,6 +385,10 @@ void [raw, copy, ids, live, ungated];
   costs the new objects only. **Never mutate an object after handing it to the store**: it is validated once, at
   adoption, and never re-checked — a proxy or a `__proto__` key planted into it from outside stays in the raw tree
   (DEV samples the owned objects a write meets and reports the path; production is silent).
+- Ownership costs ≈35 B per container object and one table insert per new container, so **load full slices with
+  `reconcile`** (matched objects merge in place, nothing is adopted) and **update dictionaries with `merge({ [id]: v })`
+  or a path**, not `setState('byId', { ...byId, [id]: v })`: a full replacement of 40k messages is ~3× slower than a
+  reconcile of the same data and doubles the table.
 - Inside a subtree running a heavy animation (section 9) store-driven frame effects **park** until the animation ends; a
   local signal, `live(() => state.x)` (read) or `ungated(() => setState(…))` (write) bypasses that.
 
