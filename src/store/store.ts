@@ -45,6 +45,20 @@ export const storeStats = { leafSignals: 0, nodes: 0 };
 
 /** raw object → its node. Only objects that were ever read through a proxy have one. */
 const nodes = new WeakMap<object, StoreNode>();
+/**
+ * Containers the store owns: every object with a node and every object `adopt()` walked that has at
+ * least one wrappable child (the raw tree's inner objects, plus what once was in it). `adopt` stops at
+ * them, so a write that references store objects (a container rebuilt around reused children, a result
+ * set pointing at existing entities) costs the NEW objects only, not the subtrees behind them — nodes
+ * alone could not tell: an object nobody read through a proxy has none. Leaf objects (no object child)
+ * are not recorded: re-walking one is a few key reads with no fan-out, cheaper than an ephemeron entry
+ * (measured: the table costs 16–32 B per entry and re-inserts every live key on each doubling, so it is
+ * kept to the objects whose subtrees are worth skipping). Ownership is never revoked: an object that left
+ * the tree is still the store's (it may be mutated in place by it, and its contents were adopted once);
+ * the contract that store objects are not mutated from outside is the one every object with a node
+ * already relies on.
+ */
+const owned = new WeakSet<object>();
 
 /**
  * Plain objects (incl. null-prototype) and arrays become store nodes; class instances, Dates, Maps…
@@ -112,6 +126,7 @@ class StoreNode {
     this.valsVer = 0;
     this.proxy = new Proxy(raw, this as ProxyHandler<any>);
     nodes.set(raw, this);
+    owned.add(raw); // (a node implies ownership: adopt() checks one table)
     if (DEV) storeStats.nodes++;
   }
 
@@ -370,20 +385,24 @@ function notifyLeaf(s: Computation, value: unknown) {
  * Raw-tree invariant: no proxy inside. A new object written into the store (a spread copy of a store
  * object carries the proxies of its nested objects; `merge({ y: state.a.b })` carries one directly) is
  * unwrapped deeply and stripped of its own `__proto__` keys (JSON.parse creates them; a later spread
- * would turn one into a prototype change). The walk covers the NEW value: it stops at store proxies
- * (their raw object is in the tree already), at objects that were ever read through a proxy and at
- * values — but an object of the tree that was never read has no node, so the walk goes through it too
- * (like Solid's deep unwrap). Iterative, with a visited set: a cyclic or very deep new graph is safe.
+ * would turn one into a prototype change). The walk covers the NEW objects only: it stops at store
+ * proxies (their raw object is in the tree already), at owned containers (`owned`: adopted before,
+ * whether or not anybody read them) and at values; every container it walks becomes owned. The same raw
+ * object may end up under two paths (aliasing): it is one object with one node, as before. Iterative;
+ * children are pushed and checked when popped (one lookup per edge), so a container is enumerated once
+ * even when several new objects reference it, a leaf once per reference, and a cycle ends at the owned
+ * mark its first container got: a cyclic, shared or very deep new graph is safe.
  */
 export function adopt(v: object): object {
   const r = (v as any)[$RAW];
   if (r !== undefined) return r; // a store proxy or a produce draft
-  if (nodes.has(v) || !isWrappable(v)) return v;
-  let seen: Set<object> | null = null; // (allocated by the first nested object only)
-  let stack: object[] = [v];
-  while (stack.length !== 0) {
+  if (owned.has(v) || !isWrappable(v)) return v;
+  const stack: object[] = [v];
+  do {
     const o = stack.pop() as Record<string, unknown>;
+    if (owned.has(o)) continue; // (reached through a second reference, a cycle — or owned before this write)
     const ks = Object.keys(o);
+    let container = false;
     for (let i = 0; i < ks.length; i++) {
       const k = ks[i];
       if (k === PROTO_KEY) {
@@ -398,13 +417,12 @@ export function adopt(v: object): object {
         o[k] = raw;
         continue;
       }
-      if (nodes.has(c) || !isWrappable(c)) continue;
-      if (seen === null) seen = new Set([v]);
-      if (seen.has(c)) continue;
-      seen.add(c);
+      if (!isWrappable(c)) continue;
+      container = true;
       stack.push(c);
     }
-  }
+    if (container) owned.add(o);
+  } while (stack.length !== 0);
   return v;
 }
 

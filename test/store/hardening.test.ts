@@ -2,7 +2,7 @@
 // createStore adopting `initial`, cyclic/deep new data, atomic fan-out, holes by index, the read-only
 // view's remaining traps, drafts that outlive their produce().
 import { createEffect, createRoot, flushSync } from '../../src/index';
-import { createStore, entries, keys, produce, unwrap, values } from 'frameact/store';
+import { createStore, entries, keys, produce, reconcile, snapshot, unwrap, values } from 'frameact/store';
 
 function watch<T>(fn: () => T): T[] {
   const log: T[] = [];
@@ -85,6 +85,87 @@ describe('new data', () => {
     const [state, setState] = createStore<any>({ a: { n: { v: 1 } }, y: null });
     setState('y', { wrap: { inner: state.a.n } });
     expect(unwrap(state.y.wrap.inner)).toBe(unwrap(state.a.n));
+  });
+});
+
+/** A plain object whose key enumeration is counted: adopt() enumerates every object it walks exactly once. */
+function probed(): { probe: object; walks: () => number } {
+  let n = 0;
+  const probe = new Proxy({ v: 1 }, { ownKeys(t) { n++; return Reflect.ownKeys(t); } });
+  return { probe, walks: () => n };
+}
+
+describe('adopt stops at objects the store already owns (E3′)', () => {
+  it('a store-owned object inside new data is not walked again: a fresh container, a replaced dictionary, a produce push, a reconcile item', () => {
+    const [state, setState] = createStore<any>({ byId: {}, search: null, list: [] });
+    const { probe, walks } = probed();
+    const entity = { id: 1, probe };
+    setState('byId', 1, entity); // the first write adopts it (one walk)
+    expect(walks()).toBe(1);
+    setState('search', { query: 'q', results: [{ id: 1, entity }] }); // a fresh result set referencing it
+    expect(walks()).toBe(1);
+    setState('byId', { ...unwrap(state.byId), 2: { id: 2 } }); // the dictionary replaced, its children reused
+    expect(walks()).toBe(1);
+    setState('list', produce((l: any[]) => { l.push(entity, { ref: entity }); }));
+    setState('list', reconcile([{ id: 1, entity }, { id: 2, deep: { entity } }]));
+    expect(walks()).toBe(1);
+    expect(unwrap(state.search.results[0].entity)).toBe(entity);
+    expect(unwrap(state.list[1].deep.entity)).toBe(entity);
+  });
+  it('the objects of `initial` are owned from createStore on', () => {
+    const { probe, walks } = probed();
+    const initial = { a: { id: 1, probe }, b: null as any };
+    const [state, setState] = createStore<any>(initial);
+    expect(walks()).toBe(1);
+    setState('b', { held: initial.a });
+    expect(walks()).toBe(1);
+    expect(unwrap(state.b.held)).toBe(initial.a);
+  });
+  it('once owned, always owned: an object that left the tree and comes back is not walked again, and its leaves work', () => {
+    const [state, setState] = createStore<any>({ byId: {} });
+    const { probe, walks } = probed();
+    const entity = { id: 1, title: 'a', probe };
+    setState('byId', 1, entity);
+    setState('byId', 1, undefined);
+    setState('byId', 1, entity);
+    expect(walks()).toBe(1);
+    const log = watch(() => state.byId[1].title);
+    setState('byId', 1, 'title', 'b');
+    flushSync();
+    expect(log).toEqual(['a', 'b']);
+  });
+  it('aliasing is unchanged: one raw object under two paths is one node — same proxy, one set of leaves, a write on either path wakes both', () => {
+    const [state, setState] = createStore<any>({ byId: { 1: { id: 1, title: 'a' } }, search: null });
+    const raw = unwrap(state.byId[1]);
+    setState('search', { results: [raw] });
+    expect(unwrap(state.search.results[0])).toBe(raw);
+    expect(state.search.results[0]).toBe(state.byId[1]);
+    const viaSearch = watch(() => state.search.results[0].title);
+    const viaDict = watch(() => state.byId[1].title);
+    setState('byId', 1, 'title', 'b');
+    flushSync();
+    setState('search', 'results', 0, 'title', 'c');
+    flushSync();
+    expect(viaSearch).toEqual(['a', 'b', 'c']);
+    expect(viaDict).toEqual(['a', 'b', 'c']);
+    expect(snapshot(state)).toEqual({ byId: { 1: { id: 1, title: 'c' } }, search: { results: [{ id: 1, title: 'c' }] } });
+  });
+  it('the fresh part around an owned object is still hardened: a nested proxy is unwrapped, an own `__proto__` key is dropped', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const [state, setState] = createStore<any>({ a: { n: { v: 1 } }, held: { id: 1 }, y: null });
+      const fresh = JSON.parse('{"__proto__": {"polluted": 1}, "inner": null}');
+      fresh.inner = state.a.n; // a proxy
+      setState('y', { wrap: fresh, held: unwrap(state.held) });
+      expect(Object.hasOwn(unwrap(state.y.wrap), '__proto__')).toBe(false);
+      expect(unwrap(state.y.wrap.inner)).toBe(unwrap(state.a.n));
+      expect(unwrap(state.y.held)).toBe(unwrap(state.held));
+      expect(({} as any).polluted).toBeUndefined();
+      setState('y', 'wrap', 'inner', 'v', 2); // (would hit the read-only proxy without the unwrap)
+      expect(state.a.n.v).toBe(2);
+    } finally {
+      err.mockRestore();
+    }
   });
 });
 

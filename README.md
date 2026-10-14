@@ -159,7 +159,8 @@ inputs under your control. `<iframe srcdoc=…>` is refused and not typed; write
 `frameact/store` is a tree of plain objects whose properties become signals lazily, on their first tracked read.
 `state.chats[id].title` subscribes to exactly that path; `setState('chats', id, 'title', t)` writes the raw object in
 place and wakes that leaf only — one row out of a thousand recomputes, nothing is copied, identities (proxies, `For`
-rows) are kept. Server data merges by key with `reconcile`, drafts mutate through `produce`, shallow merges are
+rows) are kept. Objects written by reference are adopted once and owned from then on: a later write that reuses them
+(a rebuilt dictionary, a result set pointing at existing entities) costs the new objects only. Server data merges by key with `reconcile`, drafts mutate through `produce`, shallow merges are
 explicit (`merge()`), a value at a path replaces, `undefined` deletes the key. Actions are plain typed functions
 (`defineActions`); a nested call runs after the current one, `afterActions(cb)` after the cascade.
 To walk a big dictionary use `keys(obj)` / `values(obj)` / `entries(obj)` from `frameact/store` (plain-object speed,

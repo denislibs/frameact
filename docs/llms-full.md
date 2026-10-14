@@ -376,7 +376,9 @@ void [raw, copy, ids, live, ungated];
   tracks the leaves it reads) is right and identity-keyed caches go stale.
 - `Object.keys(state)` works but `keys(state)` is much faster for big dictionaries. `Object.hasOwn` is not tracked; use `in`.
 - Class instances, Dates, Maps and frozen objects are *values* (replaced whole, never wrapped). The key `__proto__` is
-  dropped. `createStore`'s argument is owned and mutated by the store.
+  dropped. `createStore`'s argument is owned and mutated by the store — and so is every object written by reference:
+  adoption (unwrapping proxies, dropping `__proto__`) happens once per object, a later write that reuses store objects
+  costs the new objects only. Never mutate an object after handing it to the store.
 - Inside a subtree running a heavy animation (section 9) store-driven frame effects **park** until the animation ends; a
   local signal, `live(() => state.x)` (read) or `ungated(() => setState(…))` (write) bypasses that.
 
