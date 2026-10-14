@@ -38,9 +38,16 @@ export function effect<T>(
 /**
  * Compiler primitive: `memo(fn)` — a plain memo (`===` equality). The compiler (rc.14) always calls
  * it with one argument, so there is no `equal` parameter.
+ *
+ * With no owner it returns `fn` itself. The compiler puts `memo(() => !!cond)()` inside prop getters
+ * (`error={key() && lang(key())}`), and a getter runs wherever the prop is read: an effect apply, an
+ * event handler, a `requestMutation` task. Nothing tracks there and nothing could dispose a node, so a
+ * memo would leak one subscription per read (and DEV refuses to create it: `assertApplyOwner`). The
+ * plain accessor yields the same value; memoization only ever paid off under a tracking owner, where
+ * the node is disposed with it (a component body, a binding's compute).
  */
 export function memo<T>(fn: () => T): () => T {
-  return createMemo(fn);
+  return getScope() === null ? fn : createMemo(fn);
 }
 
 /** Compiler primitive: `_el._$owner = getOwner()` on custom elements. */

@@ -54,7 +54,9 @@ const dispose = render(() => <Counter start={1} />, document.getElementById('app
    a binding; `const x = n()` in the body is a one-time read.
 2. **Props are reactive getters: never destructure them.** `function Row({ title })` reads `title` once, at creation, and
    never updates. Write `props.title` where it is used (JSX, a memo, an effect's compute). Forward a subset with
-   `splitProps(props, ['a', 'b'])` or `mergeProps`.
+   `splitProps(props, ['a', 'b'])` or `mergeProps`. Reading `props.x` in an effect's `apply`, an event handler or a
+   `requestMutation` task is fine: it is a plain read of the current value, whatever expression the parent passed
+   (the compiler's memo around a conditional prop degrades to a derived read where nothing tracks).
 3. **Read signals where you want updates.** Reading in JSX, `createMemo`, or an effect's `compute` tracks; reading in an
    event handler or inside `untrack` does not.
 4. **Side effects belong in an effect's `apply`, not in its `compute`.**
