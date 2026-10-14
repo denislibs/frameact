@@ -4,6 +4,8 @@ import { setAttribute } from '../../src/dom/attributes';
 import { forceControlledValue } from '../../src/dom/controlled';
 import { clearDelegatedEvents, EVENT_KEY } from '../../src/dom/events';
 import { getNatives } from '../../src/dom/natives';
+import { spread } from '../../src/dom/props';
+import { clobber } from '../helpers/clobber';
 import { flushMicrotasks } from '../helpers/micro';
 
 // The compiler clones templates with `cloneNode`, so a fresh clone is owned by the template's inert
@@ -193,18 +195,22 @@ describe('another live document', () => {
     const natives = getNatives();
     const original = natives.addEventListener;
     const types: string[] = [];
-    vi.spyOn(natives, 'addEventListener').mockImplementation(function (this: EventTarget, ...args: Parameters<typeof original>) {
+    const spy = vi.spyOn(natives, 'addEventListener').mockImplementation(function (this: EventTarget, ...args: Parameters<typeof original>) {
       if (this === doc) types.push(args[0]);
       return original.apply(this, args);
     });
-    const { dispose: d1 } = mount(() => <Letters />, doc.body);
-    const { dispose: d2 } = mount(() => <Letters />, doc.body);
-    await flushMicrotasks();
-    expect(types.filter((t) => t === 'selectionchange')).toHaveLength(1);
-    expect(types.filter((t) => t === 'focusout')).toHaveLength(1);
-    d1();
-    d2();
-    clearDelegatedEvents(doc);
+    try {
+      const { dispose: d1 } = mount(() => <Letters />, doc.body);
+      const { dispose: d2 } = mount(() => <Letters />, doc.body);
+      await flushMicrotasks();
+      expect(types.filter((t) => t === 'selectionchange')).toHaveLength(1);
+      expect(types.filter((t) => t === 'focusout')).toHaveLength(1);
+      d1();
+      d2();
+    } finally {
+      spy.mockRestore();
+      clearDelegatedEvents(doc);
+    }
   });
 });
 
@@ -217,15 +223,26 @@ it('a delegated spread handler on a compiled element works (same inert-owner roo
   dispose();
 });
 
-it('a document whose defaultView is clobbered (<img name="defaultView">) does not break the listener install', () => {
-  Object.defineProperty(document, 'defaultView', { value: document.createElement('img'), writable: false, configurable: true });
-  try {
-    const { host, dispose } = mount(() => <Letters />);
-    const input = host.querySelector('input')!;
-    type(input, 'ab1');
-    expect(input.value).toBe('ab');
-    dispose();
-  } finally {
-    delete (document as any).defaultView;
-  }
+it('spread onClick on an inert-owned <form> whose isConnected is shadowed still delegates on the live document', () => {
+  const t = document.createElement('template');
+  t.innerHTML = '<form><img name="isConnected"></form>';
+  const form = t.content.firstChild!.cloneNode(true) as HTMLFormElement;
+  clobber(form, 'isConnected', form.firstChild); // what [LegacyOverrideBuiltIns] presents (jsdom lacks it)
+  const calls: string[] = [];
+  createRoot(() => spread(form, { onClick: () => calls.push('click') }));
+  document.body.appendChild(form);
+  form.click();
+  expect(calls).toEqual(['click']);
+});
+
+it('a node bound after insertion into a document without a browsing context listens on that document at once (no settle)', () => {
+  const doc = document.implementation.createHTMLDocument('x');
+  const input = doc.createElement('input');
+  doc.body.appendChild(input);
+  const [text, setText] = createSignal('ab');
+  createRoot(() => setAttribute(input, 'use:value', text));
+  (input as any)[EVENT_KEY + 'input'] = (e: Event) => letters((e.currentTarget as HTMLInputElement).value) && setText((e.currentTarget as HTMLInputElement).value);
+  type(input, 'ab1'); // synchronously: the microtask has not run
+  expect(input.value).toBe('ab');
+  clearDelegatedEvents(doc);
 });

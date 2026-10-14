@@ -127,9 +127,9 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 生产环境对每个指令名只输出一条简短的 `console.error`。
 
 **哪个 document 接收输入。** 受控输入的回滚与 IME 监听器挂在存活的 document 上，而不是绑定时节点恰好所属的那个：编译后的模板通过
-`cloneNode` 克隆，新克隆仍属于模板的惰性 document。在脱离文档时绑定的节点会立即监听应用的 `document`，并在一个微任务后重新解析，
-因此渲染到 iframe 或其他窗口的 document 也有效（每个 document 只安装一次，幂等）。绑定之后、晚于该微任务才插入第二个 document 的元素不在覆盖范围内：
-请在插入之后再绑定。spread 中会委托的 `onX` 遵循同样的规则。
+`cloneNode` 克隆，新克隆仍属于模板的惰性 document。在脱离文档时绑定的节点会立即监听应用的 `document`（若由存活的 iframe document 创建，则监听其自身 document），并在一个微任务后重新解析，
+因此对受控输入而言，渲染到 iframe 或其他窗口的 document 也有效（每个 document 只安装一次，幂等）。绑定之后、晚于该微任务才插入第二个 document 的元素（延迟或被门控的插入、手动 `append`）不在覆盖范围内：
+请在插入之后再绑定。这只涉及受控输入的监听器与 `input`。会被委托的 `onX`（普通 `onClick` 或 spread 中的 `onX`）委托在应用的 `document` 上；对 iframe 或其他 document，请从 `frameact/dom` 调用一次 `delegateEvents(['click', …], thatDocument)`。
 
 **安全。** 属性写入会拒绝 `javascript:` / `vbscript:` URL、非媒体类 `data:` URL、字符串形式的 `on*` 处理器以及 `srcdoc=`；
 受信任 HTML 的显式出口是 `prop:srcdoc`。生产环境中拒绝是静默的，开发模式下会输出 `console.error`。

@@ -142,9 +142,12 @@ written anyway, DEV logs an error naming the fix and production logs one short `
 **Which document hears the input.** The rollback and IME listeners of controlled inputs sit on a live document, never on
 the one that happens to own the node when it is bound: a compiled template is cloned with `cloneNode`, so a fresh
 clone still belongs to the template's inert document. A node bound while detached listens on the app's `document`
-at once and is re-resolved a microtask later, so a render into an iframe or another window's document is covered
-too (one install per document, idempotent). An element inserted into a second document later than that
-microtask, after being bound, is not: bind it after the insertion. A spread `onX` that delegates follows the same rule.
+(or on its own document, if a live iframe document created it) at once and is re-resolved a microtask later, so a
+render into an iframe or another window's document is covered for controlled inputs (one install per document,
+idempotent). An element inserted into a second document later than that microtask (a deferred or gated insert, a manual
+`append`), after being bound, is not: bind it after the insertion. This covers the controlled-input listeners and `input`
+only. Delegated `onX` handlers (compiled `onClick`, or `onX` in a spread) are delegated on the app's `document`; for an
+iframe or another document call `delegateEvents(['click', …], thatDocument)` from `frameact/dom` once.
 
 **Security.** Attribute writes refuse `javascript:` / `vbscript:` URLs, non-media `data:` URLs, string `on*`
 handlers and `srcdoc=`; the explicit escape hatch for trusted HTML is `prop:srcdoc`. Refusals are silent in
