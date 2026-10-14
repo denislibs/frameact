@@ -160,7 +160,7 @@ setState('messages', chatId, reconcile(chunk)); // 来自服务端的不可变�
 
 ## 应用层 UI
 
-应用层 UI 基础设施（过渡、无限滚动、滚动锚定）位于应用中，而不在框架里。它所依赖的核心原语仍保留在此：`onMount`、`onDestroy`、`previous` / `currentOrPrev` / `frozenWhile`、`watchHeavyAnimation`、`lazy`、`splitProps`、`debounce` / `fastRaf` / `throttleWithTickEnd`、`setExtraStyles`；Vite 插件会对解构 props 发出警告。迁移指南（英文）：[`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md)。
+应用层 UI 基础设施（过渡、无限滚动、滚动锚定）位于应用中，而不在框架里。它所依赖的核心原语仍保留在此：`onMount`、`onDestroy`、`previous` / `currentOrPrev` / `frozenWhile`、`watchHeavyAnimation`、`lazy`、`splitProps`、`debounce` / `fastRaf` / `throttleWithTickEnd`、`setExtraStyles`、`$SHAPE`（`frameact/store`：store 数组形状的 O(1) 版本号）；Vite 插件会对解构 props 发出警告。迁移指南（英文）：[`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md)。
 
 ## stricterdom（开发模式）
 

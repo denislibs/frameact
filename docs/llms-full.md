@@ -434,7 +434,8 @@ Transitions, infinite scroll and scroll anchoring are not part of frameact: they
 primitives: `onMount`, `onDestroy`, `previous`/`currentOrPrev`/`frozenWhile`, `watchHeavyAnimation` and `HeavyAnimationScope`
 (`frameact`, `frameact/dom`), `lazy`, `splitProps` (`frameact/dom`), `requestMeasure`/`requestMutation`, `debounce`,
 `fastRaf`, `throttleWithTickEnd` (`frameact/scheduler`), `setExtraStyles`, and the store's shape version
-(`Symbol.for('frameact.shape')`, an O(1) "the array changed" signal). Note `debounce(fn, ms)` with defaults runs a single
+(`$SHAPE` from `frameact/store`, `Symbol.for('frameact.shape')`: reading it on a store array subscribes with one link and
+returns a number that changes on every shape change, an O(1) "the array changed" signal; `undefined` on a non-array). Note `debounce(fn, ms)` with defaults runs a single
 call once (leading); pass `shouldRunFirst = false` to run after the quiet period.
 
 ## 12. Common mistakes
