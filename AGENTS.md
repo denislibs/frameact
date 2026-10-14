@@ -93,8 +93,13 @@ release first needs a build step.
    Tests: `test/dom/clobbering*.test.ts`, `test/helpers/clobber.ts`.
 7. **Store hardening**: the store owns and mutates its state in place. Key `__proto__` is dropped (DEV logs), builtin
    prototypes and frozen objects are values, never wrapped; class instances, Dates, Maps are values; `state` is read-only
-   (writes throw); `produce` drafts are valid only inside their callback. Tests: `test/store/hardening.test.ts`,
-   `security.test.ts`.
+   (writes throw); `produce` drafts are valid only inside their callback. Hardening runs **once per object, at
+   adoption**: a raw value handed to the store (`createStore`'s argument, a value written by reference, a `reconcile`
+   item) is store-owned from then on and must not be mutated from outside. `adopt` stops at owned containers, so a
+   later write does not re-validate them: an own `__proto__` key, a store proxy or a dead draft planted into an owned
+   object from outside stays in the raw tree (the path below a proxy becomes unwritable). DEV re-validates the owned
+   containers a write meets within a budget per write and reports such a mutation with its path; production accepts
+   it silently. Tests: `test/store/hardening.test.ts`, `security.test.ts`, `adopt.prod.test.ts`.
 8. **Security policy in the DOM runtime**: attribute writes (`setAttribute`, spread, compiled attributes) refuse
    `javascript:`/`vbscript:` URLs, non-media `data:` URLs, string `on*` handlers and `srcdoc=`; refusals are silent in
    prod and `console.error` in DEV. `<Dynamic component="tag">` validates tag names and creates `script` inert. Explicit

@@ -54,7 +54,8 @@ component re-render.
 ## How it works
 
 Effects are split in two: a tracked, pure **compute** and an untracked **apply** that performs the side
-effect. *The phase is the scheduler* — you pick when the apply runs by picking the facade:
+effect (`isTracking()` tells whether a tracked compute is running: a DEV guard for reads that must not happen inside
+a computation). *The phase is the scheduler* — you pick when the apply runs by picking the facade:
 
 ```ts
 import {
@@ -159,7 +160,10 @@ inputs under your control. `<iframe srcdoc=…>` is refused and not typed; write
 `frameact/store` is a tree of plain objects whose properties become signals lazily, on their first tracked read.
 `state.chats[id].title` subscribes to exactly that path; `setState('chats', id, 'title', t)` writes the raw object in
 place and wakes that leaf only — one row out of a thousand recomputes, nothing is copied, identities (proxies, `For`
-rows) are kept. Server data merges by key with `reconcile`, drafts mutate through `produce`, shallow merges are
+rows) are kept. Objects written by reference are adopted once and owned from then on: a later write that reuses them
+(a rebuilt dictionary, a result set pointing at existing entities) costs the new objects only. The flip side is a
+contract: an object handed to the store must not be mutated from outside — its proxies are unwrapped and `__proto__`
+keys dropped once, at adoption, and later writes do not re-check it (DEV samples and reports such mutations). Server data merges by key with `reconcile`, drafts mutate through `produce`, shallow merges are
 explicit (`merge()`), a value at a path replaces, `undefined` deletes the key. Actions are plain typed functions
 (`defineActions`); a nested call runs after the current one, `afterActions(cb)` after the cascade.
 To walk a big dictionary use `keys(obj)` / `values(obj)` / `entries(obj)` from `frameact/store` (plain-object speed,

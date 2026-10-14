@@ -2,7 +2,8 @@
 // createStore adopting `initial`, cyclic/deep new data, atomic fan-out, holes by index, the read-only
 // view's remaining traps, drafts that outlive their produce().
 import { createEffect, createRoot, flushSync } from '../../src/index';
-import { createStore, entries, keys, produce, unwrap, values } from 'frameact/store';
+import { createStore, entries, keys, produce, reconcile, snapshot, unwrap, values } from 'frameact/store';
+import { setDevOwnedBudget } from '../../src/store/store';
 
 function watch<T>(fn: () => T): T[] {
   const log: T[] = [];
@@ -85,6 +86,189 @@ describe('new data', () => {
     const [state, setState] = createStore<any>({ a: { n: { v: 1 } }, y: null });
     setState('y', { wrap: { inner: state.a.n } });
     expect(unwrap(state.y.wrap.inner)).toBe(unwrap(state.a.n));
+  });
+});
+
+/** A plain object whose key enumeration is counted: adopt() enumerates every object it walks exactly once. */
+function probed(): { probe: object; walks: () => number } {
+  let n = 0;
+  const probe = new Proxy({ v: 1 }, { ownKeys(t) { n++; return Reflect.ownKeys(t); } });
+  return { probe, walks: () => n };
+}
+
+describe('adopt stops at objects the store already owns (E3′)', () => {
+  // the DEV detector re-walks owned containers within its budget by design: switch it off to count adopt's own walks
+  beforeEach(() => setDevOwnedBudget(0));
+  afterEach(() => setDevOwnedBudget(2000));
+  it('a store-owned object inside new data is not walked again: a fresh container, a replaced dictionary, a produce push, a reconcile item', () => {
+    const [state, setState] = createStore<any>({ byId: {}, search: null, list: [] });
+    const { probe, walks } = probed();
+    const entity = { id: 1, probe };
+    setState('byId', 1, entity); // the first write adopts it (one walk)
+    expect(walks()).toBe(1);
+    setState('search', { query: 'q', results: [{ id: 1, entity }] }); // a fresh result set referencing it
+    expect(walks()).toBe(1);
+    setState('byId', { ...unwrap(state.byId), 2: { id: 2 } }); // the dictionary replaced, its children reused
+    expect(walks()).toBe(1);
+    setState('list', produce((l: any[]) => { l.push(entity, { ref: entity }); }));
+    setState('list', reconcile([{ id: 1, entity }, { id: 2, deep: { entity } }]));
+    expect(walks()).toBe(1);
+    expect(unwrap(state.search.results[0].entity)).toBe(entity);
+    expect(unwrap(state.list[1].deep.entity)).toBe(entity);
+  });
+  it('the objects of `initial` are owned from createStore on', () => {
+    const { probe, walks } = probed();
+    const initial = { a: { id: 1, probe }, b: null as any };
+    const [state, setState] = createStore<any>(initial);
+    expect(walks()).toBe(1);
+    setState('b', { held: initial.a });
+    expect(walks()).toBe(1);
+    expect(unwrap(state.b.held)).toBe(initial.a);
+  });
+  it('once owned, always owned: an object that left the tree and comes back is not walked again, and its leaves work', () => {
+    const [state, setState] = createStore<any>({ byId: {} });
+    const { probe, walks } = probed();
+    const entity = { id: 1, title: 'a', probe };
+    setState('byId', 1, entity);
+    setState('byId', 1, undefined);
+    setState('byId', 1, entity);
+    expect(walks()).toBe(1);
+    const log = watch(() => state.byId[1].title);
+    setState('byId', 1, 'title', 'b');
+    flushSync();
+    expect(log).toEqual(['a', 'b']);
+  });
+  it('aliasing is unchanged: one raw object under two paths is one node — same proxy, one set of leaves, a write on either path wakes both', () => {
+    const [state, setState] = createStore<any>({ byId: { 1: { id: 1, title: 'a' } }, search: null });
+    const raw = unwrap(state.byId[1]);
+    setState('search', { results: [raw] });
+    expect(unwrap(state.search.results[0])).toBe(raw);
+    expect(state.search.results[0]).toBe(state.byId[1]);
+    const viaSearch = watch(() => state.search.results[0].title);
+    const viaDict = watch(() => state.byId[1].title);
+    setState('byId', 1, 'title', 'b');
+    flushSync();
+    setState('search', 'results', 0, 'title', 'c');
+    flushSync();
+    expect(viaSearch).toEqual(['a', 'b', 'c']);
+    expect(viaDict).toEqual(['a', 'b', 'c']);
+    expect(snapshot(state)).toEqual({ byId: { 1: { id: 1, title: 'c' } }, search: { results: [{ id: 1, title: 'c' }] } });
+  });
+  it('the fresh part around an owned object is still hardened: a nested proxy is unwrapped, an own `__proto__` key is dropped', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const [state, setState] = createStore<any>({ a: { n: { v: 1 } }, held: { id: 1 }, y: null });
+      const fresh = JSON.parse('{"__proto__": {"polluted": 1}, "inner": null}');
+      fresh.inner = state.a.n; // a proxy
+      setState('y', { wrap: fresh, held: unwrap(state.held) });
+      expect(Object.hasOwn(unwrap(state.y.wrap), '__proto__')).toBe(false);
+      expect(unwrap(state.y.wrap.inner)).toBe(unwrap(state.a.n));
+      expect(unwrap(state.y.held)).toBe(unwrap(state.held));
+      expect(({} as any).polluted).toBeUndefined();
+      setState('y', 'wrap', 'inner', 'v', 2); // (would hit the read-only proxy without the unwrap)
+      expect(state.a.n.v).toBe(2);
+    } finally {
+      err.mockRestore();
+    }
+  });
+});
+
+describe('adopt is atomic: a throwing walk leaves nothing owned (review 1.1)', () => {
+  it('A1: a getter that throws on the first write — the retry walks the whole value, an own __proto__ in the branch left unwalked is still dropped', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const [state, setState] = createStore<any>({ x: null });
+      let first = true;
+      // `b` is popped before `a` (LIFO): the throw happens with `a.inner` not yet walked
+      const v = { a: { inner: JSON.parse('{"__proto__": {"polluted": 1}, "k": 1}') }, b: { get g() { if (first) { first = false; throw new Error('getter'); } return 1; } } };
+      expect(() => setState('x', v)).toThrow('getter');
+      setState('x', v); // the retry (an action re-run)
+      expect(Object.hasOwn(unwrap(state.x).a.inner, '__proto__')).toBe(false);
+      expect(({} as any).polluted).toBeUndefined();
+      expect(err).toHaveBeenCalledTimes(1); // (the dropped key is reported once, by the walk that reached it)
+    } finally {
+      err.mockRestore();
+    }
+  });
+  it('A2: the same with a store proxy in the unwalked branch — the retry unwraps it, the path below stays writable', () => {
+    const [state, setState] = createStore<any>({ x: null, other: { v: 1 } });
+    let first = true;
+    const v = { a: { inner: state.other }, b: { get g() { if (first) { first = false; throw new Error('getter'); } return 1; } } };
+    expect(() => setState('x', v)).toThrow('getter');
+    setState('x', v);
+    expect(unwrap(state.x.a.inner)).toBe(unwrap(state.other));
+    setState('x', 'a', 'inner', 'v', 2); // ("state is read-only" if the proxy stayed in the raw tree)
+    expect(state.other.v).toBe(2);
+  });
+  it('A3: a non-configurable own __proto__ key is rejected on every write, not only on the first', () => {
+    const [state, setState] = createStore<any>({ x: null });
+    const bad = {};
+    Object.defineProperty(bad, '__proto__', { value: { p: 1 }, enumerable: true, configurable: false, writable: true });
+    const v = { a: { b: bad } };
+    expect(() => setState('x', v)).toThrow(TypeError);
+    expect(() => setState('x', v)).toThrow(TypeError);
+    expect(state.x).toBeNull();
+  });
+});
+
+/** A store with one adopted, owned, never-read message (the detector's subject). */
+function ownedUnread() {
+  const [state, setState] = createStore<any>({ byId: {}, search: null, other: { v: 1 } });
+  const msg: any = { id: 1, content: { text: 't' } };
+  setState('byId', 1, msg);
+  return { state, setState, msg };
+}
+
+describe('DEV detector: a store-owned object mutated from outside is reported when a write meets it again (review 1.2)', () => {
+  let err: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { err = vi.spyOn(console, 'error').mockImplementation(() => {}); });
+  afterEach(() => { err.mockRestore(); });
+  it('B1: an own __proto__ key planted into an unread container → console.error with the path; the value is left as is (diagnostics only)', () => {
+    const { state, setState, msg } = ownedUnread();
+    msg.content = JSON.parse('{"__proto__": {"polluted": 1}, "text": "u"}'); // the contract violation
+    setState('search', { results: [{ msg }] });
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0][0])).toMatch(/mutated from outside/);
+    expect(String(err.mock.calls[0][0])).toMatch(/__proto__/);
+    expect(String(err.mock.calls[0][0])).toContain('"results.0.msg.content"');
+    expect(Object.hasOwn(unwrap(state.byId[1]).content, '__proto__')).toBe(true); // not fixed: the contract says this goes unchecked
+  });
+  it('B2: a store proxy planted into an unread container → reported; the path below it is not writable (the documented consequence)', () => {
+    const { state, setState, msg } = ownedUnread();
+    msg.content = state.other;
+    setState('search', { results: [{ msg }] });
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0][0])).toMatch(/store proxy or produce draft/);
+    expect(String(err.mock.calls[0][0])).toContain('"results.0.msg.content"');
+    expect(() => setState('search', 'results', 0, 'msg', 'content', 'v', 2)).toThrow(/read-only/);
+  });
+  it('B3: a dead produce draft planted into an unread container → reported', () => {
+    const { setState, msg } = ownedUnread();
+    let leaked: any;
+    setState('other', produce((d: any) => { leaked = d; }));
+    msg.content = leaked;
+    setState('search', { results: [{ msg }] });
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0][0])).toContain('"results.0.msg.content"');
+  });
+  it('the rewritten owned root is checked too, and a clean owned subtree reports nothing', () => {
+    const { setState, msg } = ownedUnread();
+    setState('search', { results: [{ msg }] });
+    setState('byId', 1, msg);
+    expect(err).not.toHaveBeenCalled();
+    msg.content = JSON.parse('{"__proto__": {"polluted": 1}}');
+    setState('byId', 1, msg); // (same value: no write happens, but adopt() runs)
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0][0])).toContain('"content"');
+  });
+  it('has a budget: a write that references thousands of owned containers finishes and reports at most once per write', () => {
+    const [state, setState] = createStore<any>({ byId: {}, list: null });
+    const items: any[] = Array.from({ length: 5000 }, (_, i) => ({ id: i, c: { d: { e: i } } }));
+    setState('byId', Object.fromEntries(items.map((m) => [m.id, m])));
+    for (const m of items) m.c.d = JSON.parse('{"__proto__": {"p": 1}}'); // every one of them violated
+    setState('list', [...items]);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(unwrap(state.list)).toHaveLength(5000);
   });
 });
 

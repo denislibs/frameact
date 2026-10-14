@@ -45,6 +45,81 @@ export const storeStats = { leafSignals: 0, nodes: 0 };
 
 /** raw object → its node. Only objects that were ever read through a proxy have one. */
 const nodes = new WeakMap<object, StoreNode>();
+/**
+ * Containers the store owns: every object with a node and every object `adopt()` walked that has at
+ * least one wrappable child (the raw tree's inner objects, plus what once was in it). `adopt` stops at
+ * them, so a write that references store objects (a container rebuilt around reused children, a result
+ * set pointing at existing entities) costs the NEW objects only, not the subtrees behind them — nodes
+ * alone could not tell: an object nobody read through a proxy has none. Leaf objects (no object child)
+ * are not recorded: re-walking one is a few key reads with no fan-out, cheaper than an ephemeron entry
+ * (measured: the table costs 16–32 B per entry and re-inserts every live key on each doubling, so it is
+ * kept to the objects whose subtrees are worth skipping). Ownership is never revoked: an object that left
+ * the tree is still the store's (it may be mutated in place by it, and its contents were adopted once);
+ * the contract that store objects are not mutated from outside is the one every object with a node
+ * already relies on.
+ */
+const owned = new WeakSet<object>();
+/**
+ * The containers marked by the `adopt()` call in progress (a module buffer, truncated back on exit: no
+ * allocation per write, re-entrant — a getter on new data may write). A walk that throws (a throwing
+ * getter, a non-configurable own `__proto__`) unmarks them: a container marked before the throw has
+ * unwalked children, and the retry of the same write must walk them (R1.1: a proxy or a `__proto__` key
+ * would otherwise slip in on the second attempt).
+ */
+const marked: object[] = [];
+
+/**
+ * DEV detector of the contract behind `owned` (invariant 7): an object handed to the store is validated
+ * once, when it is adopted, and a later write does not re-walk it — so an own `__proto__` key, a store
+ * proxy or a dead draft planted into an owned object FROM OUTSIDE would stay in the raw tree unnoticed
+ * (nobody reads most of a messenger's state through a proxy). In DEV, when `adopt` meets an owned
+ * container (the root of a repeated write or a skipped child), its subtree is re-validated within a budget
+ * per `adopt()` call and the first finding is reported with its key path from the written value.
+ * Diagnostics only: the value is not repaired, production behaves the same, silently (invariant 5).
+ */
+let devOwnedBudget = 2000;
+let devBudget = 0;
+let devReported = false;
+/** @internal tests: the detector's budget per adopt() call (0 switches it off, so a test can count adopt's own walks). */
+export function setDevOwnedBudget(n: number): void {
+  devOwnedBudget = n;
+}
+function devCheckOwned(root: object, path: string): void {
+  if (devReported || devBudget <= 0) return;
+  const seen = new Set<object>();
+  const stack: object[] = [root];
+  const paths: string[] = [path];
+  try {
+    while (stack.length !== 0 && devBudget > 0) {
+      const o = stack.pop() as Record<string, unknown>;
+      const p = paths.pop()!;
+      if (seen.has(o)) continue;
+      seen.add(o);
+      devBudget--;
+      if (Object.hasOwn(o, PROTO_KEY)) return devReportOutsideMutation('an own "__proto__" key', p);
+      const ks = Object.keys(o);
+      for (let i = 0; i < ks.length; i++) {
+        const c = o[ks[i]];
+        if (c === null || typeof c !== 'object') continue;
+        const cp = p === '' ? ks[i] : `${p}.${ks[i]}`;
+        if ((c as any)[$RAW] !== undefined) return devReportOutsideMutation('a store proxy or produce draft', cp);
+        if (isWrappable(c)) {
+          stack.push(c);
+          paths.push(cp);
+        }
+      }
+    }
+  } catch {
+    // a throwing getter inside an owned object: nothing more to validate (the detector never breaks a write)
+  }
+}
+function devReportOutsideMutation(what: string, path: string): void {
+  devReported = true;
+  const shown = JSON.stringify(path.length > 64 ? `${path.slice(0, 63)}…` : path); // (store keys are content: quoted, cut)
+  console.error(
+    `[frameact/store] a store-owned object was mutated from outside after it was written: ${what} at ${shown}. The store validates an object once, when it adopts it (proxies unwrapped, "__proto__" keys dropped); an object handed to the store is owned by it and must not be mutated afterwards — write through setState`,
+  );
+}
 
 /**
  * Plain objects (incl. null-prototype) and arrays become store nodes; class instances, Dates, Maps…
@@ -112,6 +187,7 @@ class StoreNode {
     this.valsVer = 0;
     this.proxy = new Proxy(raw, this as ProxyHandler<any>);
     nodes.set(raw, this);
+    owned.add(raw); // (a node implies ownership: adopt() checks one table)
     if (DEV) storeStats.nodes++;
   }
 
@@ -370,41 +446,71 @@ function notifyLeaf(s: Computation, value: unknown) {
  * Raw-tree invariant: no proxy inside. A new object written into the store (a spread copy of a store
  * object carries the proxies of its nested objects; `merge({ y: state.a.b })` carries one directly) is
  * unwrapped deeply and stripped of its own `__proto__` keys (JSON.parse creates them; a later spread
- * would turn one into a prototype change). The walk covers the NEW value: it stops at store proxies
- * (their raw object is in the tree already), at objects that were ever read through a proxy and at
- * values — but an object of the tree that was never read has no node, so the walk goes through it too
- * (like Solid's deep unwrap). Iterative, with a visited set: a cyclic or very deep new graph is safe.
+ * would turn one into a prototype change). The walk covers the NEW objects only: it stops at store
+ * proxies (their raw object is in the tree already), at owned containers (`owned`: adopted before,
+ * whether or not anybody read them) and at values; every container it walks becomes owned. The same raw
+ * object may end up under two paths (aliasing): it is one object with one node, as before. Iterative; an
+ * owned child is skipped before it is pushed, a new child is checked again when popped (two new objects
+ * of the same write may reference it), so a container is enumerated once, a leaf once per reference, and
+ * a cycle ends at the owned mark its first container got: a cyclic, shared or very deep new graph is safe.
  */
 export function adopt(v: object): object {
   const r = (v as any)[$RAW];
   if (r !== undefined) return r; // a store proxy or a produce draft
-  if (nodes.has(v) || !isWrappable(v)) return v;
-  let seen: Set<object> | null = null; // (allocated by the first nested object only)
-  let stack: object[] = [v];
-  while (stack.length !== 0) {
-    const o = stack.pop() as Record<string, unknown>;
-    const ks = Object.keys(o);
-    for (let i = 0; i < ks.length; i++) {
-      const k = ks[i];
-      if (k === PROTO_KEY) {
-        delete o[k];
-        dropProto('new data');
-        continue;
-      }
-      const c = o[k];
-      if (c === null || typeof c !== 'object') continue;
-      const raw = (c as any)[$RAW];
-      if (raw !== undefined) {
-        o[k] = raw;
-        continue;
-      }
-      if (nodes.has(c) || !isWrappable(c)) continue;
-      if (seen === null) seen = new Set([v]);
-      if (seen.has(c)) continue;
-      seen.add(c);
-      stack.push(c);
-    }
+  if (DEV) {
+    devBudget = devOwnedBudget;
+    devReported = false;
   }
+  if (owned.has(v)) {
+    if (DEV) devCheckOwned(v, '');
+    return v;
+  }
+  if (!isWrappable(v)) return v;
+  const stack: object[] = [v];
+  const paths: string[] | null = DEV ? [''] : null; // (DEV: the key path of every stacked object, for the detector's report)
+  const base = marked.length;
+  try {
+    do {
+      const o = stack.pop() as Record<string, unknown>;
+      const path = DEV ? paths!.pop()! : '';
+      if (owned.has(o)) continue; // (reached through a second reference, a cycle — or owned before this write)
+      const ks = Object.keys(o);
+      let container = false;
+      for (let i = 0; i < ks.length; i++) {
+        const k = ks[i];
+        if (k === PROTO_KEY) {
+          delete o[k];
+          dropProto('new data');
+          continue;
+        }
+        const c = o[k];
+        if (c === null || typeof c !== 'object') continue;
+        const raw = (c as any)[$RAW];
+        if (raw !== undefined) {
+          o[k] = raw;
+          continue;
+        }
+        if (owned.has(c)) {
+          container = true; // an owned child: nothing to push (R3.3: pushing it cost a push/pop per reused item)
+          if (DEV) devCheckOwned(c, path === '' ? k : `${path}.${k}`);
+          continue;
+        }
+        if (!isWrappable(c)) continue;
+        container = true;
+        stack.push(c);
+        if (DEV) paths!.push(path === '' ? k : `${path}.${k}`);
+      }
+      if (container) {
+        owned.add(o);
+        marked.push(o);
+      }
+    } while (stack.length !== 0);
+  } catch (e) {
+    for (let i = base; i < marked.length; i++) owned.delete(marked[i]);
+    marked.length = base;
+    throw e;
+  }
+  marked.length = base;
   return v;
 }
 
