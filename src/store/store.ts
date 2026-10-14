@@ -396,10 +396,10 @@ function notifyLeaf(s: Computation, value: unknown) {
  * would turn one into a prototype change). The walk covers the NEW objects only: it stops at store
  * proxies (their raw object is in the tree already), at owned containers (`owned`: adopted before,
  * whether or not anybody read them) and at values; every container it walks becomes owned. The same raw
- * object may end up under two paths (aliasing): it is one object with one node, as before. Iterative;
- * children are pushed and checked when popped (one lookup per edge), so a container is enumerated once
- * even when several new objects reference it, a leaf once per reference, and a cycle ends at the owned
- * mark its first container got: a cyclic, shared or very deep new graph is safe.
+ * object may end up under two paths (aliasing): it is one object with one node, as before. Iterative; an
+ * owned child is skipped before it is pushed, a new child is checked again when popped (two new objects
+ * of the same write may reference it), so a container is enumerated once, a leaf once per reference, and
+ * a cycle ends at the owned mark its first container got: a cyclic, shared or very deep new graph is safe.
  */
 export function adopt(v: object): object {
   const r = (v as any)[$RAW];
@@ -425,6 +425,10 @@ export function adopt(v: object): object {
         const raw = (c as any)[$RAW];
         if (raw !== undefined) {
           o[k] = raw;
+          continue;
+        }
+        if (owned.has(c)) {
+          container = true; // an owned child: nothing to push (R3.3: pushing it cost a push/pop per reused item)
           continue;
         }
         if (!isWrappable(c)) continue;
