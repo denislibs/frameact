@@ -41,3 +41,37 @@ it('prod: onCleanup order matches DEV (component cleanups run when the surroundi
   dispose();
   expect(log).toEqual(['B', 'A', 'root']);
 });
+
+it('prod: memo without an owner (a compiled prop getter read in an apply) derives live, as in DEV', async () => {
+  const { createRoot, createEffect, createSignal } = await load();
+  const { memo } = await import('../../src/dom/component');
+  const { flushMicrotasks } = await import('../helpers/micro');
+  const [s, setS] = createSignal('a');
+  const props = { get error() { return memo(() => !!s())() ? `err:${s()}` : s(); } };
+  const log: unknown[] = [];
+  createRoot(() => { createEffect(() => s(), () => { log.push(props.error); }); });
+  await flushMicrotasks();
+  setS('b');
+  await flushMicrotasks();
+  expect(log).toEqual(['err:a', 'err:b']);
+});
+
+it('prod: an ownerless memo first read by a tracked compute inside an apply graduates without error (DEV parity)', async () => {
+  const { createRoot, createEffect, createMutationEffect, createSignal } = await load();
+  const { memo } = await import('../../src/dom/component');
+  const { flushMicrotasks } = await import('../helpers/micro');
+  const [c, setC] = createSignal(1);
+  const truthy = memo(() => !!c()); // no owner
+  const log: boolean[] = [];
+  createRoot(() => {
+    createMutationEffect(() => 0, () => {
+      createRoot(() => { createEffect(() => truthy(), (v) => { log.push(v); }); });
+    });
+  });
+  await flushMicrotasks();
+  setC(2);
+  await flushMicrotasks();
+  setC(0);
+  await flushMicrotasks();
+  expect(log).toEqual([true, false]); // cut-off: 1 → 2 did not re-run the apply
+});

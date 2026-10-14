@@ -13,7 +13,7 @@ export {
   createComponent, effect, memo, getOwner, claimElement, children, type Component, type ChildrenReturn,
 } from './component';
 export { mergeProps, splitProps, spread, assign, ref, applyRef, readShallow, type PropsSource } from './props';
-export { lazy, type LazyComponent, type LazyOptions } from './lazy';
+export { lazy, type ComponentProps, type LazyComponent, type LazyOptions } from './lazy';
 export { For, type ForBaseProps, type Accessor, type Each } from './list';
 export { ManualFor, type ManualForBaseProps } from './manualFor';
 export {

@@ -168,3 +168,44 @@ it('children() holds a thrown error and recovers once the source is fixed', () =
     expect(c()).toEqual(['a', 'b']);
   });
 });
+
+describe('memo without an owner (a compiled prop getter read from an apply, a handler, a task)', () => {
+  it('returns a live derived accessor and creates no computation', () => {
+    const [s, setS] = createSignal(1);
+    const fn = vi.fn(() => s() * 10);
+    const m = memo(fn); // top level: no owner, nothing tracking
+    expect(m()).toBe(10);
+    setS(2);
+    expect(m()).toBe(20); // live, not a frozen snapshot
+    m();
+    expect(fn).toHaveBeenCalledTimes(3); // re-derived per read: no cached node that could leak a subscription
+  });
+
+  it('memoizes under an owner (the compiler hoists `const _c$ = memo(…)` into component bodies)', () => {
+    const [s] = createSignal(1);
+    const fn = vi.fn(() => s() * 10);
+    createRoot(() => {
+      const m = memo(fn);
+      m();
+      m();
+    });
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEV: reading it inside an effect apply does not throw "no owner"', async () => {
+    const [s, setS] = createSignal('a');
+    const props = {
+      get error() {
+        return memo(() => !!s())() ? `err:${s()}` : s();
+      },
+    };
+    const log: unknown[] = [];
+    createRoot(() => {
+      createEffect(() => s(), () => { log.push(props.error); });
+    });
+    await flushMicrotasks();
+    setS('b');
+    await flushMicrotasks();
+    expect(log).toEqual(['err:a', 'err:b']);
+  });
+});

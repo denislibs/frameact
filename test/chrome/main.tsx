@@ -3,7 +3,8 @@
 // MutationObserver and rAF microtask ordering, `isContentEditable`. Each scenario records the
 // violations stricterdom reported; the page publishes the results in `data-result` on <html>.
 import {
-  createEffect, createMeasureEffect, createMutationEffect, createRoot, createSignal, flushSync, requestMeasure, requestMutation,
+  createEffect, createMeasureEffect, createMutationEffect, createRoot, createSignal, flushSync, requestForcedReflow, requestMeasure,
+  requestMutation,
 } from 'frameact';
 import { createComponent, Portal, render } from 'frameact/dom';
 import {
@@ -101,6 +102,28 @@ async function main() {
     requestMeasure(() => { el.className = 'bad'; });
     requestMutation(() => { el.className = 'good'; el.appendChild(document.createElement('i')); });
     return ['mutation:class:measure:-'];
+  });
+
+  // 3b. the mutation a forced-reflow task returns runs in the forced-reflow mutate phase, two frames in a row
+  // (client report: suspected attribution to the measure phase); a write in its measure half is caught
+  await scenario('forced-reflow-mutation', async () => {
+    const probe = document.createElement('div');
+    probe.className = 'box';
+    let measured = 0;
+    for (let i = 0; i < 2; i++) {
+      requestMutation(() => { app.appendChild(probe); });
+      requestForcedReflow(() => {
+        measured += probe.offsetHeight;
+        return () => { probe.remove(); };
+      });
+      await nextFrame();
+    }
+    requestMutation(() => { app.appendChild(probe); });
+    requestForcedReflow(() => {
+      probe.title = 'bad';
+      return () => { probe.remove(); };
+    });
+    return measured === 96 ? ['mutation:title:measure:-'] : [`measured ${measured}`]; // 2 frames × the 48 px `.box` of index.html: the reflow read saw the attached node
   });
 
   // 4. an event handler writing the DOM directly, through the real observer

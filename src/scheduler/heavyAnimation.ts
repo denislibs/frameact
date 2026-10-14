@@ -30,6 +30,8 @@ export interface HeavyAnimationScope {
   readonly isAnimating: OnceSignal;
   readonly isBlockingAnimating: OnceSignal;
   begin(duration?: number, isBlocking?: boolean): () => void;
+  /** @internal Mirror of `isAnimating` as a plain field: the chain walk of onHeavyAnimation listeners reads it without a signal read per level. */
+  animating: boolean;
   /** @internal effects.ts parks gated runs here */
   parked: unknown[];
   /** @internal */
@@ -113,6 +115,11 @@ export function firstAnimatingScopeSampled(scope: HeavyAnimationScope): HeavyAni
 /** onHeavyAnimation listeners, kept per scope (not exposed on the scope object). */
 const scopeListeners = new WeakMap<HeavyAnimationScope, Set<AnimationListener>>();
 
+/** @internal Test seam: listeners registered on `scope` (its own and those of descendants' chains). */
+export function listenerCountOf(scope: HeavyAnimationScope): number {
+  return scopeListeners.get(scope)!.size;
+}
+
 function reportCallbackError(error: unknown) {
   console.error('[frameact] heavy-animation callback failed', error);
 }
@@ -167,7 +174,15 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
   function notify(animatingChanged: (() => void) | null, blockingChanged: (() => void) | null, animating: boolean) {
     if (animatingChanged) {
       animatingChanged();
-      listeners.forEach((l) => safeCall(() => l(animating)));
+      // No closure per listener: the root's set holds every chain listener of the app (≈0.3 ms per
+      // root begin+end at 10k listeners, depth 3, before the callbacks' own cost; spec §3.2).
+      for (const l of listeners) {
+        try {
+          l(animating);
+        } catch (error) {
+          reportCallbackError(error);
+        }
+      }
     }
     blockingChanged?.();
   }
@@ -176,6 +191,7 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
     parent,
     isAnimating,
     isBlockingAnimating,
+    animating: false,
     parked: [],
     releaseArmed: false,
     gateEpoch: 0,
@@ -186,6 +202,7 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
       if (isBlocking) counterBlocking++;
       const animatingChanged = counter === 1 ? setAnimating(true) : null;
       if (counter === 1) {
+        scope.animating = true;
         animatingScopes++;
         beganAt.set(scope, epochCounter); // the drain epoch this animation began in (store-gate sampling)
       }
@@ -206,7 +223,10 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
         counter--;
         if (isBlocking) counterBlocking--;
         const animatingEnded = counter === 0 ? setAnimating(false) : null;
-        if (counter === 0) animatingScopes--;
+        if (counter === 0) {
+          scope.animating = false;
+          animatingScopes--;
+        }
         const blockingEnded = isBlocking && counterBlocking === 0 ? setBlocking(false) : null;
         if (isBlocking && counterBlocking === 0) blockingScopes--;
         notify(animatingEnded, blockingEnded, false);
@@ -242,18 +262,46 @@ export function firstAnimatingScope(scope: HeavyAnimationScope, blocking: boolea
   return null;
 }
 
-/** Replacement for teact's useHeavyAnimation hook. */
+/** True while some scope of the chain animates (blocking or not): the plain-field twin of `firstAnimatingScope(scope, false)`. */
+function chainAnimating(scope: HeavyAnimationScope): boolean {
+  for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) if (s.animating) return true;
+  return false;
+}
+
+/**
+ * Replacement for teact's useHeavyAnimation hook. A listener on `scope` hears the scope's chain
+ * (scope → parent → … → root), the way gating parks its subtree for an ancestor's animation: a
+ * sticker under a transition scope must pause for a modal animating on the root. `onStart` fires on
+ * the chain's idle → animating transition (at once if some scope of the chain already animates),
+ * `onEnd` when the last animating scope of the chain ends. One listener object sits in every chain
+ * scope's set and recomputes the chain state (`chainAnimating`: the plain `animating` fields, O(depth),
+ * no signal read per level) on every notification
+ * instead of trusting the argument or a counter: `Set.forEach` visits listeners added during the walk,
+ * so a subscriber created inside an `onStart`/`onEnd`/`once` callback would count the scope that is
+ * notifying twice (or not at all) and stay "animating" (or deaf) forever. Always call the returned
+ * unsubscribe (or use `watchHeavyAnimation`, which does it with the owner): the root's set holds the
+ * listener and its closures until then. teact's `isDisabled` flag is an effect around it, with the
+ * scope captured in the component body (an apply has no owner, so `currentHeavyAnimationScope()`
+ * there is the root): `const scope = currentHeavyAnimationScope();
+ * createEffect(() => props.disabled, (off) => off ? undefined : onHeavyAnimation(pause, play, scope))`.
+ */
 export function onHeavyAnimation(
   onStart?: () => void,
   onEnd?: () => void,
   scope: HeavyAnimationScope = rootScope,
 ) {
-  const listeners = scopeListeners.get(scope)!;
-  const listener: AnimationListener = (animating) => (animating ? onStart?.() : onEnd?.());
-  listeners.add(listener);
-  if (scope.isAnimating.peek()) onStart?.();
+  let was = chainAnimating(scope);
+  const listener: AnimationListener = () => {
+    const now = chainAnimating(scope);
+    if (now === was) return;
+    was = now;
+    if (now) onStart?.();
+    else onEnd?.();
+  };
+  for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) scopeListeners.get(s)!.add(listener);
+  if (was) onStart?.();
   return () => {
-    listeners.delete(listener);
+    for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) scopeListeners.get(s)!.delete(listener);
   };
 }
 

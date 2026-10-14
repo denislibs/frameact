@@ -54,7 +54,9 @@ const dispose = render(() => <Counter start={1} />, document.getElementById('app
    a binding; `const x = n()` in the body is a one-time read.
 2. **Props are reactive getters: never destructure them.** `function Row({ title })` reads `title` once, at creation, and
    never updates. Write `props.title` where it is used (JSX, a memo, an effect's compute). Forward a subset with
-   `splitProps(props, ['a', 'b'])` or `mergeProps`.
+   `splitProps(props, ['a', 'b'])` or `mergeProps`. Reading `props.x` in an effect's `apply`, an event handler or a
+   `requestMutation` task is fine: it is a plain read of the current value, whatever expression the parent passed
+   (the compiler's memo around a conditional prop degrades to a derived read where nothing tracks).
 3. **Read signals where you want updates.** Reading in JSX, `createMemo`, or an effect's `compute` tracks; reading in an
    event handler or inside `untrack` does not.
 4. **Side effects belong in an effect's `apply`, not in its `compute`.**
@@ -255,6 +257,8 @@ void [List, Rows, ChatList, Box, merged, render];
   messages or bot payloads. Invalid names render nothing; `script` is created inert.
 - `Portal`: events bubble to the logical position; the content is disposed with the Portal.
 - `lazy(() => import('./Settings'), { placeholder })` (from `frameact/dom`) loads a component on first render; `X.preload()` ahead of time.
+  The props type comes from the loaded component, also for a named export re-wrapped as the default
+  (`lazy(() => load().then((m) => ({ default: m.Settings })))`); `lazy<Props>(…)` states it explicitly; `ComponentProps<C>` is the helper.
 - A component is `(props) => JSX`. Use `createComponent` only in hand-written (non-JSX) code.
 
 ## 7. Elements, attributes, events
@@ -396,7 +400,10 @@ void [raw, copy, ids, live, ungated];
 ## 9. Heavy animations
 
 ```tsx
-import { beginHeavyAnimation, createHeavyAnimationScope, provideHeavyAnimationScope, onFullyIdle, watchHeavyAnimation } from 'frameact';
+import {
+  beginHeavyAnimation, createEffect, createHeavyAnimationScope, currentHeavyAnimationScope, onFullyIdle, onHeavyAnimation,
+  provideHeavyAnimationScope, watchHeavyAnimation,
+} from 'frameact';
 import { HeavyAnimationScope } from 'frameact/dom';
 import type { JSX } from 'frameact/jsx-runtime';
 
@@ -412,10 +419,23 @@ function ChatColumn(props: { children?: JSX.Element }) {
   return <div>{props.children}</div>;
 }
 
+// A listener hears its scope AND the ancestors up to the root (a sticker under a transition scope pauses for a modal
+// animating on the root): onStart on the chain's idle → animating transition (at once if it already animates), onEnd
+// when the last scope of the chain ends. The default scope of `watchHeavyAnimation` is the owner's (the nearest
+// provided one), and it unsubscribes with the owner. teact's `useHeavyAnimation(onStart, onEnd, isDisabled)` flag
+// is an effect: subscribe while enabled, return the unsubscribe as the cleanup. Capture the scope in the component
+// body: an apply has no owner, so `currentHeavyAnimationScope()` called there is the root and misses the subtree's own animations.
+function Sticker(props: { disabled?: boolean }) {
+  const scope = currentHeavyAnimationScope();
+  createEffect(() => props.disabled, (disabled) => (disabled ? undefined : onHeavyAnimation(pause, play, scope)));
+  return <canvas />;
+}
+
 function Panel(props: { children?: JSX.Element }) {
   return <HeavyAnimationScope>{props.children}</HeavyAnimationScope>; // component form: a fresh child scope
 }
-void [end, ChatColumn, Panel];
+declare const pause: () => void, play: () => void;
+void [end, ChatColumn, Panel, Sticker];
 ```
 
 While a scope is blocked its frame effects (measure, mutate, forced-reflow) are parked and released together in **one**
