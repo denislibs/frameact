@@ -1,8 +1,9 @@
 // isTracking(): true while a tracked computation runs (a memo or effect compute, where store reads
 // subscribe), false everywhere else — for DEV warnings such as "a snapshot getter inside a computation".
 import { createEffect, createMemo, createRoot, createSignal, flushSync, isTracking, onError, untrack } from '../../src/index';
-import { createStore } from 'frameact/store';
+import { createStore, defineActions } from 'frameact/store';
 import { leafKeys } from '../../src/store/store';
+import { createComponent } from '../../src/dom/component';
 
 it('is false outside computations and inside untrack(); true in a memo and an effect compute; false in an effect apply', () => {
   expect(isTracking()).toBe(false);
@@ -56,4 +57,22 @@ it('is restored after a compute throws', () => {
   flushSync();
   expect(errors).toHaveLength(1);
   expect(isTracking()).toBe(false);
+});
+
+it('is false inside an action (actions run untracked) and in a component body (components run once, untracked); a memo created there tracks', () => {
+  let inAction: boolean | undefined;
+  const actions = defineActions({ probe() { inAction = isTracking(); } });
+  actions.probe();
+  expect(inAction).toBe(false);
+  let inBody: boolean | undefined;
+  let inMemo: boolean | undefined;
+  createRoot(() => {
+    createComponent(() => {
+      inBody = isTracking();
+      createMemo(() => { inMemo = isTracking(); return 0; })();
+      return null;
+    }, {});
+  });
+  expect(inBody).toBe(false);
+  expect(inMemo).toBe(true);
 });

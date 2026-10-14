@@ -112,6 +112,7 @@ void [obj, setObj, double, peeked, tracking];
 - `isTracking()` is `true` while a tracked compute runs (a memo, an effect's `compute`: where signal and store reads
   subscribe) and `false` in an `apply`, a handler, an action, `untrack()` and at the top level. One field read: a DEV
   guard for code that must not be read from a computation, e.g. `if (DEV && isTracking()) console.warn('getGlobal() inside a computation')`.
+  Inside a compute, `untrack(fn)` and `runWithOwner(owner, fn)` both run `fn` with no observer: `isTracking()` is `false` there.
 - Do **not** call `onCleanup` inside an `apply` (DEV error): return the cleanup from `apply`. In the component body
   `onCleanup(fn)` / `onDestroy(fn)` run at disposal.
 - `createSelector(source)` gives O(1) "is this row selected" bindings: `const isSel = createSelector(selectedId);` then
