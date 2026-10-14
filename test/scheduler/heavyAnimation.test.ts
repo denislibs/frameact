@@ -1,8 +1,9 @@
 import {
   createHeavyAnimationScope, rootScope, beginHeavyAnimation, getIsHeavyAnimating,
   getIsBlockingAnimating, firstAnimatingScope, onHeavyAnimation, onFullyIdle,
-  provideHeavyAnimationScope, currentHeavyAnimationScope,
+  provideHeavyAnimationScope, currentHeavyAnimationScope, listenerCountOf,
 } from '../../src/scheduler/heavyAnimation';
+import { watchHeavyAnimation } from '../../src/core/lifecycle';
 import { root } from '../../src/core/core';
 import { flushMicrotasks } from '../helpers/micro';
 
@@ -297,4 +298,24 @@ describe('onHeavyAnimation is reentrant: subscribing or unsubscribing inside a n
     expect(log).toEqual(['start', 'end']);
     off();
   });
+});
+
+it('the root keeps no listener of a nested scope after the unsubscribe or the owner\'s disposal', () => {
+  const baseline = listenerCountOf(rootScope);
+  const nested = createHeavyAnimationScope(); // parent: root
+  const leaf = createHeavyAnimationScope(nested);
+  const off = onHeavyAnimation(undefined, undefined, leaf);
+  expect(listenerCountOf(rootScope)).toBe(baseline + 1);
+  expect(listenerCountOf(nested)).toBe(1);
+  off();
+  expect([listenerCountOf(rootScope), listenerCountOf(nested), listenerCountOf(leaf)]).toEqual([baseline, 0, 0]);
+  let dispose!: () => void;
+  root((d) => {
+    dispose = d;
+    provideHeavyAnimationScope(leaf);
+    for (let i = 0; i < 3; i++) watchHeavyAnimation(() => {}, () => {});
+  });
+  expect([listenerCountOf(rootScope), listenerCountOf(nested), listenerCountOf(leaf)]).toEqual([baseline + 3, 3, 3]);
+  dispose();
+  expect([listenerCountOf(rootScope), listenerCountOf(nested), listenerCountOf(leaf)]).toEqual([baseline, 0, 0]);
 });

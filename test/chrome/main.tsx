@@ -123,7 +123,7 @@ async function main() {
       probe.title = 'bad';
       return () => { probe.remove(); };
     });
-    return measured === 96 ? ['mutation:title:measure:-'] : [`measured ${measured}`];
+    return measured === 96 ? ['mutation:title:measure:-'] : [`measured ${measured}`]; // 2 frames × the 48 px `.box` of index.html: the reflow read saw the attached node
   });
 
   // 4. an event handler writing the DOM directly, through the real observer

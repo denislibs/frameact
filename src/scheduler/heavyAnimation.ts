@@ -113,6 +113,11 @@ export function firstAnimatingScopeSampled(scope: HeavyAnimationScope): HeavyAni
 /** onHeavyAnimation listeners, kept per scope (not exposed on the scope object). */
 const scopeListeners = new WeakMap<HeavyAnimationScope, Set<AnimationListener>>();
 
+/** @internal Test seam: listeners registered on `scope` (its own and those of descendants' chains). */
+export function listenerCountOf(scope: HeavyAnimationScope): number {
+  return scopeListeners.get(scope)!.size;
+}
+
 function reportCallbackError(error: unknown) {
   console.error('[frameact] heavy-animation callback failed', error);
 }
@@ -167,7 +172,15 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
   function notify(animatingChanged: (() => void) | null, blockingChanged: (() => void) | null, animating: boolean) {
     if (animatingChanged) {
       animatingChanged();
-      listeners.forEach((l) => safeCall(() => l(animating)));
+      // No closure per listener: the root's set holds every chain listener of the app (≈0.5 ms per
+      // root begin/end at 10k listeners before the callbacks' own cost, spec §3.2).
+      for (const l of listeners) {
+        try {
+          l(animating);
+        } catch (error) {
+          reportCallbackError(error);
+        }
+      }
     }
     blockingChanged?.();
   }
