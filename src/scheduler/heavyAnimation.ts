@@ -242,18 +242,34 @@ export function firstAnimatingScope(scope: HeavyAnimationScope, blocking: boolea
   return null;
 }
 
-/** Replacement for teact's useHeavyAnimation hook. */
+/**
+ * Replacement for teact's useHeavyAnimation hook. A listener on `scope` hears the scope's chain
+ * (scope → parent → … → root), the way gating parks its subtree for an ancestor's animation: a
+ * sticker under a transition scope must pause for a modal animating on the root. `onStart` fires on
+ * the chain's idle → animating transition (at once if some scope of the chain already animates),
+ * `onEnd` when the last animating scope of the chain ends. One listener object sits in every chain
+ * scope's set; `active` counts the chain scopes that animate (each scope reports its own 0 ↔ 1
+ * transitions, after its flags are updated), so start/end fire on the chain's 0 ↔ 1 only.
+ * A disable flag is an effect around it: `createEffect(() => props.disabled, (off) => off ? undefined : onHeavyAnimation(…))`.
+ */
 export function onHeavyAnimation(
   onStart?: () => void,
   onEnd?: () => void,
   scope: HeavyAnimationScope = rootScope,
 ) {
-  const listeners = scopeListeners.get(scope)!;
-  const listener: AnimationListener = (animating) => (animating ? onStart?.() : onEnd?.());
-  listeners.add(listener);
-  if (scope.isAnimating.peek()) onStart?.();
+  let active = 0;
+  const listener: AnimationListener = (animating) => {
+    if (animating) {
+      if (active++ === 0) onStart?.();
+    } else if (--active === 0) onEnd?.();
+  };
+  for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) {
+    scopeListeners.get(s)!.add(listener);
+    if (s.isAnimating.peek()) active++;
+  }
+  if (active > 0) onStart?.();
   return () => {
-    listeners.delete(listener);
+    for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) scopeListeners.get(s)!.delete(listener);
   };
 }
 

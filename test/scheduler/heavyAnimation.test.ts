@@ -173,3 +173,38 @@ describe('M3: begin() durations', () => {
     end();
   });
 });
+
+describe('a listener on a scope hears the chain (scope → parent → … → root), as gating does', () => {
+  it('an ancestor animation starts it once, and it ends only when the whole chain is idle', () => {
+    const parent = createHeavyAnimationScope(null);
+    const child = createHeavyAnimationScope(parent);
+    const log: string[] = [];
+    const off = onHeavyAnimation(() => log.push('start'), () => log.push('end'), child);
+    const endParent = parent.begin(Infinity, true);
+    expect(log).toEqual(['start']);
+    const endChild = child.begin(Infinity);
+    expect(log).toEqual(['start']); // already animating through the parent: no second start
+    endParent();
+    expect(log).toEqual(['start']); // the child still animates
+    endChild();
+    expect(log).toEqual(['start', 'end']);
+    off();
+    parent.begin(Infinity, true)();
+    expect(log).toEqual(['start', 'end']); // unsubscribed from every scope of the chain
+  });
+
+  it('fires onStart at once when an ancestor already animates, and a sibling scope is not heard', () => {
+    const parent = createHeavyAnimationScope(null);
+    const child = createHeavyAnimationScope(parent);
+    const sibling = createHeavyAnimationScope(parent);
+    const end = parent.begin(Infinity);
+    const onStart = vi.fn(), onEnd = vi.fn();
+    const off = onHeavyAnimation(onStart, onEnd, child);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    end();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    sibling.begin(Infinity)();
+    expect(onStart).toHaveBeenCalledTimes(1);
+    off();
+  });
+});

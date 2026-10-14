@@ -415,7 +415,7 @@ const scope = createHeavyAnimationScope(parent?)
 // глобальный API — это корневой scope
 beginHeavyAnimation(duration?, isBlocking?)  = rootScope.begin
 getIsHeavyAnimating / getIsBlockingAnimating = rootScope.isAnimating / .isBlockingAnimating
-onHeavyAnimation(onStart, onEnd, scope = rootScope)   // замена хука useHeavyAnimation
+onHeavyAnimation(onStart, onEnd, scope = rootScope)   // замена хука useHeavyAnimation; слышит scope и его предков до корня (ревизия 8)
 onFullyIdle(cb, scope = rootScope)                    // через once, не опрос каждый кадр
 ```
 
@@ -1328,4 +1328,15 @@ forced reflow, якобы относится к следующей фазе meas
 перегрузка выводит компонент целиком — `lazy<C extends Component<never>>(…): LazyComponent<ComponentProps<C>>`
 (`ComponentProps` экспортируется из `frameact/dom`; компонент без параметра → `Record<string, never>`), вторая
 оставляет явную форму `lazy<P>`. Типовые тесты: `test/dom/lazy.types.tsx`.
+
+**Слушатель scope'а не слышал анимации предков (баг движка, найден рядом с запросом флага).** Запрос клиента —
+флаг `isDisabled` у `watchHeavyAnimation`, как у teact'овского `useHeavyAnimation(onStart, onEnd, isDisabled)`. Флаг
+не нужен как API: это эффект, который подписывается через `onHeavyAnimation`, пока включён, и возвращает отписку
+как cleanup (задокументировано в `docs/llms-full.md` §9, тест в `test/core/lifecycle.test.ts`). Настоящий пробел
+рядом: `onHeavyAnimation(…, scope)` слушал только собственные анимации `scope`, тогда как гейтинг паркует поддерево
+и за анимацию предка — стикер, созданный под scope'ом `Transition`, пока на корне идёт анимация Modal/Menu, не
+слышал ни начала, ни конца и не инициализировался (клиент, I3). Теперь слушатель стоит на каждом scope'е цепочки
+`scope → parent → … → root` и считает анимирующие scope'ы цепочки: `onStart` на переходе цепочки 0 → 1 (сразу, если
+кто-то в цепочке уже анимирует), `onEnd` на 1 → 0; отписка снимает его со всей цепочки. Сигналы `isAnimating`
+самого scope'а по-прежнему про его собственные анимации (цепочку читает `firstAnimatingScope`).
 

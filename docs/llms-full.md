@@ -400,7 +400,10 @@ void [raw, copy, ids, live, ungated];
 ## 9. Heavy animations
 
 ```tsx
-import { beginHeavyAnimation, createHeavyAnimationScope, provideHeavyAnimationScope, onFullyIdle, watchHeavyAnimation } from 'frameact';
+import {
+  beginHeavyAnimation, createEffect, createHeavyAnimationScope, currentHeavyAnimationScope, onFullyIdle, onHeavyAnimation,
+  provideHeavyAnimationScope, watchHeavyAnimation,
+} from 'frameact';
 import { HeavyAnimationScope } from 'frameact/dom';
 import type { JSX } from 'frameact/jsx-runtime';
 
@@ -416,10 +419,21 @@ function ChatColumn(props: { children?: JSX.Element }) {
   return <div>{props.children}</div>;
 }
 
+// A listener hears its scope AND the ancestors up to the root (a sticker under a transition scope pauses for a modal
+// animating on the root): onStart on the chain's idle → animating transition (at once if it already animates), onEnd
+// when the last scope of the chain ends. The default scope of `watchHeavyAnimation` is the owner's (the nearest
+// provided one), and it unsubscribes with the owner. teact's `useHeavyAnimation(onStart, onEnd, isDisabled)` flag
+// is an effect: subscribe while enabled, return the unsubscribe as the cleanup.
+function Sticker(props: { disabled?: boolean }) {
+  createEffect(() => props.disabled, (disabled) => (disabled ? undefined : onHeavyAnimation(pause, play, currentHeavyAnimationScope())));
+  return <canvas />;
+}
+
 function Panel(props: { children?: JSX.Element }) {
   return <HeavyAnimationScope>{props.children}</HeavyAnimationScope>; // component form: a fresh child scope
 }
-void [end, ChatColumn, Panel];
+declare const pause: () => void, play: () => void;
+void [end, ChatColumn, Panel, Sticker];
 ```
 
 While a scope is blocked its frame effects (measure, mutate, forced-reflow) are parked and released together in **one**

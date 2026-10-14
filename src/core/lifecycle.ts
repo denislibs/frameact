@@ -86,8 +86,11 @@ export function onDestroy(fn: () => void): void {
 
 /**
  * `onHeavyAnimation` bound to the owner: subscribes `onStart`/`onEnd` to `scope` (default: the
- * heavy-animation scope the owner is under, not the root) and unsubscribes when the owner is
- * disposed. `onStart` fires at once if the scope already animates (teact's `useHeavyAnimation`).
+ * heavy-animation scope the owner is under, not the root) and its ancestors up to the root, and
+ * unsubscribes when the owner is disposed. `onStart` fires at once if some scope of that chain
+ * already animates (teact's `useHeavyAnimation`). teact's third argument `isDisabled` is an effect
+ * instead: `createEffect(() => props.disabled, (off) => off ? undefined : onHeavyAnimation(onStart, onEnd, scope))`
+ * (the unsubscribe is the cleanup; `watchHeavyAnimation` itself belongs in the component body).
  */
 export function watchHeavyAnimation(
   onStart?: () => void,
