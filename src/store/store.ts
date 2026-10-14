@@ -69,6 +69,59 @@ const owned = new WeakSet<object>();
 const marked: object[] = [];
 
 /**
+ * DEV detector of the contract behind `owned` (invariant 7): an object handed to the store is validated
+ * once, when it is adopted, and a later write does not re-walk it — so an own `__proto__` key, a store
+ * proxy or a dead draft planted into an owned object FROM OUTSIDE would stay in the raw tree unnoticed
+ * (nobody reads most of a messenger's state through a proxy). In DEV, when `adopt` meets an owned
+ * container (the root of a repeated write or a skipped child), its subtree is re-validated within a budget
+ * per `adopt()` call and the first finding is reported with its key path from the written value.
+ * Diagnostics only: the value is not repaired, production behaves the same, silently (invariant 5).
+ */
+let devOwnedBudget = 2000;
+let devBudget = 0;
+let devReported = false;
+/** @internal tests: the detector's budget per adopt() call (0 switches it off, so a test can count adopt's own walks). */
+export function setDevOwnedBudget(n: number): void {
+  devOwnedBudget = n;
+}
+function devCheckOwned(root: object, path: string): void {
+  if (devReported || devBudget <= 0) return;
+  const seen = new Set<object>();
+  const stack: object[] = [root];
+  const paths: string[] = [path];
+  try {
+    while (stack.length !== 0 && devBudget > 0) {
+      const o = stack.pop() as Record<string, unknown>;
+      const p = paths.pop()!;
+      if (seen.has(o)) continue;
+      seen.add(o);
+      devBudget--;
+      if (Object.hasOwn(o, PROTO_KEY)) return devReportOutsideMutation('an own "__proto__" key', p);
+      const ks = Object.keys(o);
+      for (let i = 0; i < ks.length; i++) {
+        const c = o[ks[i]];
+        if (c === null || typeof c !== 'object') continue;
+        const cp = p === '' ? ks[i] : `${p}.${ks[i]}`;
+        if ((c as any)[$RAW] !== undefined) return devReportOutsideMutation('a store proxy or produce draft', cp);
+        if (isWrappable(c)) {
+          stack.push(c);
+          paths.push(cp);
+        }
+      }
+    }
+  } catch {
+    // a throwing getter inside an owned object: nothing more to validate (the detector never breaks a write)
+  }
+}
+function devReportOutsideMutation(what: string, path: string): void {
+  devReported = true;
+  const shown = JSON.stringify(path.length > 64 ? `${path.slice(0, 63)}…` : path); // (store keys are content: quoted, cut)
+  console.error(
+    `[frameact/store] a store-owned object was mutated from outside after it was written: ${what} at ${shown}. The store validates an object once, when it adopts it (proxies unwrapped, "__proto__" keys dropped); an object handed to the store is owned by it and must not be mutated afterwards — write through setState`,
+  );
+}
+
+/**
  * Plain objects (incl. null-prototype) and arrays become store nodes; class instances, Dates, Maps…
  * are values. A frozen object is a value too: it cannot be mutated (the store writes in place), and a
  * proxy over it could not honour its non-configurable properties — it is returned raw and replaced whole.
@@ -404,12 +457,22 @@ function notifyLeaf(s: Computation, value: unknown) {
 export function adopt(v: object): object {
   const r = (v as any)[$RAW];
   if (r !== undefined) return r; // a store proxy or a produce draft
-  if (owned.has(v) || !isWrappable(v)) return v;
+  if (DEV) {
+    devBudget = devOwnedBudget;
+    devReported = false;
+  }
+  if (owned.has(v)) {
+    if (DEV) devCheckOwned(v, '');
+    return v;
+  }
+  if (!isWrappable(v)) return v;
   const stack: object[] = [v];
+  const paths: string[] | null = DEV ? [''] : null; // (DEV: the key path of every stacked object, for the detector's report)
   const base = marked.length;
   try {
     do {
       const o = stack.pop() as Record<string, unknown>;
+      const path = DEV ? paths!.pop()! : '';
       if (owned.has(o)) continue; // (reached through a second reference, a cycle — or owned before this write)
       const ks = Object.keys(o);
       let container = false;
@@ -429,11 +492,13 @@ export function adopt(v: object): object {
         }
         if (owned.has(c)) {
           container = true; // an owned child: nothing to push (R3.3: pushing it cost a push/pop per reused item)
+          if (DEV) devCheckOwned(c, path === '' ? k : `${path}.${k}`);
           continue;
         }
         if (!isWrappable(c)) continue;
         container = true;
         stack.push(c);
+        if (DEV) paths!.push(path === '' ? k : `${path}.${k}`);
       }
       if (container) {
         owned.add(o);

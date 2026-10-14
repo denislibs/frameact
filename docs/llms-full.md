@@ -382,7 +382,9 @@ void [raw, copy, ids, live, ungated];
 - Class instances, Dates, Maps and frozen objects are *values* (replaced whole, never wrapped). The key `__proto__` is
   dropped. `createStore`'s argument is owned and mutated by the store — and so is every object written by reference:
   adoption (unwrapping proxies, dropping `__proto__`) happens once per object, a later write that reuses store objects
-  costs the new objects only. Never mutate an object after handing it to the store.
+  costs the new objects only. **Never mutate an object after handing it to the store**: it is validated once, at
+  adoption, and never re-checked — a proxy or a `__proto__` key planted into it from outside stays in the raw tree
+  (DEV samples the owned objects a write meets and reports the path; production is silent).
 - Inside a subtree running a heavy animation (section 9) store-driven frame effects **park** until the animation ends; a
   local signal, `live(() => state.x)` (read) or `ungated(() => setState(…))` (write) bypasses that.
 

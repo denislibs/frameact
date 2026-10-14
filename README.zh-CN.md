@@ -144,7 +144,8 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 `frameact/store` 是一棵由普通对象组成的树，其属性在第一次被追踪读取时惰性地变成 signal。`state.chats[id].title`
 恰好订阅这一条路径；`setState('chats', id, 'title', t)` 就地写入原始对象，只唤醒这一个叶子：一千行里只有一行重算，
 不复制任何东西，身份（代理、`For` 行）保持不变。按引用写入的对象只会被采纳一次，此后归 store 所有：之后复用它们的写入
-（重建的字典、引用既有实体的结果集）只需为其中的新对象付出代价。服务端数据按键 diff 合并（`reconcile`），草稿通过 `produce` 修改，
+（重建的字典、引用既有实体的结果集）只需为其中的新对象付出代价。相应的契约是：交给 store 的对象不得在外部被修改——
+其中的代理只在采纳时展开一次、`__proto__` 键只在采纳时去除一次，之后的写入不会再复查它（DEV 会抽样检查并报告此类修改）。服务端数据按键 diff 合并（`reconcile`），草稿通过 `produce` 修改，
 浅合并只能显式进行（`merge()`），路径上的值直接替换，`undefined` 删除键。action 是普通的带类型函数（`defineActions`）；
 嵌套调用在当前 action 之后执行，`afterActions(cb)` 在整个级联之后执行。
 遍历大字典请使用 `frameact/store` 的 `keys(obj)` / `values(obj)` / `entries(obj)`（与普通对象同速，只有一次订阅）；对 store 代理使用 `Object.keys` 可行，但慢约 20 倍。
