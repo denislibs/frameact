@@ -1,6 +1,6 @@
 import {
   beginHeavyAnimation, createEffect, createHeavyAnimationScope, getOwner, createMemo, createMutationEffect, createRoot, createSignal, getPhase,
-  onCleanup, onDestroy, onHeavyAnimation, onMount, provideHeavyAnimationScope, watchHeavyAnimation,
+  currentHeavyAnimationScope, onCleanup, onDestroy, onHeavyAnimation, onMount, provideHeavyAnimationScope, rootScope, watchHeavyAnimation,
 } from '../../src/index';
 import { createComponent } from '../../src/dom/component';
 import { insert } from '../../src/dom/insert';
@@ -216,4 +216,35 @@ it('the documented disable flag: an effect that subscribes with onHeavyAnimation
   dispose();
   end();
   expect(log).toEqual(['start', 'end', 'start']); // gone with the owner
+});
+
+it('the documented disable flag under a nested scope: the scope is captured in the body (an apply sees the root)', async () => {
+  const nested = createHeavyAnimationScope(); // parent: root
+  const [disabled, setDisabled] = createSignal(false);
+  const log: string[] = [];
+  let seenInApply: unknown;
+  const dispose = createRoot((d) => {
+    provideHeavyAnimationScope(nested);
+    createComponent(() => {
+      const scope = currentHeavyAnimationScope(); // the component's scope: `nested`
+      createEffect(
+        () => disabled(),
+        (off) => {
+          seenInApply = currentHeavyAnimationScope();
+          return off ? undefined : onHeavyAnimation(() => log.push('start'), () => log.push('end'), scope);
+        },
+      );
+      return null;
+    }, {});
+    return d;
+  });
+  await flushMicrotasks();
+  expect(seenInApply).toBe(rootScope); // the trap the example avoids
+  nested.begin(Infinity)();
+  expect(log).toEqual(['start', 'end']);
+  setDisabled(true);
+  await flushMicrotasks();
+  nested.begin(Infinity)();
+  expect(log).toEqual(['start', 'end']);
+  dispose();
 });

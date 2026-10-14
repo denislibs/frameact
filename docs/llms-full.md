@@ -423,9 +423,11 @@ function ChatColumn(props: { children?: JSX.Element }) {
 // animating on the root): onStart on the chain's idle → animating transition (at once if it already animates), onEnd
 // when the last scope of the chain ends. The default scope of `watchHeavyAnimation` is the owner's (the nearest
 // provided one), and it unsubscribes with the owner. teact's `useHeavyAnimation(onStart, onEnd, isDisabled)` flag
-// is an effect: subscribe while enabled, return the unsubscribe as the cleanup.
+// is an effect: subscribe while enabled, return the unsubscribe as the cleanup. Capture the scope in the component
+// body: an apply has no owner, so `currentHeavyAnimationScope()` called there is the root and misses the subtree's own animations.
 function Sticker(props: { disabled?: boolean }) {
-  createEffect(() => props.disabled, (disabled) => (disabled ? undefined : onHeavyAnimation(pause, play, currentHeavyAnimationScope())));
+  const scope = currentHeavyAnimationScope();
+  createEffect(() => props.disabled, (disabled) => (disabled ? undefined : onHeavyAnimation(pause, play, scope)));
   return <canvas />;
 }
 
