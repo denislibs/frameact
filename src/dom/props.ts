@@ -16,7 +16,7 @@ import { createMemo, runWithOwner, untrack } from '../index';
 import { isUnsafeAttribute, setAttribute, setBoolAttribute, setProp, setProperty } from './attributes';
 import { className, classList } from './classes';
 import { Aliases, ChildProperties, DelegatedEvents, getPropAlias, Properties, SVG_NS } from './constants';
-import { addEvent, delegateEvents, setListener, tupleListener } from './events';
+import { addEvent, delegateEvents, eventDocumentOf, setListener, tupleListener } from './events';
 import { insert, insertExpression, normalize } from './insert';
 import { getNatives } from './natives';
 import { style } from './styles';
@@ -456,7 +456,7 @@ function assignProp(
         // A refused value (a string, say) must not leave the previous handler behind.
         if (typeof value !== 'function') addEvent(node, event, null, true);
         addEvent(node, event, value, true);
-        delegateEvents([event], getNatives().ownerDocument.call(node)!);
+        delegateEvents([event], eventDocumentOf(node));
       } else {
         // setListener owns the bookkeeping (options of a handleEvent object, capture on removal); the
         // spread has its own slot, so an explicit `on:<event>` on the same element is independent.

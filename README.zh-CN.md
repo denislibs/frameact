@@ -126,6 +126,11 @@ Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的
 一次，或调用 `frameact/dom` 的 `registerControlledDirectives()`。若仍写入了未注册的 `use:value`，开发模式会输出带修复提示的错误，
 生产环境对每个指令名只输出一条简短的 `console.error`。
 
+**哪个 document 接收输入。** 受控输入的回滚与 IME 监听器挂在存活的 document 上，而不是绑定时节点恰好所属的那个：编译后的模板通过
+`cloneNode` 克隆，新克隆仍属于模板的惰性 document。在脱离文档时绑定的节点会立即监听应用的 `document`，并在一个微任务后重新解析，
+因此渲染到 iframe 或其他窗口的 document 也有效（每个 document 只安装一次，幂等）。绑定之后、晚于该微任务才插入第二个 document 的元素不在覆盖范围内：
+请在插入之后再绑定。spread 中会委托的 `onX` 遵循同样的规则。
+
 **安全。** 属性写入会拒绝 `javascript:` / `vbscript:` URL、非媒体类 `data:` URL、字符串形式的 `on*` 处理器以及 `srcdoc=`；
 受信任 HTML 的显式出口是 `prop:srcdoc`。生产环境中拒绝是静默的，开发模式下会输出 `console.error`。
 

@@ -5,7 +5,7 @@ import { DEV } from '../env';
 import { getOwner, onCleanup, untrack } from '../index';
 import { getPhase, requestMutation } from '../scheduler/fasterdom';
 import { defineBuiltinDirective } from './directives';
-import { delegateEvents, onClearDelegated } from './events';
+import { delegateEvents, eventDocumentOf, onClearDelegated } from './events';
 import { getNatives } from './natives';
 
 // ---- built-in controlled inputs (spec §3.3) ---------------------------------
@@ -490,10 +490,35 @@ function reportUnownedAccessor(name: keyof typeof APPLY_HINTS, inApply: boolean)
   );
 }
 
+/**
+ * Elements bound while not in a document yet (every compiled clone), re-resolved once a microtask later:
+ * by then the render has inserted them, and an element that landed in ANOTHER live document (an iframe, a
+ * `Portal` mount in a popup window) gets that document's listeners too. The first install already went to
+ * the app's document (see `eventDocumentOf`), which is where nearly every clone ends up, so an event that
+ * arrives before this runs is handled. Limit: an element inserted into a second document later than that
+ * microtask is not covered; bind it after insertion (an effect or `onMount`). The queue is emptied each
+ * time, so no element is retained.
+ */
+let unsettled: Element[] = [];
+
+function settle(): void {
+  const els = unsettled;
+  unsettled = [];
+  const { ownerDocument, isConnected } = getNatives();
+  for (const el of els) if (isConnected.call(el)) installListeners(ownerDocument.call(el)!);
+}
+
 function bind<B extends Binding<any>>(kind: Kind<B>, el: Element, value: unknown): void {
-  installListeners(el.ownerDocument);
+  // Not `el.ownerDocument`: a clone of a compiled template is still owned by the template's inert document.
+  installListeners(eventDocumentOf(el));
   let b = lookup(kind, el);
-  if (!b) kind.bindings.set(el, (b = kind.create(el)));
+  if (!b) {
+    kind.bindings.set(el, (b = kind.create(el)));
+    if (!getNatives().isConnected.call(el)) {
+      if (unsettled.length === 0) queueMicrotask(settle);
+      unsettled.push(el);
+    }
+  }
   const applying = applyingEffect();
   if (typeof value === 'function') {
     const accessor = value as () => unknown;
