@@ -59,6 +59,14 @@ const nodes = new WeakMap<object, StoreNode>();
  * already relies on.
  */
 const owned = new WeakSet<object>();
+/**
+ * The containers marked by the `adopt()` call in progress (a module buffer, truncated back on exit: no
+ * allocation per write, re-entrant — a getter on new data may write). A walk that throws (a throwing
+ * getter, a non-configurable own `__proto__`) unmarks them: a container marked before the throw has
+ * unwalked children, and the retry of the same write must walk them (R1.1: a proxy or a `__proto__` key
+ * would otherwise slip in on the second attempt).
+ */
+const marked: object[] = [];
 
 /**
  * Plain objects (incl. null-prototype) and arrays become store nodes; class instances, Dates, Maps…
@@ -398,31 +406,42 @@ export function adopt(v: object): object {
   if (r !== undefined) return r; // a store proxy or a produce draft
   if (owned.has(v) || !isWrappable(v)) return v;
   const stack: object[] = [v];
-  do {
-    const o = stack.pop() as Record<string, unknown>;
-    if (owned.has(o)) continue; // (reached through a second reference, a cycle — or owned before this write)
-    const ks = Object.keys(o);
-    let container = false;
-    for (let i = 0; i < ks.length; i++) {
-      const k = ks[i];
-      if (k === PROTO_KEY) {
-        delete o[k];
-        dropProto('new data');
-        continue;
+  const base = marked.length;
+  try {
+    do {
+      const o = stack.pop() as Record<string, unknown>;
+      if (owned.has(o)) continue; // (reached through a second reference, a cycle — or owned before this write)
+      const ks = Object.keys(o);
+      let container = false;
+      for (let i = 0; i < ks.length; i++) {
+        const k = ks[i];
+        if (k === PROTO_KEY) {
+          delete o[k];
+          dropProto('new data');
+          continue;
+        }
+        const c = o[k];
+        if (c === null || typeof c !== 'object') continue;
+        const raw = (c as any)[$RAW];
+        if (raw !== undefined) {
+          o[k] = raw;
+          continue;
+        }
+        if (!isWrappable(c)) continue;
+        container = true;
+        stack.push(c);
       }
-      const c = o[k];
-      if (c === null || typeof c !== 'object') continue;
-      const raw = (c as any)[$RAW];
-      if (raw !== undefined) {
-        o[k] = raw;
-        continue;
+      if (container) {
+        owned.add(o);
+        marked.push(o);
       }
-      if (!isWrappable(c)) continue;
-      container = true;
-      stack.push(c);
-    }
-    if (container) owned.add(o);
-  } while (stack.length !== 0);
+    } while (stack.length !== 0);
+  } catch (e) {
+    for (let i = base; i < marked.length; i++) owned.delete(marked[i]);
+    marked.length = base;
+    throw e;
+  }
+  marked.length = base;
   return v;
 }
 

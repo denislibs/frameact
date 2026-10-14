@@ -169,6 +169,44 @@ describe('adopt stops at objects the store already owns (E3′)', () => {
   });
 });
 
+describe('adopt is atomic: a throwing walk leaves nothing owned (review 1.1)', () => {
+  it('A1: a getter that throws on the first write — the retry walks the whole value, an own __proto__ in the branch left unwalked is still dropped', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const [state, setState] = createStore<any>({ x: null });
+      let first = true;
+      // `b` is popped before `a` (LIFO): the throw happens with `a.inner` not yet walked
+      const v = { a: { inner: JSON.parse('{"__proto__": {"polluted": 1}, "k": 1}') }, b: { get g() { if (first) { first = false; throw new Error('getter'); } return 1; } } };
+      expect(() => setState('x', v)).toThrow('getter');
+      setState('x', v); // the retry (an action re-run)
+      expect(Object.hasOwn(unwrap(state.x).a.inner, '__proto__')).toBe(false);
+      expect(({} as any).polluted).toBeUndefined();
+      expect(err).toHaveBeenCalledTimes(1); // (the dropped key is reported once, by the walk that reached it)
+    } finally {
+      err.mockRestore();
+    }
+  });
+  it('A2: the same with a store proxy in the unwalked branch — the retry unwraps it, the path below stays writable', () => {
+    const [state, setState] = createStore<any>({ x: null, other: { v: 1 } });
+    let first = true;
+    const v = { a: { inner: state.other }, b: { get g() { if (first) { first = false; throw new Error('getter'); } return 1; } } };
+    expect(() => setState('x', v)).toThrow('getter');
+    setState('x', v);
+    expect(unwrap(state.x.a.inner)).toBe(unwrap(state.other));
+    setState('x', 'a', 'inner', 'v', 2); // ("state is read-only" if the proxy stayed in the raw tree)
+    expect(state.other.v).toBe(2);
+  });
+  it('A3: a non-configurable own __proto__ key is rejected on every write, not only on the first', () => {
+    const [state, setState] = createStore<any>({ x: null });
+    const bad = {};
+    Object.defineProperty(bad, '__proto__', { value: { p: 1 }, enumerable: true, configurable: false, writable: true });
+    const v = { a: { b: bad } };
+    expect(() => setState('x', v)).toThrow(TypeError);
+    expect(() => setState('x', v)).toThrow(TypeError);
+    expect(state.x).toBeNull();
+  });
+});
+
 describe('path form', () => {
   it('a fan-out into a missing element is a store error and applies nothing', () => {
     const [state, setState] = createStore<any>({ chats: { a: { title: 'A' }, b: { title: 'B' } } });
