@@ -15,7 +15,6 @@ Every name below exists in the repository at <https://github.com/denislibs/frame
 | `frameact/dom` | `render`, `For`, `Show`, `Switch`/`Match`, `Dynamic`, `Portal`, `HeavyAnimationScope`, `children`, `mergeProps`/`splitProps`, `lazy`, class/style helpers, controlled-input helpers, `defineDirective` |
 | `frameact/store` | `createStore`, `merge`, `produce`, `reconcile`, `unwrap`/`snapshot`, `keys`/`values`/`entries`, `live`, `ungated`, `defineActions`, `afterActions` |
 | `frameact/stricterdom` | DEV phase checker: `enableStrict`, `forceMeasure`, `forceMutation`, `suppressStrict`, `setHandler`, run profiler |
-| `frameact/kit` | `Transition`, `ShowTransition`, `createShowTransition`, `createMediaTransition`, `InfiniteScroll`, `createScrollAnchor`, `waitForAnimationEnd` |
 | `frameact/scheduler` | raw `requestMeasure`/`requestMutation`/…, `debounce`, `throttle`, `fastRaf`, `onTickEnd`, `onIdle` |
 | `frameact/vite` | the Vite plugin (default export) |
 
@@ -35,7 +34,7 @@ export default defineConfig({ plugins: [frameact()] }); // dev flag follows Vite
 ```
 
 The plugin runs the Solid 2.0 JSX compiler pointed at `frameact/dom`. It handles `.jsx`/`.tsx` only; client-side DOM only
-(no SSR). In dev it warns about a reactive `value=`/`checked=` on inputs, string `on*="…"` attributes and (with the kit) destructured props.
+(no SSR). In dev it warns about a reactive `value=`/`checked=` on inputs, string `on*="…"` attributes and destructured props.
 
 ```tsx
 import { createSignal } from 'frameact';
@@ -409,7 +408,6 @@ void [end, ChatColumn, Panel];
 While a scope is blocked its frame effects (measure, mutate, forced-reflow) are parked and released together in **one**
 frame, measure first, when it ends. Raw `requestMeasure`/`requestMutation` and tickEnd effects are never parked. Scopes gate
 *updates*, not creation: to postpone creating a heavy subtree use `deferUntilIdle(scope, () => <Heavy />, placeholder)` (from `frameact`).
-`<Transition>` (kit) manages its own scope.
 
 ## 10. stricterdom (DEV)
 
@@ -430,57 +428,14 @@ void [forceMeasure, forceMutation, suppressStrict, setHandler, getRunStats];
 Call `enableStrict()` from day one: every violation names the offending component and binding. All of it is a no-op in
 production builds (`forceMeasure`/`forceMutation`/`suppressStrict` just call the callback). It is a linter, not a security boundary.
 
-## 11. Kit (`frameact/kit`)
+## 11. App-level UI infrastructure
 
-The thin UI layer a Telegram Web A–class client needs; class contracts follow telegram-tt (bring your own CSS).
-
-```tsx
-import { createSignal } from 'frameact';
-import { For } from 'frameact/dom';
-import { Transition, ShowTransition, InfiniteScroll, createShowTransition, createScrollAnchor, type TransitionSlide } from 'frameact/kit';
-
-function Screens() {
-  const [tab, setTab] = createSignal(0);
-  // Render by slide.key: the outgoing slide keeps its own content while it slides out. JSX children would re-render it to the new content.
-  return (
-    <Transition activeKey={tab()} name="slide" shouldCleanup onStart={() => {}} onStop={() => {}}>
-      {(slide: TransitionSlide) => <button onClick={() => setTab(slide.key + 1)}>screen {slide.key}</button>}
-    </Transition>
-  );
-}
-
-function Modal(props: { isOpen: boolean; user?: { name: string } }) {
-  // <div class="opacity-transition fast shown open ..."> stays mounted while closing (state classes: shown/not-shown, open/not-open, closing)
-  return <ShowTransition isOpen={props.isOpen}>{props.user?.name}</ShowTransition>;
-}
-
-function Popup(props: { isOpen: boolean }) {
-  const t = createShowTransition({ isOpen: () => props.isOpen, closeDuration: 300 });
-  return <>{t.shouldRender() && <div ref={t.ref}>popup</div>}</>;
-}
-
-function Feed(props: { items: { id: number }[]; loadMore: (dir: 'forwards' | 'backwards') => void }) {
-  return (
-    <InfiniteScroll items={props.items} itemSelector=".ListItem" onLoadMore={({ direction }) => props.loadMore(direction)}>
-      <For each={props.items}>{(m) => <div class="ListItem">{m.id}</div>}</For>
-    </InfiniteScroll>
-  );
-}
-
-function Manual(props: { items: unknown[] }) {
-  let box!: HTMLDivElement;
-  // snapshot in measure, DOM in mutate, restore in forced-reflow: one frame
-  const anchor = createScrollAnchor({ container: () => box, items: () => props.items });
-  return <div ref={box} onScroll={() => { if (anchor.consumeRestored()) return; }} />;
-}
-void [Screens, Modal, Popup, Feed, Manual];
-```
-
-`Transition` props: `activeKey: number`, `name`, `direction`, `renderCount`, `shouldCleanup` (+ `cleanupExceptionKey`,
-`cleanupOnlyKey`), `shouldRestoreHeight`, `isBlockingAnimation`, `scope`, `disableAnimation`, `slideClass`, `onStart`/`onStop`.
-Primitives it builds on: `onMount`, `onDestroy`, `previous`/`currentOrPrev`/`frozenWhile`, `watchHeavyAnimation` (`frameact`),
-`lazy`, `splitProps` (`frameact/dom`), `debounce`, `fastRaf`, `throttleWithTickEnd` (`frameact/scheduler`). Note `debounce(fn, ms)`
-with defaults runs a single call once (leading); pass `shouldRunFirst = false` to run after the quiet period.
+Transitions, infinite scroll and scroll anchoring are not part of frameact: they live in the app. Build them on the core
+primitives: `onMount`, `onDestroy`, `previous`/`currentOrPrev`/`frozenWhile`, `watchHeavyAnimation` and `HeavyAnimationScope`
+(`frameact`, `frameact/dom`), `lazy`, `splitProps` (`frameact/dom`), `requestMeasure`/`requestMutation`, `debounce`,
+`fastRaf`, `throttleWithTickEnd` (`frameact/scheduler`), `setExtraStyles`, and the store's shape version
+(`Symbol.for('frameact.shape')`, an O(1) "the array changed" signal). Note `debounce(fn, ms)` with defaults runs a single
+call once (leading); pass `shouldRunFirst = false` to run after the quiet period.
 
 ## 12. Common mistakes
 
@@ -501,7 +456,6 @@ with defaults runs a single call once (leading); pass `shouldRunFirst = false` t
 | `createMemo(() => memoizeByIdentity(state.chats))` | memo over leaf reads: `createMemo(() => selector(state))` |
 | `<Dynamic component={message.tag} />` / spreading server objects `{...payload}` | tag names and prop keys come from your code only |
 | `flushSync()` inside an effect `apply` of a frame phase | only from handlers, actions, tickEnd effects, tests |
-| Transition children as JSX, expecting the old slide to keep old content | use the render function and render by `slide.key` |
 | Reading `previous(x)` once | read it every pass (JSX/effect): it is a lazy memo |
 
 ## 13. Testing app code

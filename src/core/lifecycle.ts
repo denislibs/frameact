@@ -1,4 +1,4 @@
-// Component lifecycle helpers over the owner tree (plan 6, client-readiness kit): the two moments
+// Component lifecycle helpers over the owner tree (plan 6): the two moments
 // a teact component cares about — "my nodes are attached" (`useEffect(fn, [])`) and "I am gone"
 // (the unmount cleanup) — plus the heavy-animation listener that unsubscribes with its owner.
 import { DEV } from '../env';

@@ -230,7 +230,7 @@ describe('arrays', () => {
   });
 });
 
-describe('shape version (Symbol.for("frameact.shape"), the kit\'s O(1) change detector)', () => {
+describe('shape version (Symbol.for("frameact.shape"), the O(1) change detector)', () => {
   const SHAPE = Symbol.for('frameact.shape');
 
   it('subscribes to the shape only, copies nothing, and changes on every shape write; undefined on objects', () => {
