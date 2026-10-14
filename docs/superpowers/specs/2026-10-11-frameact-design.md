@@ -1357,3 +1357,23 @@ forced reflow, якобы относится к следующей фазе meas
 кто-то в цепочке уже анимирует), `onEnd` на 1 → 0; отписка снимает его со всей цепочки. Сигналы `isAnimating`
 самого scope'а по-прежнему про его собственные анимации (цепочку читает `firstAnimatingScope`).
 
+## 16. Ревизия 9: document-listener'ы контролируемых инпутов и инертный документ шаблона
+
+Клиент (telegram-dd) нашёл: `use:value` не откатывал отклонённый ввод, пока клиент не вызвал на живом документе свой
+`installControlledInputListeners()` до первого рендера. Причина: `bind` ставил document-level listener'ы на
+`el.ownerDocument`, а скомпилированный JSX биндит директивы на клонах, сделанных `template.content.firstChild.cloneNode(true)`:
+клон принадлежит инертному документу шаблона (`defaultView === null`, проверено в jsdom и в настоящем Chromium), и
+listener'ы оседали там. `document.importNode` (флаг 1 `template`, только custom elements) даёт клон живого документа, поэтому
+ошибка видна только на обычных шаблонах. Тот же корень у `delegateEvents([event], ownerDocument(node))` в spread (`onClick` в
+`{...props}` не срабатывал).
+
+Решение: `eventDocumentOf(node)` (`events.ts`) — собственный `ownerDocument`, если узел подключён или документ-владелец имеет
+browsing context (iframe), иначе глобальный `document`. Всё читается через natives (`isConnected`, `defaultView`, `ownerDocument`).
+Узел, привязанный до вставки, добавляется в очередь `settle` и через микротаск, когда `render` его уже вставил, получает установку
+на реальный `ownerDocument` (iframe, `createHTMLDocument`); одна установка на документ, идемпотентно, очередь не удерживает
+элементы. Известные ограничения: вставка во второй документ позже этого микротаска (отложенная или гейтированная вставка, ручной
+`append`) не покрыта (привязывать после вставки); у spread-делегирования микротаска нет, а обычный `onClick` делегируется модульным
+`delegateEvents` на `window.document`, поэтому делегируемые `onX` в iframe / втором документе требуют явного
+`delegateEvents([...], doc)` (подтверждено пробой ревью).
+Тесты: `test/dom/controlledLive.test.tsx` (скомпилированный TSX: input/textarea/select/checked, IME, `forceControlledValue`,
+iframe, `createHTMLDocument`, clobbering `isConnected` у `<form>` + spread `onClick`), сценарий `controlled-inputs-live-document` в Chrome-лейне.

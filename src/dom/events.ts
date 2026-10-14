@@ -10,6 +10,20 @@ export const EVENT_KEY = '_$$';
 const delegated = new WeakMap<Document, Set<string>>();
 const clearHooks = new Set<(doc: Document) => void>();
 
+/**
+ * The document whose listeners will see the events of `node`. A compiled template is cloned with
+ * `cloneNode`, so a fresh clone is still owned by the template's inert document (`defaultView` is null)
+ * while directives and spreads bind it; a listener put there never fires. A node that is not in a
+ * document yet and whose owner is inert will be inserted into the app's document: that one. A connected
+ * node, or one owned by a document with a browsing context (an iframe's), answers its own `ownerDocument`.
+ * All reads go through the natives (DOM clobbering).
+ */
+export function eventDocumentOf(node: Node): Document {
+  const { ownerDocument, isConnected, defaultView } = getNatives();
+  const owner = ownerDocument.call(node);
+  return owner !== null && (isConnected.call(node) || defaultView.call(owner) !== null) ? owner : document;
+}
+
 /** Compiler primitive: attach one document listener per event type (idempotent). */
 export function delegateEvents(eventNames: readonly string[], doc: Document = window.document): void {
   let names = delegated.get(doc);

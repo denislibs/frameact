@@ -60,6 +60,29 @@ function Panel(props: { probe: () => number }) {
   return view;
 }
 
+const type = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+  el.value = value;
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value.slice(-1) }));
+};
+const fired = (el: Element, name: string) => el.dispatchEvent(new Event(name, { bubbles: true }));
+const letters = (v: string) => /^[a-z]*$/.test(v);
+
+const exerciseControls = (root: ParentNode) => {
+  const t = root.querySelector<HTMLInputElement>('.t')!;
+  const a = root.querySelector<HTMLTextAreaElement>('.a')!;
+  const s = root.querySelector<HTMLSelectElement>('.s')!;
+  const c = root.querySelector<HTMLInputElement>('.c')!;
+  type(t, 'ab1');
+  type(a, 'ab1');
+  s.value = 'c';
+  fired(s, 'input');
+  c.checked = true;
+  fired(c, 'change');
+  c.checked = false;
+  fired(c, 'change');
+  return [t.value, a.value, s.value, c.checked];
+};
+
 async function main() {
   enableStrict();
   setHandler((error) => { violations.push(error); });
@@ -210,6 +233,48 @@ async function main() {
     await nextFrame();
     dispose();
     return ['mutation:class:measure:-'];
+  });
+
+  // 10. controlled inputs (compiled `use:value` / `use:checked`): a template clone is bound while it is still
+  //     owned by the template's inert document (cloneNode), so the revert listeners must not land there. Real
+  //     Chromium: main document and an iframe, each control kind, no stricterdom violation from the revert.
+  await scenario('controlled-inputs-live-document', async () => {
+    let inertAtBind = false;
+    const Form = () => {
+      const [text, setText] = createSignal('ab');
+      const [area, setArea] = createSignal('ab');
+      const [pick, setPick] = createSignal('a');
+      const [on, setOn] = createSignal(false);
+      return (
+        <div>
+          <input ref={(el) => { inertAtBind = el.ownerDocument !== document; }} class="t" use:value={text} onInput={(e) => letters(e.currentTarget.value) && setText(e.currentTarget.value)} />
+          <textarea class="a" use:value={area} onInput={(e) => letters(e.currentTarget.value) && setArea(e.currentTarget.value)} />
+          <select class="s" use:value={pick} onInput={(e) => e.currentTarget.value !== 'c' && setPick(e.currentTarget.value)}>
+            <option value="a">a</option><option value="b">b</option><option value="c">c</option>
+          </select>
+          <input class="c" type="checkbox" use:checked={on} onChange={(e) => e.currentTarget.checked && setOn(true)} />
+        </div>
+      );
+    };
+    const want = JSON.stringify(['ab', 'ab', 'a', true]);
+    const mainHost = document.createElement('div');
+    forceMutation(() => app.appendChild(mainHost), app);
+    const disposeMain = render(() => createComponent(Form, {}), mainHost);
+    const gotMain = JSON.stringify(exerciseControls(mainHost));
+    const frame = document.createElement('iframe');
+    forceMutation(() => app.appendChild(frame), app);
+    const inner = frame.contentDocument!;
+    const host = inner.createElement('div');
+    inner.body.appendChild(host);
+    const disposeFrame = render(() => createComponent(Form, {}), host);
+    await Promise.resolve(); // the listeners of a document other than the app's are installed after the render inserted the clone
+    const gotFrame = JSON.stringify(exerciseControls(host));
+    await nextFrame();
+    disposeMain();
+    disposeFrame();
+    forceMutation(() => { frame.remove(); mainHost.remove(); }, app);
+    check('controlled-inputs-live-document: premise', inertAtBind, `inertAtBind=${inertAtBind} main=${gotMain} iframe=${gotFrame}`);
+    return gotMain === want && gotFrame === want ? [] : [`main=${gotMain} iframe=${gotFrame} want=${want}`];
   });
 
   document.documentElement.dataset.result = JSON.stringify(results);

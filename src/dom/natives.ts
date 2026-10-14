@@ -12,7 +12,7 @@
 //
 // Covered: structure getters, insertion/removal, identity getters, `textContent`, the attribute
 // methods, and the `document` surface the runtime uses (`createTextNode`, `createElement`,
-// `createElementNS`, `importNode`, `addEventListener`/`removeEventListener`, `body`, `activeElement`).
+// `createElementNS`, `importNode`, `addEventListener`/`removeEventListener`, `body`, `activeElement`, `defaultView`).
 // Not covered: `classList`, `style`, `value`, `data`, the element-level `addEventListener` and other
 // per-feature APIs of a form whose descendant takes exactly that name. That case fails loudly, not
 // silently, and stays local to the element: the binding's effect throws on every run (its `_applied`
@@ -36,6 +36,7 @@ export interface Natives {
   /** Upper-case for HTML elements (`'FORM'`), the same as `tagName` there. */
   nodeName: (this: Node) => string;
   ownerDocument: (this: Node) => Document | null;
+  isConnected: (this: Node) => boolean;
   localName: (this: Element) => string;
   namespaceURI: (this: Element) => string | null;
   /** `Node.prototype.textContent` setter. */
@@ -61,6 +62,8 @@ export interface Natives {
   /** `Document.prototype` getters: `<img name="body">` shadows `document.body`. */
   body: (this: Document) => HTMLElement | null;
   activeElement: (this: Document) => Element | null;
+  /** The window of a document with a browsing context; `null` for a template's inert document and `createHTMLDocument` ones. */
+  defaultView: (this: Document) => WindowProxy | null;
   /** `HTMLFormElement.prototype.elements` (`<input name="elements">` shadows `form.elements`). */
   formElements: (this: HTMLFormElement) => HTMLFormControlsCollection;
   /** `querySelectorAll` of a document / shadow root / element (a form named `querySelectorAll` shadows it on `document`). */
@@ -85,6 +88,7 @@ export function getNatives(): Natives {
     nodeType: getter(Node.prototype, 'nodeType'),
     nodeName: getter(Node.prototype, 'nodeName'),
     ownerDocument: getter(Node.prototype, 'ownerDocument'),
+    isConnected: getter(Node.prototype, 'isConnected'),
     localName: getter(Element.prototype, 'localName'),
     namespaceURI: getter(Element.prototype, 'namespaceURI'),
     setTextContent: Object.getOwnPropertyDescriptor(Node.prototype, 'textContent')!.set!,
@@ -106,6 +110,7 @@ export function getNatives(): Natives {
     removeEventListener: EventTarget.prototype.removeEventListener,
     body: getter(Document.prototype, 'body'),
     activeElement: getter(Document.prototype, 'activeElement'),
+    defaultView: getter(Document.prototype, 'defaultView'),
     formElements: getter(HTMLFormElement.prototype, 'elements'),
     querySelectorAll: {
       document: Document.prototype.querySelectorAll,
