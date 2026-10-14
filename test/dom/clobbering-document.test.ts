@@ -10,9 +10,6 @@ import { insert } from '../../src/dom/insert';
 import { For } from '../../src/dom/list';
 import { render } from '../../src/dom/render';
 import { template } from '../../src/dom/template';
-import { InfiniteScroll } from '../../src/kit/infiniteScroll';
-import { ShowTransition } from '../../src/kit/showTransition';
-import { Transition, type TransitionSlide } from '../../src/kit/transition';
 import { container, useDomHarness } from '../helpers/dom';
 
 const { frame } = useDomHarness();
@@ -69,44 +66,6 @@ describe('document shadows do not break the runtime', () => {
     const dispose = render(() => createComponent(Portal, { get children() { const e = mk('em'); e.textContent = 'modal'; return e; } }), logical);
     expect(img.childNodes.length).toBe(0);
     expect(Object.getOwnPropertyDescriptor(Document.prototype, 'body')!.get!.call(document).querySelector('em')!.textContent).toBe('modal');
-    dispose();
-  });
-  it('kit: <Transition>, <ShowTransition> and <InfiniteScroll> render and update with createElement, createTextNode and body shadowed', async () => {
-    const host = container();
-    shadow('createElement');
-    shadow('createTextNode');
-    shadow('body');
-    const [key, setKey] = createSignal(0);
-    const [open, setOpen] = createSignal(true);
-    const [rows, setRows] = createSignal([1, 2]);
-    const dispose = render(
-      () => [
-        createComponent(Transition, { get activeKey() { return key(); }, name: 'slide', children: (slide: TransitionSlide) => `slide ${slide.key}` }),
-        createComponent(ShowTransition, { get isOpen() { return open(); }, children: 'shown' }),
-        createComponent(InfiniteScroll, {
-          get items() { return rows(); },
-          get children() {
-            return createComponent(ForC, { get each() { return rows(); }, children: (n: number) => { const li = mk('li'); li.className = 'ListItem'; insert(li, () => `row ${n}`); return li; } });
-          },
-        }),
-      ],
-      host,
-    );
-    expect(host.querySelector('.Transition_slide-active')!.textContent).toBe('slide 0');
-    const shown = host.querySelector('.opacity-transition')!;
-    expect(shown.textContent).toBe('shown');
-    expect(shown.classList.contains('open')).toBe(true);
-    expect(Array.from(host.querySelectorAll('.ListItem')).map((li) => li.textContent)).toEqual(['row 1', 'row 2']);
-    await frame(); // InfiniteScroll's first measure (preload check) and ShowTransition's first frame
-    // Updates create new nodes with the shadows in place: a new slide (element + text), a new row, the close classes.
-    setKey(1);
-    setRows([1, 2, 3]);
-    setOpen(false);
-    await frame();
-    expect(host.querySelector('.Transition_slide-to')!.textContent).toBe('slide 1');
-    expect(host.querySelectorAll('.Transition_slide').length).toBe(2);
-    expect(host.querySelectorAll('.ListItem').length).toBe(3);
-    expect(shown.classList.contains('closing')).toBe(true);
     dispose();
   });
   it('addEventListener / removeEventListener: delegation installs and clears', () => {

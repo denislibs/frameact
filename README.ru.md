@@ -181,19 +181,9 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
 <For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
 ```
 
-## Кит
+## UI уровня приложения
 
-`frameact/kit` — тонкий UI-слой, который нужен клиенту класса Telegram Web A до основных экранов, на тех
-же контрактах классов, что у telegram-tt (стили приносит клиент): `<Transition>` (слайды по ключу,
-предыдущий слайд остаётся живым (и после анимации, пока не сработает `shouldCleanup`), политики cleanup, scope heavy-animation на поддерево,
-`animationend` читается в событии и применяется в mutate-фазе), `createShowTransition` /
-`<ShowTransition>` / `createMediaTransition`, `<InfiniteScroll>` и `createScrollAnchor` (якорь снимается в
-measure-фазе, список обновляется в mutate, позиция восстанавливается в forced-reflow — один кадр, в том
-числе после релиза из-под heavy-animation). Примитивы под ним лежат в ядре: `onMount`, `onDestroy`,
-`previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation` (`frameact`), `lazy`, `splitProps`
-(`frameact/dom`), `debounce` / `fastRaf` / `throttleWithTickEnd` (`frameact/scheduler`). Vite-плагин
-предупреждает о деструктуризации пропсов, а `setExtraStyles` переживает строковый `style=`, как в teact.
-Гайд портирования (англ.): [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
+UI-инфраструктура уровня приложения (переходы, бесконечный скролл, якорь скролла) живёт в приложении, а не во фреймворке. Примитивы, на которых она строится, остаются в ядре: `onMount`, `onDestroy`, `previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation`, `lazy`, `splitProps`, `debounce` / `fastRaf` / `throttleWithTickEnd`, `setExtraStyles`; Vite-плагин предупреждает о деструктуризации пропсов. Гайд портирования (англ.): [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
 
 ## stricterdom (dev-режим)
 
@@ -263,7 +253,7 @@ Message > span.children [mutate]`), фаза кадра — тоже (`Slow muta
 | 3 · store | стор-дерево сигналов: подписки на листья, запись по пути на месте, `reconcile`, парковка по причине на время анимаций, типизированные экшены | ✅ готово |
 | 4 · stricterdom | dev-проверки фаз с атрибуцией до эффекта, профайлер прогонов, контракт `flushSync` для прода | ✅ готово |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact на сценариях мессенджера (Chromium + WebKit, CPU ×4) | ⏳ |
-| 6 · kit | кит готовности клиента: `Transition`, `ShowTransition`, `InfiniteScroll` + якорь скролла, `onMount`/`onDestroy`, `lazy`, `splitProps`, lint деструктуризации пропсов, гайд портирования | ✅ готово |
+| 6 · kit | примитивы готовности клиента: `onMount`/`onDestroy`, `lazy`, `splitProps`, lint деструктуризации пропсов, гайд портирования | ✅ готово; сам UI-кит (`Transition`, `ShowTransition`, `InfiniteScroll`, якорь скролла) перенесён в приложение |
 
 Дизайн: [`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md) ·
 планы: [`docs/superpowers/plans/`](docs/superpowers/plans/).

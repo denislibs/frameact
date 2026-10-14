@@ -15,7 +15,6 @@
       "frameact": ["./src/index.ts"],
       "frameact/dom/controlled": ["./src/dom/controlledRegister.ts"],
       "frameact/dom": ["./src/dom/index.ts"],
-      "frameact/kit": ["./src/kit/index.ts"],
       "frameact/store": ["./src/store/index.ts"],
       "frameact/stricterdom": ["./src/stricterdom/index.ts"],
       "frameact/jsx-runtime": ["./src/jsx-runtime.ts"]

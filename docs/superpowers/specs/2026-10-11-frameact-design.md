@@ -1011,7 +1011,7 @@ sourceNames: dev,                                                     // име�
 ```
 frameact/
   package.json            name: frameact; exports: ".", "./dom", "./scheduler",
-                          "./stricterdom", "./store", "./kit", "./vite", "./jsx-runtime" (типы)
+                          "./stricterdom", "./store", "./vite", "./jsx-runtime" (типы)
   src/
     core/                 форк maverick (+ правки §3.2), effects.ts (run, очереди run'ов,
                           планировщики, гейтинг), context.ts, map.ts (+key fn),
@@ -1025,8 +1025,6 @@ frameact/
                           lazy.ts, render.ts, index.ts
     store/                store.ts (дерево сигналов, setState, merge, produce, unwrap/snapshot, live/ungated),
                           reconcile.ts, gate.ts (парковка по причине), actions.ts
-    kit/                  animationEnd.ts, showTransition.ts, transition.ts, scrollAnchor.ts,
-                          infiniteScroll.ts, index.ts — UI-слой клиента (план 6; контракты классов tt)
     vite/                 index.ts
     jsx/                  jsx.d.ts (из dom-expressions) + типы директив
   test/                   vitest + jsdom; test/chrome — дорожка в headless Chrome (pnpm test:chrome)
@@ -1211,6 +1209,8 @@ telegram-tt») сошлись на трёх критических дефект�
 
 ## 11. Ревизия 4: кит готовности клиента (план 6)
 
+> Ревизия 6 (§13): `frameact/kit` вынесен из фреймворка в приложение; ниже — запись о том, что было сделано в плане 6.
+
 Добавлены: `frameact/kit` (переходы и бесконечный скролл на контрактах классов telegram-tt), примитивы
 жизненного цикла `onMount`/`onDestroy` и истории значений `previous`/`currentOrPrev`/`frozenWhile` в
 `frameact`, `lazy`/`splitProps` в `frameact/dom`, экспорт `debounce`/`fastRaf`/`throttleWithTickEnd` из
@@ -1232,3 +1232,15 @@ measure-задачу) — якорь скролла и список под па�
 запасной выход: `import 'frameact/dom/controlled'` или `registerControlledDirectives()` из `frameact/dom`; в prod
 незарегистрированная запись даёт одну короткую `console.error` на имя; heavy-animation gating
 подключается первым `begin()` (или store-гейтом); состояние канала `class` хранится на элементе.
+
+## 13. Ревизия 6: `frameact/kit` вынесен в приложение
+
+Решение автора: кит (`Transition`, `ShowTransition`/`createShowTransition`/`createMediaTransition`, `InfiniteScroll`,
+`createScrollAnchor`/`trackItems`/`trackShape`/`createItemsVersion`, `waitForAnimationEnd`) — инфраструктура приложения,
+а не движок, поэтому переехал в приложение (tg-frameact); точка входа `frameact/kit` и каталог `src/kit/` удалены
+(`refactor!`). Граница: frameact хранит только уровень движка — реактивность, рендер/DOM-рантайм, планировщик и
+фазы кадра, стор, stricterdom и общие примитивы жизненного цикла и реактивности. В ядре остались `onMount`,
+`onDestroy`, `watchHeavyAnimation`, `previous`/`currentOrPrev`/`frozenWhile`, `lazy`, `splitProps`,
+`debounce`/`fastRaf`/`throttleWithTickEnd`, `setExtraStyles`, символ версии формы стора (`Symbol.for('frameact.shape')`),
+lint деструктуризации пропсов и `<ManualFor>`. Тесты кита и хелпер `test/helpers/layout.ts` переехали вместе с кодом.
+§4 и §11 выше описывают состояние до этого решения и сохранены как история.

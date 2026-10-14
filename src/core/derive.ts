@@ -1,4 +1,4 @@
-// Derived accessors over a source's history (plan 6, client-readiness kit): teact's `usePrevious`,
+// Derived accessors over a source's history (plan 6): teact's `usePrevious`,
 // `useCurrentOrPrev` and `useFrozenProps` as memos. They observe the source when they are READ:
 // a memo is pulled lazily, so a value nobody read between two changes is not a "previous" value.
 // Read them from an effect or the JSX (every frame) and they see each change.

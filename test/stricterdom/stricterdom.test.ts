@@ -209,7 +209,7 @@ it('forceMeasure opens a layout-read window inside the mutate phase; a write ins
   flushSync();
   expect(read).toBe(0);
   expect(violations.map(summary)).toEqual(['mutation:class:measure:-']);
-  // outside the mutate phase (event handlers, measure tasks — kit helpers run in both): no error, no window
+  // outside the mutate phase (event handlers, measure tasks — app helpers may run in both): no error, no window
   violations.length = 0;
   expect(forceMeasure(() => el.offsetWidth)).toBe(0);
   let inMeasureTask = -1;

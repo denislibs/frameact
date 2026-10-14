@@ -12,7 +12,6 @@
     "./dom": "./src/dom/index.ts",
     "./dom/controlled": "./src/dom/controlledRegister.ts",
     "./scheduler": "./src/scheduler/index.ts",
-    "./kit": "./src/kit/index.ts",
     "./store": "./src/store/index.ts",
     "./stricterdom": "./src/stricterdom/index.ts",
     "./vite": "./src/vite/index.ts",

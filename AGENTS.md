@@ -20,7 +20,6 @@ split into phases. The target consumer is a Telegram Web A–class messenger. MI
 | `src/dom/` | runtime the Solid 2.0 JSX compiler targets (`frameact/dom`): `template`, `insert`, `spread`, `For`/`ManualFor`/`Show`/`Switch`/`Dynamic`/`Portal`, controlled inputs, classes/styles/attributes, event delegation, `natives.ts` |
 | `src/store/` | `frameact/store`: signal-tree store (model B), `reconcile`, actions, heavy-animation parking gate |
 | `src/stricterdom/` | `frameact/stricterdom`: DEV phase checks with effect attribution, run profiler |
-| `src/kit/` | `frameact/kit`: `Transition`, `ShowTransition`, `InfiniteScroll`, `createScrollAnchor` |
 | `src/vite/` | `frameact/vite`: Vite plugin = Solid babel plugin pinned to `moduleName: "frameact/dom"` + DEV source lints |
 | `src/jsx/`, `src/jsx-runtime.ts` | JSX types only (`jsx: "preserve"`, the compiler lowers JSX) |
 | `src/env.ts` | the `DEV` flag |
@@ -30,8 +29,17 @@ split into phases. The target consumer is a Telegram Web A–class messenger. MI
 | `.claude/skills/` | `perf-review`, `appsec-review` (see "Review skills") |
 
 Public entry points are listed in `package.json` `exports`: `frameact`, `frameact/dom`, `frameact/dom/controlled` (side-effect import), `frameact/scheduler`,
-`frameact/store`, `frameact/stricterdom`, `frameact/vite`, `frameact/jsx-runtime`, `frameact/kit`. A new
+`frameact/store`, `frameact/stricterdom`, `frameact/vite`, `frameact/jsx-runtime`. A new
 entry needs the `exports` line, a `paths` entry in `tsconfig.json` and an alias in `vitest.config.ts`.
+
+## Scope boundary: engine only
+
+frameact keeps **engine-level** things only: reactivity, rendering/DOM runtime, scheduler and frame phases, store,
+stricterdom, and generic lifecycle/reactivity primitives (`onMount`, `onDestroy`, `watchHeavyAnimation`,
+`previous`/`currentOrPrev`/`frozenWhile`, `lazy`, `splitProps`, `<ManualFor>`, the store shape version). Application
+UI infrastructure (transitions, infinite scroll, scroll anchoring, ...) lives in the app, not here: there is no
+`frameact/kit` and none must be added. A proposal for such a module goes to the app repo; here, add only the
+engine primitive it needs.
 
 ## Commands
 
@@ -129,8 +137,7 @@ frameact is MIT. Third-party code is allowed only when its license permits it an
   (`src/lib/teact` there). Only the separate **Ajaxy/teact** repository is MIT. If you are unsure which repo a snippet
   came from, do not use it.
 - telegram-tt *behaviour* may be re-implemented **clean-room**: from the observable behaviour, public interfaces and our own
-  tests, without having the GPL source open in front of you. The kit modules (`animationEnd`, `transition`,
-  `infiniteScroll`, `showTransition`, `debounce`) and the stricterdom ignore/`details[open]` behaviours were done this way;
+  tests, without having the GPL source open in front of you. `debounce` and the stricterdom ignore/`details[open]` behaviours were done this way;
   their headers say "in the spirit of" / "re-implemented from behaviour". Say so in the header of any new such module.
 - Vendored test fixtures (`test/dom/fixtures`) carry a `SOURCE` file instead of per-file headers; do not edit them.
 - Do not add dependencies without a reason recorded in the PR; check the license of anything new.

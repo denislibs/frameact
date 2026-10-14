@@ -3,8 +3,8 @@
 A working guide for a team coming from telegram-tt (teact + fasterdom + TeactN) to frameact. It covers
 the three things that change: **a component runs once** (hooks become primitives), **effects have two
 halves and a phase**, and **the store is a tree of signals written in place** (model B, spec §3.5).
-The API named here is `frameact`, `frameact/dom`, `frameact/store`, `frameact/scheduler` and the
-client-readiness kit `frameact/kit` (plan 6). `frameact/stricterdom` (`enableStrict`, `forceMeasure`,
+The API named here is `frameact`, `frameact/dom`, `frameact/store` and `frameact/scheduler`; UI infrastructure such as
+transitions and infinite scroll is app-level, not part of the framework. `frameact/stricterdom` (`enableStrict`, `forceMeasure`,
 `forceMutation`, `suppressStrict`, `setHandler`) is available: call `enableStrict()` in dev from the first day; the phase
 rules below are what it checks, and every violation names the offending effect.
 
@@ -26,9 +26,9 @@ rules below are what it checks, and every violation names the offending effect.
 | `useHeavyAnimation`, `useThrottleForHeavyAnimation` | **`watchHeavyAnimation(onStart, onEnd, scope?)`**, `onFullyIdle` | Unsubscribes with the owner; `scope` defaults to the subtree's scope, not the root. |
 | `useMountAfterHeavyAnimation`, `isReady` | `deferUntilIdle(scope, () => <Heavy/>, placeholder)` | The creation gate; scopes gate updates. |
 | `useModuleLoader` + `*.async.tsx` | **`lazy(() => import('./X'))`** (`frameact/dom`) | No Suspense: `placeholder` until loaded, `X.preload()` ahead of time. |
-| `useShowTransition`, `useMediaTransition`, `<ShowTransition>` | **`createShowTransition`, `createMediaTransition`, `<ShowTransition>`** (`frameact/kit`) | Same classes (`shown/not-shown`, `open/not-open`, `closing`, `opacity-transition fast|slow`). |
-| `<Transition activeKey name>` | **`<Transition>`** (`frameact/kit`) | Same class contracts, keep-alive, cleanup policies; `scope` per subtree; slides always wrapped. Not ported: `slideOptimized`, swipe control, `nextKey`. By default the transition animates its own child scope, so global consumers of tt's `getIsHeavyAnimating` / `onFullyIdle()` on the root (lottie and video pauses) do not see it: pass `scope={rootScope}` for tt's behaviour. An `onMount` inside a slide of a blocking transition (`isBlockingAnimation`) waits for the end of the animation, so `onMount(() => input.focus())` fires after the slide, not before. |
-| `<InfiniteScroll>`, scroll anchoring in `MessageList` | **`<InfiniteScroll>`, `createScrollAnchor`** (`frameact/kit`) | Snapshot in measure, DOM in mutate, restore in forced reflow — one frame. |
+| `useShowTransition`, `useMediaTransition`, `<ShowTransition>` | app-level; build on `onMount`, heavy-animation scopes, `requestMeasure`/`requestMutation`, store shape version | Not in frameact. |
+| `<Transition activeKey name>` | app-level; build on `onMount`, heavy-animation scopes, `requestMeasure`/`requestMutation`, store shape version | Not in frameact. Tip: give the transition its own heavy-animation scope; an `onMount` inside a slide of a blocking transition should wait for the end of the animation. |
+| `<InfiniteScroll>`, scroll anchoring in `MessageList` | app-level; build on `onMount`, heavy-animation scopes, `requestMeasure`/`requestMutation`, store shape version | Not in frameact; see section 4 for the phase idiom. |
 | `debounce`, `throttle`, `fastRaf`, `throttleWithTickEnd`, `onTickEnd`, `onIdle` | the same names in `frameact/scheduler` | Prefer `requestMeasure`/`requestMutation` to `fastRaf` for DOM work. **`debounce(fn, ms)` differs:** with the defaults (`shouldRunFirst = shouldRunLast = true`) a single call runs `fn` once (leading), where teact runs it twice (leading and trailing); the trailing run happens only if another call lands inside the wait. If a call site needs the run after the quiet period, pass `shouldRunFirst = false`. |
 | `withGlobal(mapStateToProps)`, `useSelector` | read `state.chats[id].title` in JSX, or a selector function over the proxy | Per-leaf subscriptions; no containers, no storms. |
 | `getGlobal()` in a handler | read the store proxy (untracked outside computations) or `unwrap(state)` | — |
@@ -114,7 +114,7 @@ createEffect(() => props.items, () => { setFix(scrollTop + (anchor.getBoundingCl
 createMutationEffect(() => fix(), (v) => { if (v !== undefined) el.scrollTop = v; });        // forced-reflow mutate phase, same frame
 ```
 
-That is `createScrollAnchor` in `frameact/kit`. Under a heavy animation all three park and are released
+That is a scroll anchor (app-level code built on these primitives). Under a heavy animation all three park and are released
 together, measure first (the store-gate release goes through a measure task for this — audit R1, fixed in the store's fix round).
 Create the anchor under the same heavy-animation scope as its list. A store array is tracked by its shape, so
 `produce`/`reconcile` writes in place are anchored too. A list written in the mutate phase (a store write from a

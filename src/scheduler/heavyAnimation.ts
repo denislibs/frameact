@@ -272,7 +272,7 @@ const HEAVY_SCOPE_KEY = Symbol('frameact.heavyAnimationScope');
 
 /**
  * Make `scope` the heavy-animation scope for every effect created under the current owner. Call it in the body
- * of a component or scope (as `HeavyAnimationScope` and the kit's `Transition` do), not inside the compute of an
+ * of a component or scope (as `HeavyAnimationScope` does), not inside the compute of an
  * effect: an effect's scope is read from its own context record at drain time, so a call made while an effect
  * is the current owner replaces that effect's record and the effect starts waiting for `scope` as well.
  */

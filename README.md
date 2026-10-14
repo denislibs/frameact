@@ -178,19 +178,9 @@ setState('messages', chatId, reconcile(chunk)); // immutable data from the serve
 <For each={state.messages[chatId]}>{(m) => <Message m={m} />}</For>
 ```
 
-## Kit
+## App-level UI
 
-`frameact/kit` is the thin UI layer a Telegram Web A–class client needs before its main screens, on the
-same class contracts as telegram-tt (bring its stylesheets): `<Transition>` (keyed slides, the previous
-slide kept alive, cleanup policies, a heavy-animation scope per subtree, `animationend` read in the event
-and applied in the mutate phase), `createShowTransition` / `<ShowTransition>` / `createMediaTransition`,
-`<InfiniteScroll>` and `createScrollAnchor` (the anchor is snapshotted in the measure phase, the list
-updates in the mutate phase, the scroll position is restored in the forced-reflow phase — one frame, also
-when released from a heavy animation). The primitives it builds on live in the core: `onMount`, `onDestroy`,
-`previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation` (`frameact`), `lazy`, `splitProps`
-(`frameact/dom`), `debounce` / `fastRaf` / `throttleWithTickEnd` (`frameact/scheduler`). The Vite plugin
-warns on destructured props, and `setExtraStyles` survives string `style=` writes, as in teact.
-Porting guide: [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
+App-level UI infrastructure (transitions, infinite scroll, scroll anchoring) lives in the app, not the framework. The core primitives it builds on stay here: `onMount`, `onDestroy`, `previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation`, `lazy`, `splitProps`, `debounce` / `fastRaf` / `throttleWithTickEnd`, `setExtraStyles`; the Vite plugin warns on destructured props. Porting guide: [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
 
 ## stricterdom (dev mode)
 
@@ -260,7 +250,7 @@ Third-party code is MIT-licensed (udomdiff: ISC) and attributed in each adapted 
 | 3 · store | signal tree store: per-leaf subscriptions, in-place path writes, `reconcile`, cause-tagged parking during animations, typed actions | ✅ done |
 | 4 · stricterdom | dev-mode phase checks with effect attribution, run profiler, `flushSync` production contract | ✅ done |
 | 5 · benchmark | teact vs Solid 2.0 vs frameact on messenger scenarios (Chromium + WebKit, CPU ×4) | ⏳ |
-| 6 · kit | client-readiness kit: `Transition`, `ShowTransition`, `InfiniteScroll` + scroll anchoring, `onMount`/`onDestroy`, `lazy`, `splitProps`, props-destructuring lint, porting guide | ✅ done |
+| 6 · kit | client-readiness primitives: `onMount`/`onDestroy`, `lazy`, `splitProps`, props-destructuring lint, porting guide | ✅ done; the UI kit itself (`Transition`, `ShowTransition`, `InfiniteScroll`, scroll anchoring) moved to the app |
 
 Design: [`docs/superpowers/specs/2026-10-11-frameact-design.md`](docs/superpowers/specs/2026-10-11-frameact-design.md)
 (in Russian) · plans: [`docs/superpowers/plans/`](docs/superpowers/plans/).
