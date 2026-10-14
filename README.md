@@ -54,7 +54,8 @@ component re-render.
 ## How it works
 
 Effects are split in two: a tracked, pure **compute** and an untracked **apply** that performs the side
-effect. *The phase is the scheduler* — you pick when the apply runs by picking the facade:
+effect (`isTracking()` tells whether a tracked compute is running: a DEV guard for reads that must not happen inside
+a computation). *The phase is the scheduler* — you pick when the apply runs by picking the facade:
 
 ```ts
 import {

@@ -5,7 +5,7 @@ import { createHeavyAnimationScope, provideHeavyAnimationScope, rootScope } from
 
 it('exports the public surface', () => {
   for (const name of [
-    'createSignal', 'createMemo', 'createRoot', 'onCleanup', 'untrack', 'getOwner', 'runWithOwner', 'onError',
+    'createSignal', 'createMemo', 'createRoot', 'onCleanup', 'untrack', 'isTracking', 'getOwner', 'runWithOwner', 'onError',
     'createSelector', 'mapArray', 'createContext', 'provideContext', 'useContext',
     'createEffect', 'createMeasureEffect', 'createMutationEffect', 'createRenderEffect', 'createIdleEffect',
     'tickEnd', 'frameMeasure', 'frameMutation', 'frameForcedReflow', 'idle', 'gateOnHeavyAnimation', 'deferUntilIdle',

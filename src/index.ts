@@ -1,5 +1,5 @@
 import {
-  createSignalNode, detachedRoot, getScope, onDispose, onError as onErrorRaw, peek,
+  createSignalNode, detachedRoot, getObserver, getScope, onDispose, onError as onErrorRaw, peek,
   readSignal, scoped, write,
 } from './core/core';
 import { toDirty, type Accessor, type SignalOptions } from './core/memo';
@@ -30,6 +30,15 @@ export const getOwner = getScope;
 export const onError = onErrorRaw;
 export function runWithOwner<T>(owner: Scope | null, fn: () => T): T | undefined {
   return scoped(fn, owner);
+}
+/**
+ * `true` while a tracked computation is running — the compute of a memo or an effect, where a signal or
+ * store read subscribes; `false` in effect applies, event handlers, actions, `untrack()` and at the top
+ * level. One field read: cheap enough for a DEV guard in a hot getter (`if (DEV && isTracking())
+ * console.warn('getGlobal() inside a computation reads a snapshot: read the store instead')`).
+ */
+export function isTracking(): boolean {
+  return getObserver() !== null;
 }
 
 export { selector as createSelector } from './core/selector';

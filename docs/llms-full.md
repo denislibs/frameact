@@ -64,7 +64,7 @@ const dispose = render(() => <Counter start={1} />, document.getElementById('app
 ## 3. Signals, memos, effects
 
 ```tsx
-import { createSignal, createMemo, createEffect, untrack, onCleanup, createRoot } from 'frameact';
+import { createSignal, createMemo, createEffect, untrack, isTracking, onCleanup, createRoot } from 'frameact';
 
 const [count, setCount] = createSignal(0);          // [Accessor<number>, Setter<number>]
 setCount(5);
@@ -73,6 +73,7 @@ const [obj, setObj] = createSignal({ a: 1 }, { equals: false }); // equals: fals
 
 const double = createMemo(() => count() * 2);       // cached, lazy-pulled, re-runs only when count changes
 const peeked = untrack(() => count());              // read without subscribing
+const tracking = isTracking();                      // false here: no compute is running
 
 // Effects have two halves: `compute` is tracked and pure, `apply` is untracked and performs the side effect.
 createEffect(
@@ -91,7 +92,7 @@ const stop = createRoot((dispose) => {
 });
 stop();
 
-void [obj, setObj, double, peeked];
+void [obj, setObj, double, peeked, tracking];
 ```
 
 - A write is visible at once (`count()` right after `setCount(1)` is 1); only **effects** wait for their phase. There is
@@ -108,6 +109,9 @@ void [obj, setObj, double, peeked];
 | `createEffect(c, a, frameForcedReflow)` | forced-reflow phase | read after a write in the same frame (FLIP) |
 | `createIdleEffect(c, a)` | when the browser is idle and nothing animates | prefetch, caches |
 
+- `isTracking()` is `true` while a tracked compute runs (a memo, an effect's `compute`: where signal and store reads
+  subscribe) and `false` in an `apply`, a handler, an action, `untrack()` and at the top level. One field read: a DEV
+  guard for code that must not be read from a computation, e.g. `if (DEV && isTracking()) console.warn('getGlobal() inside a computation')`.
 - Do **not** call `onCleanup` inside an `apply` (DEV error): return the cleanup from `apply`. In the component body
   `onCleanup(fn)` / `onDestroy(fn)` run at disposal.
 - `createSelector(source)` gives O(1) "is this row selected" bindings: `const isSel = createSelector(selectedId);` then

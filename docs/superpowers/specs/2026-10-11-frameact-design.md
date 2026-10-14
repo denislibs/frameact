@@ -379,7 +379,7 @@ drainMutation():
 - `createSignal(value, { equals? })` → `[get, set]` — сигнал не регистрируется у текущего owner'а
   (как в Solid): сигнал переживает dispose своего владельца; подписчики отцепляются при своём
   dispose. Memo и эффекты владеются как раньше. `createMemo(fn, { equals? })`;
-  `createRoot(fn)`; `onCleanup(fn)`; `untrack`; `peek`; `getOwner`; `runWithOwner`;
+  `createRoot(fn)`; `onCleanup(fn)`; `untrack`; `isTracking`; `peek`; `getOwner`; `runWithOwner`;
   `onError`.
 - `createContext(default)` / `useContext(ctx)` поверх `setContext`/`getContext`.
 - `createSelector` — из maverick как есть.
@@ -1271,3 +1271,6 @@ lint деструктуризации пропсов и `<ManualFor>`. Тест�
 и не служебное поле на объекте пользователя (видно в `Reflect.ownKeys`/spread, ломает скрытые классы, нарушает
 правило «на объекты пользователя ничего не пишется»). Цена — память эфемерон-таблицы и вставка на каждый новый
 контейнер — принята ради кадрового бюджета записей; холодная загрузка дорожает, замеры в §3.5.
+`isTracking()` (E2): `true`, пока идёт отслеживаемое вычисление (compute memo или эффекта — там, где подписываются
+чтения сигналов и стора), иначе `false` (apply, обработчики, экшены, `untrack`, верхний уровень); одно чтение
+текущего наблюдателя. Клиенту нужен для DEV-предупреждения «`getGlobal()` внутри вычисления читает снимок».
