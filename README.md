@@ -180,7 +180,7 @@ setState('messages', chatId, reconcile(chunk)); // immutable data from the serve
 
 ## App-level UI
 
-App-level UI infrastructure (transitions, infinite scroll, scroll anchoring) lives in the app, not the framework. The core primitives it builds on stay here: `onMount`, `onDestroy`, `previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation`, `lazy`, `splitProps`, `debounce` / `fastRaf` / `throttleWithTickEnd`, `setExtraStyles`; the Vite plugin warns on destructured props. Porting guide: [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
+App-level UI infrastructure (transitions, infinite scroll, scroll anchoring) lives in the app, not the framework. The core primitives it builds on stay here: `onMount`, `onDestroy`, `previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation`, `lazy`, `splitProps`, `debounce` / `fastRaf` / `throttleWithTickEnd`, `setExtraStyles`, `$SHAPE` (`frameact/store`: the O(1) shape version of a store array); the Vite plugin warns on destructured props. Porting guide: [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
 
 ## stricterdom (dev mode)
 

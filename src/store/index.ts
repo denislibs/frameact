@@ -5,6 +5,6 @@ import './gate';
 export { reconcile, type ReconcileOptions, type Mutable } from './reconcile';
 export { defineActions, afterActions, type Actions } from './actions';
 export {
-  createStore, merge, produce, unwrap, snapshot, keys, values, entries, live, ungated, $RAW, $TRACK,
+  createStore, merge, produce, unwrap, snapshot, keys, values, entries, live, ungated, $RAW, $TRACK, $SHAPE,
   type Store, type StoreArray, type SetStoreFunction, type Updater, type Merger, type Part, type At,
 } from './store';

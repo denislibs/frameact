@@ -16,6 +16,15 @@ export const $RAW: unique symbol = Symbol('frameact.store.raw') as any;
  * array of its items (wrapped). `mapArray`/`For` read it, so a list never subscribes per index.
  */
 export const $TRACK: typeof TRACK = TRACK;
+/**
+ * Read on a store ARRAY proxy: subscribes to the array's shape with ONE link and returns a number that
+ * changes on every shape change (an item added, removed or moved; an item's own fields do not count).
+ * O(1): unlike `$TRACK` it builds no items array, so it fits "did the list change?" detectors (scroll
+ * anchoring, preloading) that never read the items. `undefined` on a non-array. A version can repeat across
+ * two different arrays: count changes with a memo (`++n`), do not compare versions. The key is
+ * `Symbol.for('frameact.shape')`.
+ */
+export const $SHAPE: typeof SHAPE = SHAPE;
 
 /** The read-only view of a store value: properties and arrays readonly, functions as they are. */
 export type Store<T> = T extends (...args: any[]) => any

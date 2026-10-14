@@ -183,7 +183,7 @@ setState('messages', chatId, reconcile(chunk)); // иммутабельные д
 
 ## UI уровня приложения
 
-UI-инфраструктура уровня приложения (переходы, бесконечный скролл, якорь скролла) живёт в приложении, а не во фреймворке. Примитивы, на которых она строится, остаются в ядре: `onMount`, `onDestroy`, `previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation`, `lazy`, `splitProps`, `debounce` / `fastRaf` / `throttleWithTickEnd`, `setExtraStyles`; Vite-плагин предупреждает о деструктуризации пропсов. Гайд портирования (англ.): [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
+UI-инфраструктура уровня приложения (переходы, бесконечный скролл, якорь скролла) живёт в приложении, а не во фреймворке. Примитивы, на которых она строится, остаются в ядре: `onMount`, `onDestroy`, `previous` / `currentOrPrev` / `frozenWhile`, `watchHeavyAnimation`, `lazy`, `splitProps`, `debounce` / `fastRaf` / `throttleWithTickEnd`, `setExtraStyles`, `$SHAPE` (`frameact/store`: O(1)-версия формы store-массива); Vite-плагин предупреждает о деструктуризации пропсов. Гайд портирования (англ.): [`docs/guides/porting-from-teact.md`](docs/guides/porting-from-teact.md).
 
 ## stricterdom (dev-режим)
 

@@ -4,7 +4,7 @@
 import {
   createEffect, createMemo, createRoot, createSelector, createSignal, flushSync, onError, untrack,
 } from '../../src/index';
-import { $TRACK, createStore, merge, produce, snapshot, unwrap, type Store, type Updater } from 'frameact/store';
+import { $SHAPE, $TRACK, createStore, merge, produce, snapshot, unwrap, type Store, type Updater } from 'frameact/store';
 import { storeStats } from '../../src/store/store';
 
 /** A tickEnd effect counting its compute runs; returns the log of computed values. */
@@ -230,8 +230,8 @@ describe('arrays', () => {
   });
 });
 
-describe('shape version (Symbol.for("frameact.shape"), the O(1) change detector)', () => {
-  const SHAPE = Symbol.for('frameact.shape');
+describe('shape version ($SHAPE = Symbol.for("frameact.shape"), the O(1) change detector)', () => {
+  const SHAPE = $SHAPE;
 
   it('subscribes to the shape only, copies nothing, and changes on every shape write; undefined on objects', () => {
     const [state, setState] = createStore(initial());
