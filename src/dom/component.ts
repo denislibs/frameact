@@ -1,7 +1,7 @@
 // `children` adapted from solidjs/solid (packages/solid/src/reactive/signal.ts)
 // (MIT, © 2016-2025 Ryan Carniato) — https://github.com/solidjs/solid
 import { DEV } from '../env';
-import { compute, createScope, getObserver, getScope, untrack } from '../core/core';
+import { compute, createScope, getObserver, getScope, setInEffectApply, untrack } from '../core/core';
 import { createRenderEffect } from '../core/frame';
 import type { Scope } from '../core/types';
 import { createMemo } from '../index';
@@ -51,7 +51,22 @@ export function effect<T>(
 export function memo<T>(fn: () => T): () => T {
   if (getScope() !== null) return createMemo(fn);
   let node: (() => T) | undefined;
-  return () => (getObserver() !== null ? (node ??= untrack(() => createMemo(fn)))() : fn());
+  return () => (getObserver() !== null ? (node ??= createUnownedMemo(fn))() : fn());
+}
+
+/**
+ * An ownerless memo, deliberately: `untrack` clears the scope, and the DEV apply flag is suspended
+ * for the creation — the first tracked read can happen inside a compute that runs synchronously in
+ * an apply (`render()`/`createRoot` in an apply, a stale memo pulled there), where `assertApplyOwner`
+ * would otherwise refuse the node in DEV while prod creates it (invariant 5).
+ */
+function createUnownedMemo<T>(fn: () => T): () => T {
+  const prev = DEV ? setInEffectApply(false) : false;
+  try {
+    return untrack(() => createMemo(fn));
+  } finally {
+    if (DEV) setInEffectApply(prev);
+  }
 }
 
 /** Compiler primitive: `_el._$owner = getOwner()` on custom elements. */
