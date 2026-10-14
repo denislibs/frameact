@@ -248,26 +248,31 @@ export function firstAnimatingScope(scope: HeavyAnimationScope, blocking: boolea
  * sticker under a transition scope must pause for a modal animating on the root. `onStart` fires on
  * the chain's idle → animating transition (at once if some scope of the chain already animates),
  * `onEnd` when the last animating scope of the chain ends. One listener object sits in every chain
- * scope's set; `active` counts the chain scopes that animate (each scope reports its own 0 ↔ 1
- * transitions, after its flags are updated), so start/end fire on the chain's 0 ↔ 1 only.
- * A disable flag is an effect around it: `createEffect(() => props.disabled, (off) => off ? undefined : onHeavyAnimation(…))`.
+ * scope's set and recomputes the chain state (`firstAnimatingScope`, O(depth)) on every notification
+ * instead of trusting the argument or a counter: `Set.forEach` visits listeners added during the walk,
+ * so a subscriber created inside an `onStart`/`onEnd`/`once` callback would count the scope that is
+ * notifying twice (or not at all) and stay "animating" (or deaf) forever. Always call the returned
+ * unsubscribe (or use `watchHeavyAnimation`, which does it with the owner): the root's set holds the
+ * listener and its closures until then. teact's `isDisabled` flag is an effect around it, with the
+ * scope captured in the component body (an apply has no owner, so `currentHeavyAnimationScope()`
+ * there is the root): `const scope = currentHeavyAnimationScope();
+ * createEffect(() => props.disabled, (off) => off ? undefined : onHeavyAnimation(pause, play, scope))`.
  */
 export function onHeavyAnimation(
   onStart?: () => void,
   onEnd?: () => void,
   scope: HeavyAnimationScope = rootScope,
 ) {
-  let active = 0;
-  const listener: AnimationListener = (animating) => {
-    if (animating) {
-      if (active++ === 0) onStart?.();
-    } else if (--active === 0) onEnd?.();
+  let was = firstAnimatingScope(scope, false) !== null;
+  const listener: AnimationListener = () => {
+    const now = firstAnimatingScope(scope, false) !== null;
+    if (now === was) return;
+    was = now;
+    if (now) onStart?.();
+    else onEnd?.();
   };
-  for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) {
-    scopeListeners.get(s)!.add(listener);
-    if (s.isAnimating.peek()) active++;
-  }
-  if (active > 0) onStart?.();
+  for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) scopeListeners.get(s)!.add(listener);
+  if (was) onStart?.();
   return () => {
     for (let s: HeavyAnimationScope | null = scope; s; s = s.parent) scopeListeners.get(s)!.delete(listener);
   };

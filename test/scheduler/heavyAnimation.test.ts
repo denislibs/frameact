@@ -208,3 +208,93 @@ describe('a listener on a scope hears the chain (scope → parent → … → ro
     off();
   });
 });
+
+describe('onHeavyAnimation is reentrant: subscribing or unsubscribing inside a notification keeps the chain state exact', () => {
+  it('a listener subscribed from another listener\'s onStart (same scope) gets its onEnd', () => {
+    const scope = createHeavyAnimationScope(null);
+    const log: string[] = [];
+    let off2: (() => void) | undefined;
+    const off1 = onHeavyAnimation(() => {
+      log.push('L1 start');
+      off2 ??= onHeavyAnimation(() => log.push('L2 start'), () => log.push('L2 end'), scope);
+    }, () => log.push('L1 end'), scope);
+    scope.begin(Infinity)();
+    expect(log).toEqual(['L1 start', 'L2 start', 'L1 end', 'L2 end']);
+    log.length = 0;
+    scope.begin(Infinity)();
+    expect(log).toEqual(['L1 start', 'L2 start', 'L1 end', 'L2 end']);
+    off1();
+    off2!();
+  });
+
+  it('a child-scope listener subscribed during the parent\'s start notification gets its onEnd', () => {
+    const parent = createHeavyAnimationScope(null);
+    const child = createHeavyAnimationScope(parent);
+    const log: string[] = [];
+    let offChild: (() => void) | undefined;
+    const offParent = onHeavyAnimation(() => {
+      offChild ??= onHeavyAnimation(() => log.push('child start'), () => log.push('child end'), child);
+    }, undefined, parent);
+    parent.begin(Infinity)();
+    expect(log).toEqual(['child start', 'child end']);
+    offParent();
+    offChild!();
+  });
+
+  it('a listener subscribed from onEnd hears the next animations', () => {
+    const scope = createHeavyAnimationScope(null);
+    const log: string[] = [];
+    let off2: (() => void) | undefined;
+    const off1 = onHeavyAnimation(undefined, () => {
+      off2 ??= onHeavyAnimation(() => log.push('start'), () => log.push('end'), scope);
+    }, scope);
+    scope.begin(Infinity)();
+    expect(log).toEqual([]);
+    scope.begin(Infinity)();
+    scope.begin(Infinity)();
+    expect(log).toEqual(['start', 'end', 'start', 'end']);
+    off1();
+    off2!();
+  });
+
+  it('a listener subscribed from isAnimating.once (runs before the listeners) starts once and ends', () => {
+    const scope = createHeavyAnimationScope(null);
+    const log: string[] = [];
+    let off: (() => void) | undefined;
+    scope.isAnimating.once(() => {
+      off = onHeavyAnimation(() => log.push('start'), () => log.push('end'), scope);
+    });
+    scope.begin(Infinity)();
+    expect(log).toEqual(['start', 'end']);
+    off!();
+  });
+
+  it('a listener that unsubscribes itself from onStart or onEnd is not called again', () => {
+    const scope = createHeavyAnimationScope(null);
+    const log: string[] = [];
+    const offA = onHeavyAnimation(() => { log.push('A start'); offA(); }, () => log.push('A end'), scope);
+    const offB = onHeavyAnimation(() => log.push('B start'), () => { log.push('B end'); offB(); }, scope);
+    scope.begin(Infinity)();
+    scope.begin(Infinity)();
+    expect(log).toEqual(['A start', 'B start', 'B end']);
+  });
+
+  it('nested begin/end on several ancestors: one start, one end when the whole chain is idle', () => {
+    const grand = createHeavyAnimationScope(null);
+    const parent = createHeavyAnimationScope(grand);
+    const child = createHeavyAnimationScope(parent);
+    const log: string[] = [];
+    const off = onHeavyAnimation(() => log.push('start'), () => log.push('end'), child);
+    const endGrand = grand.begin(Infinity, true);
+    const endParent = parent.begin(Infinity);
+    const endChild = child.begin(Infinity);
+    const endParent2 = parent.begin(Infinity);
+    endParent();
+    endChild();
+    endGrand();
+    expect(log).toEqual(['start']);
+    endParent2();
+    expect(log).toEqual(['start', 'end']);
+    off();
+  });
+});
