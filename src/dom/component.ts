@@ -1,7 +1,7 @@
 // `children` adapted from solidjs/solid (packages/solid/src/reactive/signal.ts)
 // (MIT, © 2016-2025 Ryan Carniato) — https://github.com/solidjs/solid
 import { DEV } from '../env';
-import { compute, createScope, getScope } from '../core/core';
+import { compute, createScope, getObserver, getScope, untrack } from '../core/core';
 import { createRenderEffect } from '../core/frame';
 import type { Scope } from '../core/types';
 import { createMemo } from '../index';
@@ -39,15 +39,19 @@ export function effect<T>(
  * Compiler primitive: `memo(fn)` — a plain memo (`===` equality). The compiler (rc.14) always calls
  * it with one argument, so there is no `equal` parameter.
  *
- * With no owner it returns `fn` itself. The compiler puts `memo(() => !!cond)()` inside prop getters
- * (`error={key() && lang(key())}`), and a getter runs wherever the prop is read: an effect apply, an
- * event handler, a `requestMutation` task. Nothing tracks there and nothing could dispose a node, so a
- * memo would leak one subscription per read (and DEV refuses to create it: `assertApplyOwner`). The
- * plain accessor yields the same value; memoization only ever paid off under a tracking owner, where
- * the node is disposed with it (a component body, a binding's compute).
+ * With no owner (an effect apply, an event handler, a `requestMutation` task, module level) no node
+ * is created up front. Two compiler forms reach this branch: `memo(() => !!cond)()` inside a prop
+ * getter (`error={key() && lang(key())}`), read wherever the prop is read — a real memo there would
+ * leak one subscription per read (and DEV refuses to create it: `assertApplyOwner`); and the hoisted
+ * `var _c$ = memo(() => !!c())` of JSX evaluated without an owner, read later by the tracked `insert`
+ * effect, where the memo IS the truthiness cut-off (without it a branch remounts on every change of
+ * `c`). So the accessor derives `fn()` plainly while nothing tracks, and on its first tracked read
+ * graduates once into an ownerless memo (as on main: ownerless JSX is never disposed anyway).
  */
 export function memo<T>(fn: () => T): () => T {
-  return getScope() === null ? fn : createMemo(fn);
+  if (getScope() !== null) return createMemo(fn);
+  let node: (() => T) | undefined;
+  return () => (getObserver() !== null ? (node ??= untrack(() => createMemo(fn)))() : fn());
 }
 
 /** Compiler primitive: `_el._$owner = getOwner()` on custom elements. */
