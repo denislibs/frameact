@@ -107,6 +107,12 @@ gating, store parking, DOM natives, the attribute security policy).
 - `bench/store` (production bundle, one process per bench): "1 signal → 1 effect + flush" 174 → 97 ns (PR #12);
   `Object.values` over a 1000-key store proxy 816 → 470 µs and `values()` 39 µs (store fix round); 50 messages prepended
   through `produce` 727 → ~160 µs; a closed 1000-message chat retains 783 → 346 KB.
+- `bench/store/st-adopt.bench.ts` — `adopt()` stops at store-owned containers (PR #19): replace a 1000-key dictionary with
+  999 children reused 0.55 → 0.12 ms; a fresh 5k result set referencing live messages (50k tree) 6.0 → 1.7 ms; 200 new
+  messages into a 50k dictionary 74 → 9.3 ms; `st-prepend` / `st-list` / `st-reconcile` unchanged. Cost: ≈35 B per
+  container (~+8 MB for a ~356k-object state, +16 MB after one full reload), a full reload by replacement 45–55 →
+  133–165 ms, writing only-new objects +25–30 % — prefer `reconcile` for full loads and `merge` / path writes for
+  dictionaries.
 - `bench/dom` (vitest benches): `reconcile`, spread, manual-order lists — no regressions across PRs #12–#15.
 
 ## Re-running
