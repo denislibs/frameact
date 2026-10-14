@@ -18,8 +18,20 @@ export interface LazyComponent<P> {
   preload(): Promise<Component<P>>;
 }
 
-/** The props type of a component function; a component without a parameter takes no props. */
-export type ComponentProps<C> = C extends () => unknown ? Record<string, never> : C extends (props: infer P) => unknown ? P : never;
+/**
+ * The props type of a component function: a component without a parameter takes no props, an optional
+ * parameter (`(props?: P)`) gives `P`, and an untyped component gives `any` (`any` itself, or the constraint
+ * `Component<never>` that `lazy` falls back to for a `Promise<any>` loader: `any` yields no inference candidates).
+ */
+export type ComponentProps<C> = 0 extends 1 & C
+  ? any
+  : C extends (...args: infer A) => unknown
+    ? A extends []
+      ? Record<string, never>
+      : [A[0]] extends [never]
+        ? any
+        : NonNullable<A[0]>
+    : never;
 
 /**
  * `lazy(() => import('./Settings'))`: a component that loads its implementation on first render

@@ -54,3 +54,25 @@ export function explicit() {
     <LazyExplicit />,
   ];
 }
+
+// 5. an optional props parameter, a generic component (its parameter instantiates to unknown, as on main) and an
+//    untyped loader (`Promise<any>`): accepted, as before the overloads
+const Optional = (props?: { size?: number }) => <i>{props?.size}</i>;
+const Generic = <T,>(props: { item: T; render: (t: T) => string }) => <i>{props.render(props.item)}</i>;
+const more = Promise.resolve({ Optional, Generic });
+const LazyOptional = lazy(() => more.then((m) => ({ default: m.Optional })));
+const LazyGeneric = lazy(() => more.then((m) => ({ default: m.Generic })));
+const LazyUntyped = lazy(() => Promise.resolve() as Promise<any>);
+export function edges() {
+  return [
+    <LazyOptional size={1} />,
+    <LazyOptional />,
+    <LazyGeneric item={1} render={String} />,
+    <LazyUntyped />,
+    <LazyUntyped anything />,
+    // @ts-expect-error wrong prop type
+    <LazyOptional size="x" />,
+    // @ts-expect-error missing required prop
+    <LazyGeneric item={1} />,
+  ];
+}
