@@ -1322,3 +1322,10 @@ forced reflow, якобы относится к следующей фазе meas
 записи как `mutate` через слушателя фаз. Источник нарушения у клиента был вне фаз (`util/websync.ts` вставляет
 `<script>` в body). Поведение не менялось.
 
+**`lazy` не выводил тип пропсов (пробел типов).** Сигнатура `lazy<P>(loader: () => Promise<{ default: Component<P> }>)`
+не выводила `P` из формы `load().then((m) => ({ default: m.X }))` (TS объединял возврат колбэка с
+`Component<never>`), и клиент писал `lazy<OwnProps>` / `lazy<Record<string, never>>` вручную. Теперь первая
+перегрузка выводит компонент целиком — `lazy<C extends Component<never>>(…): LazyComponent<ComponentProps<C>>`
+(`ComponentProps` экспортируется из `frameact/dom`; компонент без параметра → `Record<string, never>`), вторая
+оставляет явную форму `lazy<P>`. Типовые тесты: `test/dom/lazy.types.tsx`.
+

@@ -18,13 +18,23 @@ export interface LazyComponent<P> {
   preload(): Promise<Component<P>>;
 }
 
+/** The props type of a component function; a component without a parameter takes no props. */
+export type ComponentProps<C> = C extends () => unknown ? Record<string, never> : C extends (props: infer P) => unknown ? P : never;
+
 /**
  * `lazy(() => import('./Settings'))`: a component that loads its implementation on first render
  * (or `preload()`). The module is cached per `lazy` call; a failed load is reported through the
  * owner's `onError` handlers (else the console), the placeholder stays, and the next instance
  * retries (a loader that throws synchronously counts as a failed load). The promise `preload()`
  * returns rejects on failure: handle it where you call it. Heavy first renders during an animation: wrap the instance in `deferUntilIdle`.
+ *
+ * The props type is inferred from the loaded component (`{ default: C }`), also through
+ * `load().then((m) => ({ default: m.X }))`: inferring a bare `P` from `Component<P>` in that position
+ * failed (TS unified the callback's return with `Component<never>`). The second overload keeps the
+ * explicit form `lazy<Props>(…)` working.
  */
+export function lazy<C extends Component<never>>(loader: () => Promise<{ default: C }>, options?: LazyOptions): LazyComponent<ComponentProps<C>>;
+export function lazy<P>(loader: () => Promise<{ default: Component<P> }>, options?: LazyOptions): LazyComponent<P>;
 export function lazy<P>(loader: () => Promise<{ default: Component<P> }>, options?: LazyOptions): LazyComponent<P> {
   let loaded: Component<P> | undefined;
   let pending: Promise<Component<P>> | undefined;

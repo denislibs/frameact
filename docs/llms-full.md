@@ -257,6 +257,8 @@ void [List, Rows, ChatList, Box, merged, render];
   messages or bot payloads. Invalid names render nothing; `script` is created inert.
 - `Portal`: events bubble to the logical position; the content is disposed with the Portal.
 - `lazy(() => import('./Settings'), { placeholder })` (from `frameact/dom`) loads a component on first render; `X.preload()` ahead of time.
+  The props type comes from the loaded component, also for a named export re-wrapped as the default
+  (`lazy(() => load().then((m) => ({ default: m.Settings })))`); `lazy<Props>(…)` states it explicitly; `ComponentProps<C>` is the helper.
 - A component is `(props) => JSX`. Use `createComponent` only in hand-written (non-JSX) code.
 
 ## 7. Elements, attributes, events
