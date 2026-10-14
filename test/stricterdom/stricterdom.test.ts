@@ -1,5 +1,5 @@
 import { getRunningEffect } from '../../src/core/effects';
-import { createEffect, createMutationEffect, createRoot, createSignal, flushSync, requestMeasure, requestMutation } from '../../src/index';
+import { createEffect, createMutationEffect, createRoot, createSignal, flushSync, getPhase, requestForcedReflow, requestMeasure, requestMutation } from '../../src/index';
 import { flushSync as flushFrame } from '../../src/scheduler/fasterdom';
 import { createComponent } from '../../src/dom/component';
 import { render } from '../../src/dom/render';
@@ -466,4 +466,36 @@ it('a failing enableStrict (no MutationObserver, frozen prototypes) rolls back w
   expect(Element.prototype.getBoundingClientRect).toBe(NATIVE_GBCR);
   enableStrict(); // and a later enable works
   expect(isStrictEnabled()).toBe(true);
+});
+
+describe('requestForcedReflow attribution (client report: a forced-reflow mutation blamed on the measure phase)', () => {
+  it('the mutation a forced-reflow task returns runs in the mutate phase: no violation, in the first frame and the next', async () => {
+    const probe = document.createElement('div');
+    const log: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      requestMutation(() => { document.body.appendChild(probe); });
+      requestForcedReflow(() => {
+        log.push(`measure:${getPhase()}`);
+        void probe.offsetWidth; // the forced reflow itself (a layout read: legal here)
+        return () => {
+          log.push(`mutate:${getPhase()}`);
+          probe.remove();
+        };
+      });
+      await frame();
+    }
+    expect(log).toEqual(['measure:measure', 'mutate:mutate', 'measure:measure', 'mutate:mutate']);
+    expect(violations.map(summary)).toEqual([]);
+  });
+
+  it('a write in the forced-reflow measure half IS a violation, reported with phase measure', async () => {
+    const probe = document.createElement('div');
+    requestMutation(() => { document.body.appendChild(probe); });
+    requestForcedReflow(() => {
+      probe.className = 'bad';
+      return () => { probe.className = 'good'; };
+    });
+    await frame();
+    expect(violations.map(summary)).toEqual(['mutation:class:measure:-']);
+  });
 });
