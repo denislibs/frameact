@@ -36,7 +36,7 @@ rules below are what it checks, and every violation names the offending effect.
 | `setGlobal(g, { forceOnHeavyAnimation })` | `ungated(() => setState(…))` | — |
 | `getActions().x()`, `addActionHandler` | `defineActions({ x })`, `afterActions(cb)` | FIFO cascade; `afterActions` runs after it. |
 | `key={id}` to remount one element | `<Show when={id()} keyed>{(id) => …}</Show>` | — |
-| `teactFastList` + `teactOrderKey` | `<For order="manual" orderKey={…}>` | Zero DOM moves on reorder. |
+| `teactFastList` + `teactOrderKey` | `<ManualFor orderKey={…}>` | Zero DOM moves on reorder. |
 | `teactExperimentControlled` | `use:value` / `use:checked` | Caret, IME, synchronous rollback before paint. |
 | `className={buildClassName(…)}` | `class={[a, { b: cond }]}` | Token diff: imperative classes survive. `className=` on an element is a DEV error. |
 | `style="…"` + `setExtraStyles` | the same | Extra styles are re-applied after every string `style=` write (plan 6). |
@@ -75,7 +75,7 @@ rules below are what it checks, and every violation names the offending effect.
 
 ```tsx
 import { createMemo, onDestroy, onMount, requestMutation } from 'frameact';
-import { For, Show } from 'frameact/dom';
+import { For, ManualFor, Show } from 'frameact/dom';
 import { state, actions } from '../global';
 
 export function ChatList(props: { folderId: number; onSelect?: (id: string) => void }) {
@@ -89,9 +89,9 @@ export function ChatList(props: { folderId: number; onSelect?: (id: string) => v
   return (
     // a handler may read layout: the position is saved here, not in a cleanup (which may run in the mutate phase)
     <div ref={list} class="ChatList" onScroll={() => actions.saveChatListScroll(list.scrollTop)}>
-      <For each={chats()} order="manual" orderKey={(c) => c.lastMessageDate}>
+      <ManualFor each={chats()} orderKey={(c) => c.lastMessageDate}>
         {(chat) => <ChatRow chat={chat} onClick={() => props.onSelect?.(chat.id)} />}
-      </For>
+      </ManualFor>
       <Show when={chats().length === 0}><Empty /></Show>
     </div>
   );

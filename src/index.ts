@@ -40,8 +40,7 @@ export {
   createEffect, tickEnd, type Schedule, type EffectNode, type EffectOptions,
 } from './core/effects';
 export {
-  createMeasureEffect, createMutationEffect, createRenderEffect, createIdleEffect,
-  frameMeasure, frameMutation, frameForcedReflow, idle, gateOnHeavyAnimation, deferUntilIdle,
+  createMeasureEffect, createMutationEffect, createRenderEffect, frameMeasure, frameMutation, frameForcedReflow,
 } from './core/frame';
 
 export {
@@ -51,6 +50,7 @@ export { onTickEnd, onIdle, throttleWith } from './scheduler/schedulers';
 export {
   beginHeavyAnimation, getIsHeavyAnimating, getIsBlockingAnimating, createHeavyAnimationScope, rootScope,
   provideHeavyAnimationScope, currentHeavyAnimationScope, onHeavyAnimation, onFullyIdle,
+  createIdleEffect, idle, gateOnHeavyAnimation, deferUntilIdle,
   type HeavyAnimationScope, type OnceSignal,
 } from './scheduler/heavyAnimation';
 export { onMount, onDestroy, watchHeavyAnimation } from './core/lifecycle';

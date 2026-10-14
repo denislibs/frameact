@@ -8,7 +8,7 @@ import { DEV } from '../env';
 import { createRenderEffect } from '../core/frame';
 import type { EffectOptions } from '../core/effects';
 import { getNatives } from './natives';
-import { manualOrderOf, ownedBy, reconcileArrays, reconcileManual, tagManualOrder, tagSlot } from './reconcile';
+import { applyManualOrder, manualOrderOf, ownedBy, reconcileArrays, tagManualOrder, tagSlot } from './reconcile';
 
 // No `Document`: lib.dom types its `textContent` as a read-only `null`, and mounting into a Document is meaningless anyway.
 export type MountableElement = Element | ShadowRoot | DocumentFragment;
@@ -47,7 +47,7 @@ export function flatten(children: any, skipNonRendered: boolean, doNotUnwrap: bo
   }
   if (Array.isArray(children)) {
     const results: any[] = [];
-    // The copy keeps the manual-order tag (`For order="manual"`); a For nested inside a larger array
+    // The copy keeps the manual-order tag (`<ManualFor>`); a ManualFor nested inside a larger array
     // is flattened into it and loses the tag: it then falls back to the ordinary reconcile.
     const manual = manualOrderOf(children);
     if (manual) tagManualOrder(results, manual);
@@ -81,7 +81,7 @@ function flattenArray(children: any[], results: any[], skipNonRendered: boolean,
     if (Array.isArray(child)) {
       if (DEV && !warnedNestedManual && manualOrderOf(child)) {
         warnedNestedManual = true;
-        console.warn('[frameact] <For order="manual"> nested in a larger array loses its manual order (it needs its own slot); the ordinary diff is used');
+        console.warn('[frameact] <ManualFor> nested in a larger array loses its manual order (it needs its own slot); the ordinary diff is used');
       }
       needsUnwrap = flattenArray(child, results, skipNonRendered, doNotUnwrap) || needsUnwrap;
     } else if (skipNonRendered && (child == null || child === true || child === false || child === '')) {
@@ -223,7 +223,7 @@ export function insertExpression(parent: MountableElement, value: any, current: 
       if (current.length === 0) appendNodes(parent, value, marker ?? null);
       else {
         const manual = manualOrderOf(value);
-        if (manual) reconcileManual(parent, current, value, marker, manual);
+        if (manual) applyManualOrder(parent, current, value, marker, manual);
         else reconcileArrays(parent, current, value, marker);
       }
     } else {

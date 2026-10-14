@@ -71,7 +71,11 @@ export const F_INIT = 1,
   /** F_LIVE_PIN: the effect is never parked by the store gate, for its lifetime (controlled-input bindings). */
   F_LIVE_PIN = 1024,
   /** F_STORE_GATED: the effect's schedule is a frame queue or a gateOnHeavyAnimation wrapper — its store-caused runs wait for heavy animations (set once, in the constructor). */
-  F_STORE_GATED = 2048;
+  F_STORE_GATED = 2048,
+  /** F_WRITES_DOM: the effect's apply writes the live DOM — its apply-cleanup on dispose is deferred to the mutate phase (set once, in the constructor; was a boolean field). */
+  F_WRITES_DOM = 4096,
+  /** F_NODE_RUN: the effect's schedule is node-aware (the built-in queues): it is booked with the node itself and no per-effect `run` closure is ever created (effects.ts). */
+  F_NODE_RUN = 8192;
 
 /**
  * True while the running notify walk comes from a store leaf write (writeStoreNode), or from the
@@ -614,21 +618,25 @@ function notifySubsAs(node: Computation, asStore: boolean) {
  * one kind share one hidden class (the vendored version left some fields on the prototype and
  * added others later — signals, `dirty` signals, computeds and effects all ended up with
  * different shapes, making read/write/notify polymorphic). Scope fields come first.
+ *
+ * Memory pass (frameact): the assignments are written out as `this.x = …` statements INSIDE the
+ * constructors, not in a helper, and a constructor that extends another node kind (Effect, Selector)
+ * has that constructor as its own prototype. V8 sizes a constructor's in-object area from the
+ * syntactic `this.x =` count summed over the constructor's own prototype chain; fields assigned by a
+ * helper are not counted, and the overflow lands in an out-of-object PropertyArray (a second
+ * allocation per node, slower field access). Measured in Chrome: an effect node was 108 B in-object
+ * + a 56 B PropertyArray; now 140 B in one object.
  */
-function initScope(node: Scope) {
-  node[SCOPE] = null;
-  node._state = STATE_CLEAN;
-  node._lastChild = null;
-  node._prevSibling = null;
-  node._nextSibling = null;
-  node._context = defaultContext;
-  node._handlers = null;
-  node._disposal = null;
-  node._compute = null;
-}
-
 const ScopeNode = function Scope(this: Scope) {
-  initScope(this);
+  this[SCOPE] = null;
+  this._state = STATE_CLEAN;
+  this._lastChild = null;
+  this._prevSibling = null;
+  this._nextSibling = null;
+  this._context = defaultContext;
+  this._handlers = null;
+  this._disposal = null;
+  this._compute = null;
   this._mapMemo = undefined; // one hidden class for every ScopeNode (map scopes included)
   if (currentScope) currentScope.append(this);
 };
@@ -660,42 +668,58 @@ export function createScope(): Scope {
 }
 
 /**
- * @internal Initialise `node` with the complete computation field set (scope fields first), as the
- * Computation constructor does. Effects and selector nodes have their own constructors (sharing
- * the Computation prototype chain) and call this first. `owned`: append to the current scope.
+ * The computation constructor: the complete field set (scope fields first), as before through
+ * `initComputationNode`. `owned`: append to the current scope. Effects and selector nodes have their
+ * own constructors (sharing the Computation prototype chain): they call this one with `.call(this, …)`
+ * and set it as their constructor's prototype (`Object.setPrototypeOf(Effect, ComputeNode)`), so V8
+ * counts these assignments towards their in-object size too (see above).
  */
-export function initComputationNode(
+const ComputeNode = function Computation(
+  this: Computation,
+  initialValue: any,
+  compute: any,
+  options: ComputedSignalOptions<any, any> | undefined,
+  owned = true,
+) {
+  if (DEV && compute) assertApplyOwner();
+  this[SCOPE] = null;
+  this._state = compute ? STATE_DIRTY : STATE_CLEAN;
+  this._lastChild = null;
+  this._prevSibling = null;
+  this._nextSibling = null;
+  this._context = defaultContext;
+  this._handlers = null;
+  this._disposal = null;
+  this._compute = compute || null;
+  if (owned && currentScope) currentScope.append(this);
+  this._flags = 0;
+  this._effect = false;
+  this._writtenAt = 0;
+  this._deps = null;
+  this._depsTail = null;
+  this._subs = null;
+  this._subsTail = null;
+  this._value = initialValue;
+  this._changed = (options && options.dirty) || isNotEqual;
+  if (DEV) this.id = options?.id ?? (compute ? 'computed' : 'signal');
+};
+
+/**
+ * @internal Initialise `node` with the complete computation field set, as the Computation
+ * constructor does (it IS the constructor, called as a function). Effects and selector nodes call it
+ * first; their constructors must also have `computationConstructor` as prototype (in-object sizing).
+ */
+export const initComputationNode: (
+  this: void,
   node: Computation,
   initialValue: any,
   compute: any,
   options: ComputedSignalOptions<any, any> | undefined,
   owned: boolean,
-) {
-  initScope(node);
-  if (owned && currentScope) currentScope.append(node);
-  node._state = compute ? STATE_DIRTY : STATE_CLEAN;
-  node._flags = 0;
-  node._effect = false;
-  node._writtenAt = 0;
-  node._deps = null;
-  node._depsTail = null;
-  node._subs = null;
-  node._subsTail = null;
-  node._value = initialValue;
-  node._compute = compute || null;
-  node._changed = (options && options.dirty) || isNotEqual;
-  if (DEV) node.id = options?.id ?? (compute ? 'computed' : 'signal');
-}
+) => void = (node, initialValue, compute, options, owned) => (ComputeNode as any).call(node, initialValue, compute, options, owned);
 
-const ComputeNode = function Computation(
-  this: Computation,
-  initialValue: any,
-  compute: any,
-  options?: ComputedSignalOptions<any, any>,
-) {
-  if (DEV && compute) assertApplyOwner();
-  initComputationNode(this, initialValue, compute, options, true);
-};
+/** @internal the constructor function node kinds extend (prototype of their constructor, not of their instances) */
+export const computationConstructor: Function = ComputeNode;
 
 /** @internal the prototype every computation kind (signals, computeds, effects, selector nodes) shares */
 export const computationPrototype: Computation = ComputeNode.prototype;
@@ -944,7 +968,7 @@ export function update(node: Computation) {
   // F_STORE and F_PARKED are cleared here; F_LIVE too — the compute sets it again if it reads live.
   const storeCause = (node._flags & F_STORE) !== 0;
   // (F_ERRORED stays until a compute succeeds: a re-entrant read meanwhile still gets the error)
-  node._flags = (node._flags & (F_INIT | F_ERRORED | F_LIVE_PIN | F_STORE_GATED)) | F_COMPUTING;
+  node._flags = (node._flags & (F_INIT | F_ERRORED | F_LIVE_PIN | F_STORE_GATED | F_WRITES_DOM | F_NODE_RUN)) | F_COMPUTING;
   let computeStarted = false;
   const prevScope = currentScope,
     prevObserver = currentObserver,
@@ -1024,7 +1048,7 @@ export function update(node: Computation) {
     }
   } finally {
     const missed = node._flags & F_MISSED;
-    node._flags &= F_INIT | F_THREW | F_ERRORED | F_LIVE | F_LIVE_PIN | F_STORE_GATED;
+    node._flags &= F_INIT | F_THREW | F_ERRORED | F_LIVE | F_LIVE_PIN | F_STORE_GATED | F_WRITES_DOM | F_NODE_RUN;
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;
       if (missed) {

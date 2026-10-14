@@ -1,1 +1,1 @@
-{"framework":"frameact-v0.0.0-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":1.0921335220336914,"max":1.0921335220336914,"median":1.0921335220336914,"mean":1.0921335220336914,"stddev":null,"values":[1.0921335220336914]}}}
+{"framework":"frameact-v0.0.0-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":0.9860391616821289,"max":0.9860391616821289,"median":0.9860391616821289,"mean":0.9860391616821289,"stddev":null,"values":[0.9860391616821289]}}}

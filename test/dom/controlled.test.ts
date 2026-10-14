@@ -5,6 +5,7 @@ import { forceControlledValue } from '../../src/dom';
 import { isForcingControlledValue, registerControlledDirectives } from '../../src/dom/controlled';
 import { delegateEvents, EVENT_KEY } from '../../src/dom/events';
 import { container, useDomHarness } from '../helpers/dom';
+registerControlledDirectives(); // the runtime no longer registers use:value / use:checked at load (the Vite plugin injects this call)
 
 const { frame, pending } = useDomHarness();
 

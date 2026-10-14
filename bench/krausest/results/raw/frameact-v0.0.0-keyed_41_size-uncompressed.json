@@ -1,1 +1,1 @@
-{"framework":"frameact-v0.0.0-keyed","keyed":true,"benchmark":"41_size-uncompressed","type":"size","values":{"DEFAULT":{"min":45.2,"max":45.2,"median":45.2,"mean":45.2,"stddev":null,"values":[45.2]}}}
+{"framework":"frameact-v0.0.0-keyed","keyed":true,"benchmark":"41_size-uncompressed","type":"size","values":{"DEFAULT":{"min":37.6,"max":37.6,"median":37.6,"mean":37.6,"stddev":null,"values":[37.6]}}}

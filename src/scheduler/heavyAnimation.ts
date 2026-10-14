@@ -1,8 +1,13 @@
 // Adapted from teact (MIT, © 2022 Alexander Zinchuk) — https://github.com/Ajaxy/teact src/teact/heavyAnimation.ts
 // Generalised to scopes: the global API is the root scope.
 import { getContext, getScope, peek, setContext } from '../core/core';
-import { signal } from '../core/signals';
-import type { Scope } from '../core/types';
+import {
+  createEffect, isDomWritingSchedule, isDrainGuardedSchedule, isNodeSchedule, markDrainGuarded, markNodeSchedule, markStoreGated, markWritesDom,
+  type EffectNode, type EffectOptions, type Schedule,
+} from '../core/effects';
+import { drainHooks, releaseInFrame, requeueParked, type FrameEntry } from '../core/frame';
+import { computed, signal } from '../core/signals';
+import type { Computation, Scope } from '../core/types';
 import { onIdle } from './schedulers';
 
 const AUTO_END_TIMEOUT = 1000;
@@ -26,9 +31,9 @@ export interface HeavyAnimationScope {
   readonly isBlockingAnimating: OnceSignal;
   begin(duration?: number, isBlocking?: boolean): () => void;
   /** @internal effects.ts parks gated runs here */
-  _parked: unknown[];
+  parked: unknown[];
   /** @internal */
-  _releaseArmed: boolean;
+  releaseArmed: boolean;
   /** @internal store-gate cache: the drain epoch of `gateResult` (0: none) */
   gateEpoch: number;
   /** @internal store-gate cache: the first animating scope of this scope's chain as sampled in `gateEpoch` */
@@ -171,11 +176,12 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
     parent,
     isAnimating,
     isBlockingAnimating,
-    _parked: [],
-    _releaseArmed: false,
+    parked: [],
+    releaseArmed: false,
     gateEpoch: 0,
     gateResult: null,
     begin(duration = AUTO_END_TIMEOUT, isBlocking = false) {
+      installGating(); // the frame drains gate only once some scope can animate (idempotent)
       counter++;
       if (isBlocking) counterBlocking++;
       const animatingChanged = counter === 1 ? setAnimating(true) : null;
@@ -214,7 +220,8 @@ function createScopeInternal(parent: HeavyAnimationScope | null): HeavyAnimation
   return scope;
 }
 
-export const rootScope: HeavyAnimationScope = createScopeInternal(null);
+// Pure at module level: an app that never imports a heavy-animation API (nor the store) does not bundle this module.
+export const rootScope: HeavyAnimationScope = /*#__PURE__*/ createScopeInternal(null);
 
 /** `parent` defaults to the scope provided by the current owner (root if none): a nested scope waits for the outer one. */
 export function createHeavyAnimationScope(parent: HeavyAnimationScope | null = currentHeavyAnimationScope()) {
@@ -224,8 +231,8 @@ export function createHeavyAnimationScope(parent: HeavyAnimationScope | null = c
 export function beginHeavyAnimation(duration?: number, isBlocking?: boolean) {
   return rootScope.begin(duration, isBlocking);
 }
-export const getIsHeavyAnimating = rootScope.isAnimating;
-export const getIsBlockingAnimating = rootScope.isBlockingAnimating;
+export const getIsHeavyAnimating: OnceSignal = /*#__PURE__*/ (() => rootScope.isAnimating)();
+export const getIsBlockingAnimating: OnceSignal = /*#__PURE__*/ (() => rootScope.isBlockingAnimating)();
 
 /** First scope in the chain (scope → parent → … → root) that is animating (blocking or any). */
 export function firstAnimatingScope(scope: HeavyAnimationScope, blocking: boolean) {
@@ -263,11 +270,168 @@ export function onFullyIdle(cb: () => void, scope: HeavyAnimationScope = rootSco
 
 const HEAVY_SCOPE_KEY = Symbol('frameact.heavyAnimationScope');
 
-/** Make `scope` the heavy-animation scope for every effect created under the current owner. */
+/**
+ * Make `scope` the heavy-animation scope for every effect created under the current owner. Call it in the body
+ * of a component or scope (as `HeavyAnimationScope` and the kit's `Transition` do), not inside the compute of an
+ * effect: an effect's scope is read from its own context record at drain time, so a call made while an effect
+ * is the current owner replaces that effect's record and the effect starts waiting for `scope` as well.
+ */
 export function provideHeavyAnimationScope(scope: HeavyAnimationScope) {
   setContext(HEAVY_SCOPE_KEY, scope);
 }
 
 export function currentHeavyAnimationScope(owner: Scope | null = getScope()): HeavyAnimationScope {
   return getContext<HeavyAnimationScope>(HEAVY_SCOPE_KEY, owner) ?? rootScope;
+}
+
+/**
+ * @internal The heavy-animation scope of an effect: the one provided by its owner when it was created.
+ * Read from the node's own context record (set when it was appended to its owner and never replaced:
+ * `provideHeavyAnimationScope` gives the owner a NEW record), so this is the scope the effect saw at
+ * creation — no per-effect field. A disposed node reads the default record: the root scope, so a
+ * `gateOnHeavyAnimation` re-entry (from `once`) for an already disposed effect gates on the root scope
+ * instead of its own; harmless, since running a disposed effect is a no-op, but the closure lives until
+ * the root animation ends. Caveat above: `provideHeavyAnimationScope` called inside the effect's own compute.
+ */
+export function effectScopeOf(node: Computation): HeavyAnimationScope {
+  return getContext<HeavyAnimationScope>(HEAVY_SCOPE_KEY, node) ?? rootScope;
+}
+
+// ---- the frame-drain gate (core/frame.ts drainHooks) ----------------------------------------
+// Both hooks run inside the drain's per-entry try/catch, where a throw drops the entry and leaves
+// its effect DIRTY forever. They must therefore never throw: failures degrade to "not gated".
+
+function blockingScopeFor(
+  node: EffectNode,
+  cache: Map<HeavyAnimationScope, HeavyAnimationScope | null>,
+): HeavyAnimationScope | null {
+  // Sampled once per drain per scope: an applier that begins an animation mid-drain
+  // does not split the frame it is part of.
+  try {
+    const path: HeavyAnimationScope[] = [];
+    let result: HeavyAnimationScope | null = null;
+    for (let s: HeavyAnimationScope | null | undefined = effectScopeOf(node); s; s = s.parent) {
+      const cached = cache.get(s);
+      if (cached !== undefined) {
+        result = cached;
+        break;
+      }
+      path.push(s);
+      if (s.isBlockingAnimating.peek()) {
+        result = s;
+        break;
+      }
+    }
+    for (const p of path) cache.set(p, result);
+    return result;
+  } catch (error) {
+    console.error('[frameact] heavy-animation gate check failed; running ungated', error);
+    return null;
+  }
+}
+
+function releaseParked(scope: HeavyAnimationScope) {
+  scope.releaseArmed = false;
+  const parked = scope.parked as FrameEntry[];
+  scope.parked = [];
+  // Release inside a measure task so that both measure and mutate work land in the SAME next frame,
+  // in phase order (releaseInFrame): measure entries are drained right there, the others go through
+  // their normal queues, which run later in this frame.
+  releaseInFrame(() => {
+    for (const e of parked) requeueParked(e);
+  });
+}
+
+function park(scope: HeavyAnimationScope, entry: FrameEntry) {
+  try {
+    if (!Array.isArray(scope.parked)) scope.parked = [];
+    if (!scope.isBlockingAnimating.peek()) {
+      // The scope ended after this drain sampled it (an earlier applier or a deferred cleanup called
+      // end()): its `once` has already fired, so arming a new one would strand the entry until the
+      // scope animates again. Release now; the work still lands in the next frame.
+      scope.parked.push(entry);
+      releaseParked(scope);
+      return;
+    }
+    if (!scope.releaseArmed) {
+      scope.releaseArmed = true;
+      try {
+        scope.isBlockingAnimating.once(() => {
+          try {
+            releaseParked(scope);
+          } catch (error) {
+            console.error('[frameact] releasing parked frame effects failed', error);
+          }
+        });
+      } catch (error) {
+        scope.releaseArmed = false;
+        throw error;
+      }
+    }
+    scope.parked.push(entry);
+  } catch (error) {
+    // Could not park (entry is not in `parked` unless the release itself failed): run it now rather
+    // than leave its effect dirty forever.
+    console.error('[frameact] parking a frame effect failed; running it ungated', error);
+    entry.run();
+  }
+}
+
+let gatingInstalled = false;
+
+/**
+ * @internal Install the gate into the frame drains. Called by the first `begin()` of any scope — before
+ * that no scope can block, so the drains' defaults (never gating) are exact — and by the store gate when
+ * it loads (its sampling must bracket every drain from then on). Idempotent.
+ */
+export function installGating() {
+  if (gatingInstalled) return;
+  gatingInstalled = true;
+  drainHooks.isGating = isAnyScopeBlocking;
+  drainHooks.openSample = openGateSample;
+  drainHooks.closeSample = closeGateSample;
+  drainHooks.blockingScopeFor = blockingScopeFor;
+  drainHooks.park = park;
+}
+
+// ---- schedulers that wait for animations (were in core/frame.ts) ----------------------------
+
+/** Runs when the browser is idle and nothing in the node's scope chain is animating. */
+export const idle: Schedule = (run, node) => onFullyIdle(run, effectScopeOf(node));
+
+export function createIdleEffect<T>(
+  compute: (prev: T | undefined) => T,
+  apply: (value: T, prev: T | undefined) => void | (() => void),
+  options?: EffectOptions,
+) {
+  createEffect(compute, apply, idle, { name: 'idle', ...options, immediateApply: false });
+}
+
+/**
+ * Wrap a scheduler so the run also waits for heavy animations in the node's scope chain
+ * (non-blocking by default; frame queues already wait for blocking ones). The scope is read from the node's
+ * context at each attempt (`effectScopeOf`): a node disposed while it waits re-checks against the root scope.
+ */
+export function gateOnHeavyAnimation(schedule: Schedule, options: { blocking?: boolean } = {}): Schedule {
+  const blocking = options.blocking ?? false;
+  const gated: Schedule = (run, node) => {
+    const animating = firstAnimatingScope(effectScopeOf(node), blocking);
+    if (animating === null) schedule(run, node);
+    else (blocking ? animating.isBlockingAnimating : animating.isAnimating).once(() => gated(run, node));
+  };
+  if (isDomWritingSchedule(schedule)) markWritesDom(gated);
+  if (isDrainGuardedSchedule(schedule)) markDrainGuarded(gated);
+  if (isNodeSchedule(schedule)) markNodeSchedule(gated); // it hands `run` through untouched
+  markStoreGated(gated); // an explicit opt-in into waiting for animations: store-caused runs park here too
+  return gated;
+}
+
+/**
+ * Defer creating a heavy subtree until `scope` is idle: returns `placeholder` until then,
+ * then a memoized `fn()`. Scopes gate *updates*, not creation — this is the creation gate.
+ */
+export function deferUntilIdle<T>(scope: HeavyAnimationScope, fn: () => T, placeholder: T): () => T {
+  const ready = signal(false);
+  createEffect(() => undefined, () => { ready.set(true); }, (run) => onFullyIdle(run, scope), { name: 'deferUntilIdle' });
+  return computed(() => (ready() ? fn() : placeholder));
 }

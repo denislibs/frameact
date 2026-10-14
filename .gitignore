@@ -8,3 +8,4 @@ bench/store/.out/
 test/chrome/dist/
 bench/krausest/.upstream/
 bench/krausest/.stage/
+bench/krausest/.snaps

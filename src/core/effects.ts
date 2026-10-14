@@ -2,14 +2,17 @@ import { DEV } from '../env';
 import {
   assertApplyOwner,
   callUnowned,
+  computationConstructor,
   computationPrototype,
   F_INIT,
   F_LIVE,
   F_LIVE_PIN,
+  F_NODE_RUN,
   F_PARKED,
   F_STORE,
   F_STORE_GATED,
   F_THREW,
+  F_WRITES_DOM,
   handleError,
   initComputationNode,
   isFunction,
@@ -27,8 +30,7 @@ import {
 import { reportDevHookError } from './debug';
 import { SCOPE } from './symbols';
 import type { Computation } from './types';
-import { getTickDrainEpoch, isTickDraining, onTickEnd } from '../scheduler/schedulers';
-import { currentHeavyAnimationScope, type HeavyAnimationScope } from '../scheduler/heavyAnimation';
+import { getTickDrainEpoch, isTickDraining, onTickEnd, onTickEndNode, setTickNodeRunner } from '../scheduler/schedulers';
 
 export const NOT_APPLIED: unique symbol = Symbol('frameact.notApplied');
 
@@ -40,13 +42,11 @@ export interface EffectNode<T = any> extends Computation<T> {
   _applied: T | typeof NOT_APPLIED;
   _applyCleanup: (() => void) | null;
   _schedule: Schedule;
-  _scope: HeavyAnimationScope;
   _bailed: EffectNode[] | null;
-  _run: () => void;
+  /** @internal the `run` handed to a custom Schedule, created on the first booking (`runOf`); never for node-aware schedules (F_NODE_RUN) */
+  _run: (() => void) | null;
   _name: string | undefined;
   _selfDirty: number;
-  /** @internal its apply writes the live DOM: apply-cleanups on dispose are deferred to the mutate phase */
-  _writesDom: boolean;
   /** @internal tickEnd loop guard: the flushTickEnd drain epoch `_tickRuns` counts runs in */
   _tickEpoch: number;
   /** @internal tickEnd loop guard: runs scheduled into the drain `_tickEpoch` */
@@ -134,6 +134,45 @@ export function isDomWritingSchedule(schedule: Schedule) {
   return domWritingSchedules.has(schedule);
 }
 
+/**
+ * Node-aware schedules (the built-in queues: tickEnd, the frame queues, gateOnHeavyAnimation wrappers of
+ * them) are booked with `RUN_NODE` as `run` and queue the node itself; a custom Schedule gets a real
+ * per-effect closure, created on its first booking and kept (`runOf`). One closure and its context less
+ * per effect on the default paths.
+ */
+const nodeSchedules = new WeakSet<Schedule>();
+
+/** @internal frame.ts / tickEnd: mark a schedule that runs the node it is given, never `run`. */
+export function markNodeSchedule(schedule: Schedule) {
+  nodeSchedules.add(schedule);
+}
+
+/** @internal */
+export function isNodeSchedule(schedule: Schedule) {
+  return nodeSchedules.has(schedule);
+}
+
+/**
+ * @internal the `run` a node-aware schedule receives: a marker, never called by them. Calling it is a bug and
+ * only DEV says so (a prod no-op would leave the effect dirty). It cannot happen today: `bookRun` hands it
+ * only to schedules marked with `markNodeSchedule`, which compare it by identity and queue the node; every
+ * custom schedule, and every `gateOnHeavyAnimation` wrapper's inner call, gets the real `runOf(node)`.
+ * test/effects/frame.test.ts pins that for each built-in schedule.
+ */
+export const RUN_NODE: () => void = () => {
+  if (DEV) throw new Error('[frameact] internal: a node-aware schedule must run the node it was given, not `run`');
+};
+
+/** @internal the effect's `run` for schedules that need a plain function (parking, custom schedules); created once. */
+export function runOf(node: EffectNode): () => void {
+  return (node._run ??= () => runEffect(node));
+}
+
+/** @internal frame.ts drains run queued nodes through this. */
+export function runEffectNode(node: EffectNode) {
+  runEffect(node);
+}
+
 const drainGuardedSchedules = new WeakSet<Schedule>();
 
 /**
@@ -214,13 +253,18 @@ export const tickEnd: Schedule = (run, node) => {
       // A macrotask hop breaks the loop: the self-dirty guard (used when tickEnd is wrapped by a
       // custom schedule) restarts its count too, instead of tripping on the very next self-write.
       node._selfDirty = 0;
-      run();
+      if (run === RUN_NODE) runEffect(node);
+      else run();
     }, 0);
     return;
   }
-  onTickEnd(run);
+  // Booked by bookRun (node-aware): the node goes into the queue; through a custom wrapper: its `run`.
+  if (run === RUN_NODE) onTickEndNode(node);
+  else onTickEnd(run);
 };
 markDrainGuarded(tickEnd);
+markNodeSchedule(tickEnd);
+setTickNodeRunner(runEffectNode as (node: object) => void);
 
 export function createEffect<T>(
   compute: (prev: T | undefined) => T,
@@ -260,13 +304,10 @@ function Effect(
   this._applied = NOT_APPLIED;
   this._applyCleanup = null;
   this._schedule = schedule;
-  this._scope = currentHeavyAnimationScope(this); // after the append: reads the owner's context
   this._bailed = null;
-  const node = this;
-  this._run = () => runEffect(node);
+  this._run = null;
   this._name = options?.name;
   this._selfDirty = 0;
-  this._writesDom = options?.writesDom ?? domWritingSchedules.has(schedule);
   this._tickEpoch = 0;
   this._tickRuns = 0;
   this._drainEpoch = 0;
@@ -277,8 +318,11 @@ function Effect(
     this._runs = 0;
   }
   if (storeGatedSchedules.has(schedule)) this._flags |= F_STORE_GATED;
+  if (options?.writesDom ?? domWritingSchedules.has(schedule)) this._flags |= F_WRITES_DOM;
+  if (nodeSchedules.has(schedule)) this._flags |= F_NODE_RUN;
 }
 Effect.prototype = computationPrototype;
+Object.setPrototypeOf(Effect, computationConstructor); // V8 counts the base fields towards the in-object size (core.ts)
 
 /**
  * Recompute the node's compute half. Returns false if the node died or threw, and also when the
@@ -336,11 +380,6 @@ export function rebookParked(node: EffectNode): boolean {
 /** @internal store gate: still parked (not disposed, not unparked by a plain walk). */
 export function isParked(node: EffectNode): boolean {
   return node._state !== STATE_DISPOSED && (node._flags & F_PARKED) !== 0;
-}
-
-/** @internal the heavy-animation scope snapped when the effect was created. */
-export function effectScopeOf(node: EffectNode): HeavyAnimationScope {
-  return node._scope;
 }
 
 function runEffect(node: EffectNode) {
@@ -528,7 +567,7 @@ function releaseBailed(node: EffectNode) {
  */
 function bookRun(node: EffectNode) {
   try {
-    node._schedule(node._run, node);
+    node._schedule(node._flags & F_NODE_RUN ? RUN_NODE : runOf(node), node);
   } catch (error) {
     if (node._state !== STATE_DISPOSED) {
       node._state = STATE_CLEAN;

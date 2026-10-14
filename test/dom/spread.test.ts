@@ -9,6 +9,9 @@ import { createComponent } from '../../src/dom/component';
 import { Dynamic } from '../../src/dom/flow';
 import { flushMicrotasks } from '../helpers/micro';
 import { container, useDomHarness } from '../helpers/dom';
+import { registerControlledDirectives } from '../../src/dom/controlled';
+
+registerControlledDirectives(); // the runtime no longer registers use:value / use:checked at load (the Vite plugin injects this call)
 
 const { frame } = useDomHarness();
 

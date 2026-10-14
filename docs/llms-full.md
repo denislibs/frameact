@@ -184,7 +184,7 @@ event handlers, store actions and tickEnd effects, and **throws inside a frame p
 
 ```tsx
 import { createSignal, createSelector } from 'frameact';
-import { For, Show, Switch, Match, Dynamic, Portal, children, mergeProps, render } from 'frameact/dom';
+import { For, ManualFor, Show, Switch, Match, Dynamic, Portal, children, mergeProps, render } from 'frameact/dom';
 
 interface Chat { id: string; title: string; unread: number }
 
@@ -210,12 +210,12 @@ function Rows(props: { chats: Chat[] }) {
 }
 
 // keyed={false}: by index, `item` is an accessor and `index` a number.
-// order="manual": the DOM order is NOT the list order (rows are positioned by CSS transforms of index()).
+// <ManualFor>: the DOM order is NOT the list order (rows are positioned by CSS transforms of index()).
 function ChatList(props: { chats: Chat[] }) {
   return (
-    <For each={props.chats} keyed={(c) => c.id} order="manual" orderKey={(c) => c.unread}>
+    <ManualFor each={props.chats} keyed={(c) => c.id} orderKey={(c) => c.unread}>
       {(chat, index) => <div style={{ transform: `translateY(${index() * 72}px)` }}>{chat().title}</div>}
-    </For>
+    </ManualFor>
   );
 }
 
@@ -240,10 +240,11 @@ const merged = mergeProps({ size: 1 }, { size: undefined, color: 'red' }); // la
 void [List, Rows, ChatList, Box, merged, render];
 ```
 
-- `For`: default `keyed` is by reference; `keyed={false}` by index; `keyed={fn}` by key (for immutable data). `keyed`,
-  `children` and `order` are read once; `each` and `fallback` are reactive. With `order="manual"` every row must be a single
-  DOM node and `For` must be the sole content of its slot; kept rows are never moved, only a row whose `orderKey` changes
-  moves (return a primitive).
+- `For`: default `keyed` is by reference; `keyed={false}` by index; `keyed={fn}` by key (for immutable data). `keyed`
+  and `children` are read once; `each` and `fallback` are reactive.
+- `ManualFor` (same props as `For` plus `orderKey`; `For order="manual"` is gone and throws): every row must be a single
+  DOM node and `ManualFor` must be the sole content of its slot; kept rows are never moved, only a row whose `orderKey`
+  changes moves (return a primitive). It is a separate component so apps without manual-order lists do not bundle it.
 - `Show`: a function child gets an accessor (`u().name`); with `keyed` it gets the value and the child is recreated when the
   identity changes. Reading the accessor after the condition turned falsy throws.
 - `Dynamic`: a **string** `component` is a tag name and a trust boundary: it must come from your code, never from
@@ -318,6 +319,7 @@ void Composer;
 signal ignored an input event. Passing `value={text()}` is a plain property write, not controlled; the Vite plugin warns.
 `use:value` also works on `<textarea>` and `<select>`; `use:checked` on checkboxes/radios. Custom directives:
 `defineDirective('name', (el, value) => …)` then `<div use:name={…}>`.
+The runtime does not register `use:value` / `use:checked` at load (an app without controlled inputs does not bundle them), so `registerControlledDirectives()` must run before the first write. The Vite plugin prepends it to every JSX/TSX module whose compiled output contains the string literal `"use:value"` / `"use:checked"` (the JSX attribute, `mergeProps(props, { 'use:value': v })`, a JSX spread with that key) and to plain `.js`/`.mjs`/`.ts` modules, `node_modules` included, that contain it (a pre-compiled component library). Without Vite: `plugins: babelPlugins(dev)` or `registerControlledBabelPlugin` from `frameact/vite`. What the build cannot see (a name assembled at run time, a dependency prebundled in Vite dev together with its own copy of frameact): `import 'frameact/dom/controlled'` once at startup, or `registerControlledDirectives()` from `frameact/dom`. An unregistered write is a DEV error naming the fix and, in production, one short `console.error` per directive name; the input is then not controlled.
 
 ## 8. Store (model B)
 

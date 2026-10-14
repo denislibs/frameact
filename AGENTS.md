@@ -17,7 +17,7 @@ split into phases. The target consumer is a Telegram Web A–class messenger. MI
 |---|---|
 | `src/core/` | signals, memos, two-phase effects, frame queues, owner tree, context, `mapArray`; adapted maverick-js/signals |
 | `src/scheduler/` | fasterdom phases (`requestMeasure`/`requestMutation`/…), `tickEnd`/idle schedulers, heavy-animation scopes |
-| `src/dom/` | runtime the Solid 2.0 JSX compiler targets (`frameact/dom`): `template`, `insert`, `spread`, `For`/`Show`/`Switch`/`Dynamic`/`Portal`, controlled inputs, classes/styles/attributes, event delegation, `natives.ts` |
+| `src/dom/` | runtime the Solid 2.0 JSX compiler targets (`frameact/dom`): `template`, `insert`, `spread`, `For`/`ManualFor`/`Show`/`Switch`/`Dynamic`/`Portal`, controlled inputs, classes/styles/attributes, event delegation, `natives.ts` |
 | `src/store/` | `frameact/store`: signal-tree store (model B), `reconcile`, actions, heavy-animation parking gate |
 | `src/stricterdom/` | `frameact/stricterdom`: DEV phase checks with effect attribution, run profiler |
 | `src/kit/` | `frameact/kit`: `Transition`, `ShowTransition`, `InfiniteScroll`, `createScrollAnchor` |
@@ -29,7 +29,7 @@ split into phases. The target consumer is a Telegram Web A–class messenger. MI
 | `docs/` | `superpowers/specs` (design), `superpowers/plans` (per-feature plans), `guides/` (porting guide), `assets/` (README media; do not touch) |
 | `.claude/skills/` | `perf-review`, `appsec-review` (see "Review skills") |
 
-Public entry points are listed in `package.json` `exports`: `frameact`, `frameact/dom`, `frameact/scheduler`,
+Public entry points are listed in `package.json` `exports`: `frameact`, `frameact/dom`, `frameact/dom/controlled` (side-effect import), `frameact/scheduler`,
 `frameact/store`, `frameact/stricterdom`, `frameact/vite`, `frameact/jsx-runtime`, `frameact/kit`. A new
 entry needs the `exports` line, a `paths` entry in `tsconfig.json` and an alias in `vitest.config.ts`.
 
@@ -95,6 +95,7 @@ release first needs a build step.
    `frameact/dom`. `message`/`path` strings that embed content (ids, classes, store keys) are JSON-quoted and cut to 64 chars.
 9. **Components run once; props are getters.** Never destructure props in framework code, tests or examples
    (`function X({ a })` reads once). Controlled inputs are `use:value` / `use:checked`, not `value=`.
+   They are registered by `registerControlledDirectives()`, which the runtime never calls itself (tree-shaking): the Vite/Babel plugin (`src/vite`) injects it into every module containing the string literal `"use:value"`/`"use:checked"`; escape hatch `import 'frameact/dom/controlled'`. Never write that quoted name in `src/` outside `jsx.d.ts` (a guard test in `test/vite/plugin.test.ts` enforces it).
 10. **Isolation of failures**: a throwing effect, memo, store action or handler is reported (`onError` handlers, else
     `console.error`) and must not break the graph, the queue or the frame; DEV hooks are contained so they cannot leave
     `currentEffect` swapped.

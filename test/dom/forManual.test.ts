@@ -2,7 +2,7 @@ import { createRoot, createSignal, onError, untrack } from '../../src/index';
 import { insert } from '../../src/dom/insert';
 import { createComponent } from '../../src/dom/component';
 import { For } from '../../src/dom/list';
-import { reconcileManual } from '../../src/dom/reconcile';
+import { ManualFor, reconcileManual } from '../../src/dom/manualFor';
 import { container, spyNodeOps, useDomHarness } from '../helpers/dom';
 
 const { frame } = useDomHarness();
@@ -25,10 +25,9 @@ function mount(ul: HTMLElement, list: () => Chat[], orderKey?: (c: Chat) => unkn
       ul,
       createComponent(
         () =>
-          For({
+          ManualFor({
             get each() { return list(); },
             keyed: (c: Chat) => c.id,
-            order: 'manual',
             orderKey,
             children: row,
           }),
@@ -124,10 +123,9 @@ it('works with fallback: shown for an empty list, rows take their list indexes, 
       ul,
       createComponent(
         () =>
-          For({
+          ManualFor({
             get each() { return list(); },
             keyed: (c: Chat) => c.id,
-            order: 'manual',
             orderKey: (c: Chat) => c.rank,
             get fallback() {
               const i = document.createElement('i');
@@ -163,10 +161,9 @@ it('a row whose mapper threw is skipped without disturbing the order of the othe
       ul,
       createComponent(
         () =>
-          For({
+          ManualFor({
             get each() { return list(); },
             keyed: (c: Chat) => c.id,
-            order: 'manual',
             orderKey: (c: Chat) => c.rank,
             children: (item: () => Chat) => {
               if (untrack(() => item().id) === 2) throw new Error('boom');
@@ -318,7 +315,7 @@ it('inside a slot with a marker, siblings stay put and rows stay before the mark
   createRoot(() => {
     insert(
       ul,
-      createComponent(() => For({ get each() { return list(); }, keyed: (c: Chat) => c.id, order: 'manual', orderKey: (c: Chat) => c.rank, children: row }), {}),
+      createComponent(() => ManualFor({ get each() { return list(); }, keyed: (c: Chat) => c.id, orderKey: (c: Chat) => c.rank, children: row }), {}),
       tail,
     );
   });
@@ -345,10 +342,9 @@ it('two failed rows: removing one of them does not drop the kept row (no orderKe
       ul,
       createComponent(
         () =>
-          For({
+          ManualFor({
             get each() { return list(); },
             keyed: (c: Chat) => c.id,
-            order: 'manual',
             children: (item: () => Chat) => {
               if (untrack(() => item().id) !== 1) throw new Error('boom');
               return row(item);
@@ -407,10 +403,9 @@ it('DEV: a row that is not a DOM node is reported once', async () => {
       ul,
       createComponent(
         () =>
-          For({
+          ManualFor({
             get each() { return list(); },
             keyed: (c: Chat) => c.id,
-            order: 'manual',
             children: (item: () => Chat) => ({ notANode: untrack(() => item().id) }),
           }),
         {},
@@ -449,10 +444,9 @@ it('a throwing orderKey reaches onError (no console fallback)', async () => {
       ul,
       createComponent(
         () =>
-          For({
+          ManualFor({
             get each() { return list(); },
             keyed: (c: Chat) => c.id,
-            order: 'manual',
             orderKey: (c: Chat) => {
               if (c.rank === 66) throw new Error('bad key');
               return c.rank;
@@ -472,7 +466,7 @@ it('a throwing orderKey reaches onError (no console fallback)', async () => {
   expect(err.mock.calls.some((c) => String(c[0]).includes('orderKey failed'))).toBe(false);
 });
 
-it('DEV: For order="manual" nested in a larger array warns once and still renders (ordinary diff)', async () => {
+it('DEV: ManualFor nested in a larger array warns once and still renders (ordinary diff)', async () => {
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   const ul = container();
   const header = document.createElement('h1');
@@ -483,7 +477,7 @@ it('DEV: For order="manual" nested in a larger array warns once and still render
       createComponent(
         () => [
           header,
-          For({ get each() { return list(); }, keyed: (c: Chat) => c.id, order: 'manual', orderKey: (c: Chat) => c.rank, children: row }),
+          ManualFor({ get each() { return list(); }, keyed: (c: Chat) => c.id, orderKey: (c: Chat) => c.rank, children: row }),
         ],
         {},
       ),
@@ -500,10 +494,9 @@ function mountRows(list: () => Chat[], orderKey: ((c: Chat) => unknown) | undefi
   const ul = container();
   let order!: () => unknown[];
   createRoot(() => {
-    order = For({
+    order = ManualFor({
       get each() { return list(); },
       keyed: (c: Chat) => c.id,
-      order: 'manual',
       orderKey,
       children: row,
     }) as () => unknown[];
@@ -579,4 +572,9 @@ describe('fast path: same rows, same order keys', () => {
     expect(order()).toBe(before);
     expect(err.mock.calls.filter((c) => String(c[0]).includes('orderKey failed')).length).toBeGreaterThanOrEqual(2);
   });
+});
+
+it('DEV: For no longer knows order="manual": it throws and points at <ManualFor>', () => {
+  const ForC = For as (props: any) => unknown;
+  expect(() => ForC({ each: [1], order: 'manual', children: () => document.createElement('li') })).toThrow('<ManualFor>');
 });

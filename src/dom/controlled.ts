@@ -421,6 +421,9 @@ function onChange(e: Event): void {
   if (b) verify(b);
 }
 
+/** `installListeners` hooks `uninstallListeners` into `clearDelegatedEvents` once, on first use. */
+let clearHooked = false;
+
 /**
  * Document listeners, registered AFTER `input` delegation: on one document, listeners run in
  * registration order, so the controlled check always follows the delegated `onInput` dispatcher
@@ -429,6 +432,12 @@ function onChange(e: Event): void {
 function installListeners(doc: Document): void {
   if (installed.has(doc)) return;
   installed.add(doc);
+  if (!clearHooked) {
+    // Registered on first use, not at module load: this module has no top-level side effect, so an app
+    // without controlled inputs does not bundle it (see registerControlledDirectives).
+    clearHooked = true;
+    onClearDelegated(uninstallListeners);
+  }
   delegateEvents(['input'], doc);
   const { addEventListener: add } = getNatives();
   add.call(doc, 'input', swallowWhileForcing, true);
@@ -441,7 +450,7 @@ function installListeners(doc: Document): void {
   add.call(doc, 'selectionchange', onSelectionChange);
 }
 
-onClearDelegated((doc) => {
+function uninstallListeners(doc: Document): void {
   if (!installed.has(doc)) return;
   installed.delete(doc);
   const { removeEventListener: remove } = getNatives();
@@ -453,7 +462,7 @@ onClearDelegated((doc) => {
   remove.call(doc, 'compositionend', onCompositionEnd);
   remove.call(doc, 'focusout', onFocusOut);
   remove.call(doc, 'selectionchange', onSelectionChange);
-});
+}
 
 // ---- the directive entry (three forms, shared by value and checked) ----
 
@@ -555,9 +564,10 @@ function checkedDirective(el: Element, value: unknown): void {
 }
 
 /**
- * Registers the built-in `use:value` / `use:checked`. `attributes.ts` calls it (a used symbol, not a
- * bare side-effect import, so a `"sideEffects": false` package cannot tree-shake the registration
- * away). Idempotent.
+ * Registers the built-in `use:value` / `use:checked`. The runtime never calls it itself, so an app without
+ * controlled inputs does not bundle this module. Three ways it gets called: the Vite plugin (or the exported
+ * Babel plugin) injects it into every module whose compiled code contains the quoted directive name,
+ * `import 'frameact/dom/controlled'` runs it as a side effect, or call it once at startup. Idempotent.
  */
 export function registerControlledDirectives(): void {
   defineBuiltinDirective('value', valueDirective);

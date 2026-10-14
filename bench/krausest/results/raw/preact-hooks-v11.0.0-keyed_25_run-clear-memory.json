@@ -1,1 +1,1 @@
-{"framework":"preact-hooks-v11.0.0-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":0.7845697402954102,"max":0.7845697402954102,"median":0.7845697402954102,"mean":0.7845697402954102,"stddev":null,"values":[0.7845697402954102]}}}
+{"framework":"preact-hooks-v11.0.0-keyed","keyed":true,"benchmark":"25_run-clear-memory","type":"memory","values":{"DEFAULT":{"min":0.7506771087646484,"max":0.7506771087646484,"median":0.7506771087646484,"mean":0.7506771087646484,"stddev":null,"values":[0.7506771087646484]}}}

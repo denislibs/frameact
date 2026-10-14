@@ -55,3 +55,15 @@ it('prototype-looking names are plain names', () => {
   runDirective(el, '__proto__', 1);
   expect(errors).toHaveBeenCalledTimes(2);
 });
+
+it('use:value / use:checked before registration: a dev error that names registerControlledDirectives, nothing runs', async () => {
+  vi.resetModules(); // a fresh registry: earlier tests in this file registered built-ins
+  const { runDirective: runFresh } = await import('../../src/dom/directives');
+  const el = document.createElement('input');
+  runFresh(el, 'checked', true);
+  expect(errors).toHaveBeenCalledTimes(1);
+  expect(String(errors.mock.calls[0][0])).toContain("registerControlledDirectives() from 'frameact/dom'");
+  expect(String(errors.mock.calls[0][0])).toContain('use:checked');
+  runFresh(el, 'tooltip', 1); // an unknown user directive keeps its own message
+  expect(String(errors.mock.calls[1][0])).toContain("defineDirective('tooltip', fn)");
+});

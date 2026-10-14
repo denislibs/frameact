@@ -121,10 +121,11 @@ export function reconcileArrays(parentNode: any, a: any[], b: any[], marker?: No
 }
 
 /**
- * Marks a node array as manually ordered (`For order="manual"`): `insertExpression` then applies it with
- * `reconcileManual` (insert-only) instead of `reconcileArrays`. The value is the set of rows that must
- * be (re)inserted at their array position even though they are already in the DOM (changed `orderKey`).
- * A non-enumerable symbol property, so it is invisible to spreads and `Object.keys`.
+ * Marks a node array as manually ordered (`<ManualFor>`): `insertExpression` then applies it with the
+ * insert-only reconciler that manualFor.ts registered (`applyManualOrder`) instead of `reconcileArrays`. The
+ * value is the set of rows that must be (re)inserted at their array position even though they are already in
+ * the DOM (changed `orderKey`). A non-enumerable symbol property, so it is invisible to spreads and `Object.keys`.
+ * Only this tag and its hook live here; the reconciler itself ships with `ManualFor`, so apps without it do not bundle it.
  */
 export const MANUAL_ORDER: unique symbol = Symbol('frameact.manualOrder');
 
@@ -137,54 +138,19 @@ export function manualOrderOf(array: any[]): ReadonlySet<unknown> | undefined {
   return (array as any)[MANUAL_ORDER];
 }
 
+type ManualReconciler = (parentNode: any, prev: any[], next: any[], marker: Node | null | undefined, moved: ReadonlySet<unknown>) => void;
+let manualReconciler: ManualReconciler | undefined;
+
 /**
- * Insert-only counterpart of `reconcileArrays`. `next` lists the slot's nodes in DOM order, except
- * for new nodes (placed at their list index) and the `moved` ones. Kept, unmoved nodes are never
- * touched (no `remove`, `replaceChild` or `insertBefore`); a contiguous run of nodes to insert goes
- * before one anchor (the next kept node, else the marker); a `moved` node is moved exactly once.
- * `prev` must be non-empty. A kept node that is out of DOM order despite not being listed in `moved`
- * (the memo ran ahead of the applied DOM) is moved too: correctness first.
+ * @internal manualFor.ts registers the insert-only reconciler when `ManualFor` RUNS, not at module evaluation:
+ * a top-level call would be a side effect that keeps the module in apps that never render a manual-order list.
  */
-export function reconcileManual(
-  parentNode: any,
-  prev: any[],
-  next: any[],
-  marker: Node | null | undefined,
-  moved: ReadonlySet<unknown>,
-): void {
-  const { insertBefore, removeChild } = getNatives();
-  const nextSet = new Set<any>(next);
-  const prevIndex = new Map<any, number>();
-  for (let i = 0; i < prev.length; i++) {
-    const n = prev[i];
-    if (!nextSet.has(n)) {
-      if (ownedBy(n, parentNode, marker)) removeChild.call(parentNode, n);
-    } else if (ownedBy(n, parentNode, marker)) prevIndex.set(n, i);
-  }
-  // Stable nodes: already in the DOM, not moved, in increasing DOM order. Walking backwards gives
-  // every position the anchor to insert before.
-  // The `at > last` test is the safety branch for a `next` that is not in DOM order (the memo ran
-  // ahead of the applied DOM): theoretical for `For`, and greedy, not an LIS, so it may move more
-  // nodes than the minimum. `moved` carries the intended moves.
-  const length = next.length;
-  const stable: boolean[] = [];
-  let last = -1;
-  for (let i = 0; i < length; i++) {
-    const n = next[i];
-    const at = prevIndex.get(n);
-    stable[i] = at !== undefined && at > last && !moved.has(n);
-    if (stable[i]) last = at!;
-  }
-  const anchors: (Node | null)[] = [];
-  let anchor: Node | null = marker ?? null;
-  for (let i = length - 1; i >= 0; i--) {
-    anchors[i] = anchor;
-    if (stable[i]) anchor = next[i];
-  }
-  for (let i = 0; i < length; i++) {
-    if (stable[i]) continue;
-    const n = next[i];
-    insertBefore.call(parentNode, n, anchors[i]);
-    tagSlot(n, marker);
-  }
+export function setManualReconciler(fn: ManualReconciler): void {
+  manualReconciler = fn;
+}
+
+/** A tagged array only exists once `ManualFor` ran (and registered); the fallback keeps the DOM right regardless. */
+export function applyManualOrder(parentNode: any, prev: any[], next: any[], marker: Node | null | undefined, moved: ReadonlySet<unknown>): void {
+  if (manualReconciler) manualReconciler(parentNode, prev, next, marker, moved);
+  else reconcileArrays(parentNode, prev, next, marker);
 }

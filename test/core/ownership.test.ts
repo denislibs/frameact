@@ -79,19 +79,21 @@ describe('children list', () => {
     for (const n of [a, b, c, d, e]) expect(n[SCOPE]).toBeNull();
   });
 
-  it('removing children one by one from the middle is linear (4N costs ~4x, a quadratic list ~16x)', () => {
-    const N = 20_000;
+  it('removing children one by one from the middle is linear (16N costs ~16x, a quadratic list ~256x)', () => {
+    const N = 5_000;
     removeOneByOne(N); // warm-up (JIT)
-    removeOneByOne(4 * N);
+    removeOneByOne(16 * N);
     // CPU time, not wall-clock: a loaded machine (50 jsdom files in parallel) steals wall time from either
-    // side. The minimum over interleaved repetitions drops the remaining noise; 10x sits between 4x and 16x.
+    // side. The minimum over interleaved repetitions drops the remaining noise. A 16x size step keeps the
+    // linear and quadratic outcomes far apart (16x vs 256x), so a slow shared CI runner (seen: ~3.5x noise
+    // on a 4x step) cannot cross the 80x line in either direction.
     let tN = Infinity,
-      t4N = Infinity;
-    for (let r = 0; r < 9; r++) {
+      t16N = Infinity;
+    for (let r = 0; r < 7; r++) {
       tN = Math.min(tN, removeOneByOne(N));
-      t4N = Math.min(t4N, removeOneByOne(4 * N));
+      t16N = Math.min(t16N, removeOneByOne(16 * N));
     }
-    expect(t4N / tN).toBeLessThanOrEqual(10);
+    expect(t16N / tN).toBeLessThanOrEqual(80);
   });
 });
 

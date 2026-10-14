@@ -1,6 +1,6 @@
 // Type-level tests: checked by `pnpm typecheck` (never run). `@ts-expect-error` lines MUST error.
 import { createSignal } from 'frameact';
-import { For, Match, Show, Switch } from 'frameact/dom';
+import { For, ManualFor, Match, Show, Switch } from 'frameact/dom';
 
 const handler = (_e: MouseEvent) => {};
 const [text] = createSignal('');
@@ -29,7 +29,7 @@ export function accepted() {
     <select use:value={text} />,
     <input type="checkbox" use:checked={on} />,
     <div class={['a', { b: true }]} />,
-    <For each={[1]} order="manual" orderKey={(n: number) => n}>{(n) => <i>{n}</i>}</For>,
+    <ManualFor each={[1]} orderKey={(n: number) => n}>{(n) => <i>{n}</i>}</ManualFor>,
     // Show/Match function children: the parameter is inferred under strict (no implicit any), narrowed to NonNullable
     <Show when={user()}>{(u) => <b>{u().title}</b>}</Show>,
     <Show when={user()} keyed>{(u) => <b>{u.title}</b>}</Show>,
@@ -62,7 +62,7 @@ export function rejected() {
   // @ts-expect-error
   void (<input use:nope={text} />);
   // @ts-expect-error
-  void (<For each={[1]} order="auto">{(n) => <i>{n}</i>}</For>);
+  void (<For each={[1]} order="manual">{(n) => <i>{n}</i>}</For>);
   // @ts-expect-error
   void (<div class:active="yes" />);
   // srcdoc is an HTML sink the runtime always refuses: only prop:srcdoc is typed

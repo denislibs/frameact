@@ -708,10 +708,10 @@ acceptance-тестом (§5); ожидаемый состав: `template`, `ins
 #### Списки
 
 - `<For each keyed fallback>` — `mapArray` + `insertExpression` (LIS-дифф).
-- `<For each order="manual" orderKey={item => …}>` — порт идеи `renderFastListChildren`
+- `<ManualFor each orderKey={item => …}>` (до ревизии 5 — `<For order="manual">`) — порт идеи `renderFastListChildren`
   для случаев, когда визуальный порядок задаётся `transform`'ом по `index()`, а
   DOM-порядок должен оставаться стабильным (ChatList). Контракт:
-  - `For` в этом режиме **владеет порядком своего DOM-диапазона**: сохранённые узлы
+  - `ManualFor` **владеет порядком своего DOM-диапазона**: сохранённые узлы
     **не двигает**, кроме тех, у кого изменился `orderKey`; новые строки вставляет на их
     индекс в списке (в начало, в конец или между сохранёнными узлами — пачкой);
   - наружу `insert`'у возвращает массив узлов в **DOM-порядке**, а не в порядке
@@ -1021,7 +1021,7 @@ frameact/
     stricterdom/          stricterdom.ts, layoutCauses.ts, runlog.ts (профайлер), index.ts
     dom/                  template.ts, insert.ts, props.ts (class token diff, style),
                           events.ts, directives.ts (use:value/use:checked),
-                          list.ts (For, manual order), flow.ts (Show/Switch/Dynamic/Portal),
+                          list.ts (For), manualFor.ts (ManualFor), flow.ts (Show/Switch/Dynamic/Portal),
                           lazy.ts, render.ts, index.ts
     store/                store.ts (дерево сигналов, setState, merge, produce, unwrap/snapshot, live/ungated),
                           reconcile.ts, gate.ts (парковка по причине), actions.ts
@@ -1075,7 +1075,7 @@ frameact/
 - dom: дифф токенов класса сохраняет императивные на всех путях записи; `style`-объект
   per-property; `use:value` — отклонённый ввод откатывается синхронно до paint,
   принятый не трогается, отформатированный применяется сразу с кареткой, composition
-  не прерывается; `order="manual"` — сохранённые не двигаются, двигаются при смене
+  не прерывается; `<ManualFor>` — сохранённые не двигаются, двигаются при смене
   `orderKey`, prepend/append пачкой, наружу DOM-порядок; `render` в attached-контейнер
   не даёт ошибки stricterdom.
 - stricterdom: чтение layout в mutate / запись в measure → ошибка с путём
@@ -1188,7 +1188,7 @@ telegram-tt») сошлись на трёх критических дефект�
 | C5 | — | правка maverick: missed-wake latch (не «CLEAN до compute» — см. §3.2); `updateCheck` на DISPOSED — no-op |
 | M1 | контейнер = сигнал + один гейченый эффект на props и global | memo по пропсам + bridge-сигнал на scope; `forceOnHeavyAnimation`/`forceSyncOnIOs` на bridge |
 | M2 | контроль `value=` в рантайме | директивы `use:value`/`use:checked`, синхронный откат, IME |
-| M3 | `order="manual"` + `orderKey` | For владеет DOM-диапазоном, наружу DOM-порядок, orderKey per key, dev-assert |
+| M3 | `<ManualFor>` (бывш. `order="manual"`) + `orderKey` | For владеет DOM-диапазоном, наружу DOM-порядок, orderKey per key, dev-assert |
 | M4 | один cleanup | два канала; apply-cleanup при dispose вне mutate → в mutate-очередь |
 | M5 | «батчинг лучше teact», один сигнал mapped | раздел «Стоимость», per-key геттеры, бенч A/B |
 | M6 | «scope гейтит рендер списка» | гейтит обновления; `deferUntilIdle` |
@@ -1218,3 +1218,17 @@ telegram-tt») сошлись на трёх критических дефект�
 Кит опирается на исправление R1 аудита из раунда фиксов стора (§3.5: релиз store-гейта через
 measure-задачу) — якорь скролла и список под парковкой отпускаются в один кадр в порядке фаз;
 план 6 добавляет тест на `end()` из mutation-apply. Гайд портирования — `docs/guides/porting-from-teact.md`.
+
+## 12. Ревизия 5: проход по памяти и бандлу
+
+План `docs/superpowers/plans/2026-10-16-memory-bundle.md`. Семантика не менялась; одно изменение публичного API:
+списки с ручным порядком вынесены из `For` в отдельный компонент `<ManualFor>` (`frameact/dom`; те же пропсы,
+что у `For`, плюс `orderKey`; `order="manual"` у `For` убран, `For` бросает ошибку с указанием на `ManualFor`).
+Причина: `order` читается в рантайме, поэтому `reconcileManual` и сборка порядка попадали в каждое приложение
+(измерено −533 Б brotli, −1 438 Б сырых); теперь `insert` знает только пометку «ручной порядок» и хук, который регистрирует `ManualFor`.
+Остальное: встроенные директивы `use:value`/`use:checked` регистрирует Vite-плагин (или Babel-плагин `babelPlugins`/
+`registerControlledBabelPlugin` из `frameact/vite`) в каждом модуле, где в скомпилированном коде есть строковый литерал
+`"use:value"`/`"use:checked"` (JSX-атрибут, ключ спреда/`mergeProps`, предкомпилированная библиотека в `node_modules`);
+запасной выход: `import 'frameact/dom/controlled'` или `registerControlledDirectives()` из `frameact/dom`; в prod
+незарегистрированная запись даёт одну короткую `console.error` на имя; heavy-animation gating
+подключается первым `begin()` (или store-гейтом); состояние канала `class` хранится на элементе.

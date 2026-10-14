@@ -10,7 +10,7 @@ import { children } from './component';
 
 /**
  * `<HeavyAnimationScope scope?>`: every effect created in `children` snapshots `scope` (or a fresh
- * child of the enclosing scope) as its `node._scope`, so a blocking animation on it parks only this
+ * child of the enclosing scope) as their scope (effectScopeOf), so a blocking animation on it parks only this
  * subtree's frame work (spec §3.2 "Per-subtree"). The scope gates updates, not creation:
  * `children` are created right here, inside the component's own scope (render it through
  * `createComponent`/JSX, which gives it one; DEV warns when there is no owner). Returns an accessor

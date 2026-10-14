@@ -26,7 +26,7 @@ frameact — реактивный UI-фреймворк для приложен�
 
 > **Статус: ранняя разработка.** Реактивное ядро ([PR #1](https://github.com/denislibs/frameact/pull/1)) и
 > DOM-рантайм реализованы: `frameact/dom` для JSX-компилятора Solid 2.0
-> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` (включая `order="manual"`),
+> (`@solidjs/babel-plugin@2.0.0-rc.14`), `render`, `For` и `ManualFor` (списки с ручным порядком),
 > `Show`/`Switch`/`Match`/`Dynamic`/`Portal`, контролируемые инпуты (`use:value` / `use:checked`),
 > `HeavyAnimationScope`, context `Provider` и Vite-плагин `frameact/vite`; стор (`frameact/store`: дерево
 > сигналов с парковкой по причине на время тяжёлых анимаций) тоже готов, как и stricterdom (`frameact/stricterdom`:
@@ -127,6 +127,17 @@ render(() => <Composer />, document.getElementById('app')!);
 протолкнуть значение через активную IME-композицию (например, очистить поле по «Отправить»), сначала обновите сигнал,
 затем вызовите `forceControlledValue(el)` из обработчика пользовательского события (`isForcingControlledValue`
 позволяет распознать этот цикл в ваших `blur`/`focus`).
+
+**Как регистрируются `use:value` / `use:checked`.** Рантайм не регистрирует их при загрузке (приложение без контролируемых
+инпутов не включает этот код в бандл), поэтому до первой записи кто-то должен вызвать `registerControlledDirectives()`.
+Vite-плагин делает это сам: добавляет вызов в каждый модуль, в скомпилированном выводе которого есть строка `"use:value"` /
+`"use:checked"` (JSX-атрибут, `mergeProps(props, { 'use:value': v })`, `<input {...{ 'use:value': s }} />`), а также в обычные
+`.js`/`.mjs`/`.ts`-модули, включая `node_modules`, где она встречается (библиотека компонентов, собранная отдельно). Вне Vite
+подключите Babel-плагин: `plugins: babelPlugins(dev)` (компилятор плюс регистрация) или только `registerControlledBabelPlugin`,
+оба из `frameact/vite`. Если сборка не видит запись (имя собирается в рантайме, зависимость, предсобранная в dev-режиме Vite вместе со своей копией frameact,
+минифицированная библиотека), есть запасной выход: один раз при старте `import 'frameact/dom/controlled'` или вызов
+`registerControlledDirectives()` из `frameact/dom`. Если незарегистрированный `use:value` всё же записан, DEV пишет ошибку с
+подсказкой, а production — одну короткую `console.error` на имя директивы.
 
 **Безопасность.** Запись атрибутов отклоняет URL `javascript:` / `vbscript:`, `data:` не для медиа, строковые
 обработчики `on*` и `srcdoc=`; явный выход для доверенного HTML — `prop:srcdoc`. В production отказы тихие, в DEV — это

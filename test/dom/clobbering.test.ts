@@ -10,6 +10,7 @@ import { addEvent, clearDelegatedEvents, delegateEvents, EVENT_KEY } from '../..
 import { Portal } from '../../src/dom/flow';
 import { insert } from '../../src/dom/insert';
 import { For } from '../../src/dom/list';
+import { ManualFor } from '../../src/dom/manualFor';
 import { assign, spread } from '../../src/dom/props';
 import { render } from '../../src/dom/render';
 import { clobber, clobberedForm } from '../helpers/clobber';
@@ -54,17 +55,16 @@ describe('reconciler and insert', () => {
     expect(ids(ul)).toEqual([]);
   });
 
-  it('<For order="manual"> with clobbered form rows: insert-only reconcile removes and inserts', async () => {
+  it('<ManualFor> with clobbered form rows: insert-only reconcile removes and inserts', async () => {
     const ul = container();
     type Chat = { id: number; rank: number };
     const [list, setList] = createSignal<Chat[]>([{ id: 1, rank: 1 }, { id: 2, rank: 2 }]);
     createRoot(() =>
       insert(
         ul,
-        createComponent(ForC, {
+        createComponent(ManualFor as (props: any) => unknown, {
           get each() { return list(); },
           keyed: (c: Chat) => c.id,
-          order: 'manual',
           orderKey: (c: Chat) => c.rank,
           children: (item: () => Chat) => formRow(item().id),
         }),

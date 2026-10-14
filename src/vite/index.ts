@@ -74,6 +74,26 @@ const CONTROLLED_PROP =
 const STRING_HANDLER = /<[a-z][\w-]*\b(?:=>|[^<>])*?\s(on[A-Za-z]+)=["']/g;
 const DESTRUCTURED_PARAM = /\b(?:function\s+([A-Z][\w$]*)\s*\(|(?:const|let|var)\s+([A-Z][\w$]*)\s*(?::[^=;\n]{0,200})?=\s*(?:function\s*\(|\())\s*\{/g;
 const DESTRUCTURED_BODY = /\b(?:const|let|var)\s*\{[^}]{0,500}\}\s*=\s*props\b/g;
+/**
+ * Controlled inputs (`use:value` / `use:checked`) are not registered by the runtime (an app without them does not
+ * bundle `dom/controlled.ts`), so every module that can WRITE one must run `registerControlledDirectives()` first.
+ * The name of the directive reaches the runtime as a string literal (the name with its `use:` prefix, in quotes)
+ * in every form: the compiler's `setAttribute` call for the JSX attribute, an object key (`mergeProps`, a JSX
+ * spread), a pre-compiled library's output. Three paths look for that literal:
+ * the Babel plugin below (JSX/TSX modules of the app: the AST of the compiled output, so comments do not count),
+ * the plain-module scan of `transform` (`.js`/`.mjs`/`.ts`, node_modules included) and the exported
+ * `registerControlledBabelPlugin` for pipelines without Vite.
+ */
+// Built from parts on purpose: a quoted literal in this file would make the plain-module scan register it in the plugin's own tests.
+const CONTROLLED_NAMES = new Set(['value', 'checked'].map((name) => `use:${name}`));
+/** The same literal in plain module text, in single or double quotes (backticks would match every doc comment). */
+const CONTROLLED_LITERAL = /(["'])use:(?:value|checked)\1/;
+/** A module that can take a top-level `import` (ESM). CommonJS is left alone: an `import` would turn it into a mixed module. */
+const ESM_SYNTAX = /(?:^|[\n;}])[ \t]*(?:import|export)\b[\s{*"']/;
+/** Plain modules the literal scan covers (the JSX pipeline handles `.jsx`/`.tsx`). */
+const PLAIN_MODULE = /\.[cm]?[jt]s$/;
+/** Vite asset queries: the module is a string/URL/worker wrapper, not code that runs the directive. */
+const ASSET_QUERY = /[?&](?:raw|url|inline|no-inline|worker|sharedworker)(?:[&=]|$)/;
 
 interface Lint {
   index: number;
@@ -130,6 +150,73 @@ function insideHandlerAttribute(code: string, index: number): boolean {
   return true;
 }
 
+function markControlled(state: any, value: string | null | undefined): void {
+  if (value != null && CONTROLLED_NAMES.has(value)) state.set('frameact.controlled', true);
+}
+
+/**
+ * Babel plugin: prepend `import { registerControlledDirectives } from 'frameact/dom'; registerControlledDirectives();`
+ * to a module whose (compiled) code contains the string literal for `use:value` or `use:checked`. The runtime does not
+ * register the built-in controlled-input directives at load (an app without inputs does not bundle them); the call
+ * runs before the module body, so the first directive write finds them.
+ *
+ * Put it AFTER the Solid compiler plugin (the compiler turns the JSX attribute into that string), as `babelPlugins`
+ * does; the Vite plugin uses it, and so can any other Babel pipeline (Storybook, a library build, Jest). A module
+ * that already imports `registerControlledDirectives` from `frameact/dom` is left alone.
+ */
+export function registerControlledBabelPlugin({ types: t }: { types: any }) {
+  return {
+    name: 'frameact-register-controlled',
+    visitor: {
+      StringLiteral(path: any, state: any) {
+        markControlled(state, path.node.value);
+      },
+      TemplateLiteral(path: any, state: any) {
+        if (path.node.expressions.length === 0) markControlled(state, path.node.quasis[0].value.cooked);
+      },
+      Program: {
+        exit(path: any, state: any) {
+          if (!state.get('frameact.controlled')) return;
+          const registered = path.node.body.some(
+            (node: any) =>
+              node.type === 'ImportDeclaration' &&
+              node.source.value === 'frameact/dom' &&
+              node.specifiers.some((spec: any) => spec.imported?.name === 'registerControlledDirectives'),
+          );
+          if (registered) return;
+          const local = path.scope.generateUidIdentifier('registerControlled');
+          path.unshiftContainer('body', [
+            t.importDeclaration([t.importSpecifier(local, t.identifier('registerControlledDirectives'))], t.stringLiteral('frameact/dom')),
+            t.expressionStatement(t.callExpression(local, [])),
+          ]);
+        },
+      },
+    },
+  };
+}
+
+/**
+ * The Babel plugin list for a non-Vite pipeline that compiles frameact JSX: the Solid compiler with
+ * `compilerOptions(dev)` and the controlled-input registration. A library built with it carries the
+ * registration in its own output, so its consumers need nothing else.
+ */
+export function babelPlugins(dev: boolean): [[typeof solid, ReturnType<typeof compilerOptions>], typeof registerControlledBabelPlugin] {
+  return [[solid, compilerOptions(dev)], registerControlledBabelPlugin];
+}
+
+/**
+ * A plain module (`.js`/`.mjs`/`.ts`, a pre-compiled library in node_modules included) that contains the quoted
+ * name gets the registration prepended on its first line (line numbers, hence its source map, stay valid). A
+ * cheap substring test comes first; modules without the literal are not parsed or touched, and neither are
+ * CommonJS modules or modules that already call it.
+ */
+function registerInPlainModule(code: string) {
+  if (!code.includes('use:') || !CONTROLLED_LITERAL.test(code) || code.includes('registerControlledDirectives')) return null;
+  if (code.startsWith('#!') || !ESM_SYNTAX.test(code)) return null;
+  const local = '_frameactRegisterControlled';
+  return { code: `import { registerControlledDirectives as ${local} } from 'frameact/dom';${local}();${code}`, map: null };
+}
+
 /** Rollup position (1-based line, 0-based column) of a character index; one scan for the newlines, a binary search per finding. */
 function createPositioner(code: string) {
   let newlines: number[] | undefined;
@@ -164,9 +251,16 @@ export default function frameact(options: FrameactPluginOptions = {}): Plugin {
       dev = options.dev ?? !config.isProduction;
     },
     async transform(code, id) {
-      if (id.startsWith('\0')) return null;
+      if (id.startsWith('\0') || ASSET_QUERY.test(id)) return null;
       const file = id.split('?')[0];
-      if (!include.test(file) || exclude.test(file)) return null;
+      if (!include.test(file) || exclude.test(file)) {
+        if (!PLAIN_MODULE.test(file)) return null;
+        const registered = registerInPlainModule(code);
+        // A dependency that merely contains the literal but cannot see frameact (a strict pnpm layout) must not
+        // get an import it cannot resolve: that would break the build for a false positive.
+        if (registered === null || !(await this.resolve('frameact/dom', id, { skipSelf: true }))) return null;
+        return registered;
+      }
       if (dev) {
         const lints = lintSource(code);
         const position = createPositioner(code);
@@ -178,7 +272,7 @@ export default function frameact(options: FrameactPluginOptions = {}): Plugin {
         configFile: false,
         sourceMaps: true,
         presets: file.endsWith('.tsx') ? [[typescript, {}]] : [],
-        plugins: [[solid, compilerOptions(dev)]],
+        plugins: babelPlugins(dev),
       });
       if (!result || result.code == null) return null;
       return { code: result.code, map: result.map as any };

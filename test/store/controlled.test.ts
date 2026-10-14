@@ -9,6 +9,9 @@ import { delegateEvents, EVENT_KEY } from '../../src/dom/events';
 import { createStore } from 'frameact/store';
 import { container, useDomHarness } from '../helpers/dom';
 import { flushMicrotasks } from '../helpers/micro';
+import { registerControlledDirectives } from '../../src/dom/controlled';
+
+registerControlledDirectives(); // the runtime no longer registers use:value / use:checked at load (the Vite plugin injects this call)
 
 const { frame } = useDomHarness();
 

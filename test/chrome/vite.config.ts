@@ -15,6 +15,7 @@ export default defineConfig({
   define: { 'process.env.NODE_ENV': JSON.stringify('development') },
   resolve: {
     alias: [
+      { find: 'frameact/dom/controlled', replacement: src('dom/controlledRegister.ts') },
       { find: 'frameact/dom', replacement: src('dom/index.ts') },
       { find: 'frameact/stricterdom', replacement: src('stricterdom/index.ts') },
       { find: 'frameact/jsx-runtime', replacement: src('jsx-runtime.ts') },

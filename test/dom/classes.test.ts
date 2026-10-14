@@ -113,3 +113,36 @@ it('a reactive class drops a token that addExtraClass also added (documented ove
   className(el, '');
   expect(classes(el)).toEqual(new Set());
 });
+
+it('token sets of every size diff correctly: 2+ → 1 → 0 → 1 → 2+ (string and Set representations)', () => {
+  const el = document.createElement('div');
+  el.classList.add('extra');
+  const add = vi.spyOn(el.classList, 'add');
+  const remove = vi.spyOn(el.classList, 'remove');
+  className(el, 'a b');
+  expect(classes(el)).toEqual(new Set(['extra', 'a', 'b']));
+  className(el, 'a'); // 2 → 1: only b removed
+  expect(classes(el)).toEqual(new Set(['extra', 'a']));
+  expect(remove).toHaveBeenCalledTimes(1);
+  className(el, ''); // 1 → 0
+  expect(classes(el)).toEqual(new Set(['extra']));
+  className(el, 'c'); // 0 → 1
+  className(el, ['c', { d: true }]); // 1 → 2: c kept, d added
+  expect(classes(el)).toEqual(new Set(['extra', 'c', 'd']));
+  expect(add).toHaveBeenCalledTimes(4); // a, b, c, d — never a token already there
+  className(el, 'd'); // 2 → 1 by a different token
+  expect(classes(el)).toEqual(new Set(['extra', 'd']));
+});
+
+it("'' → '' never reads classList (no DOMTokenList is allocated for a row whose class stays empty); the state is not an enumerable property", () => {
+  const el = document.createElement('div');
+  const getter = vi.spyOn(Element.prototype, 'classList', 'get');
+  className(el, '');
+  className(el, '');
+  className(el, null);
+  expect(getter).not.toHaveBeenCalled();
+  className(el, 'x');
+  expect(getter).toHaveBeenCalledTimes(1);
+  expect(Object.keys(el)).toEqual([]); // symbol-keyed: invisible to spreads and Object.keys
+  getter.mockRestore();
+});

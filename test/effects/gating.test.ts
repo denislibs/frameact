@@ -1,4 +1,5 @@
-import { createMeasureEffect, createMutationEffect, createIdleEffect, gateOnHeavyAnimation, deferUntilIdle } from '../../src/core/frame';
+import { createMeasureEffect, createMutationEffect } from '../../src/core/frame';
+import { createIdleEffect, gateOnHeavyAnimation, deferUntilIdle } from '../../src/scheduler/heavyAnimation';
 import { createEffect, tickEnd } from '../../src/core/effects';
 import { signal } from '../../src/core/signals';
 import { root } from '../../src/core/core';
@@ -59,9 +60,9 @@ it('one once-subscription per scope, parked entries are released through request
   $a.set(1);
   await frame(raf);
   expect(once).toHaveBeenCalledTimes(1);
-  expect(rootScope._releaseArmed).toBe(true);
+  expect(rootScope.releaseArmed).toBe(true);
   end();
-  expect(rootScope._releaseArmed).toBe(false);
+  expect(rootScope.releaseArmed).toBe(false);
   await frame(raf);
   expect(applied).toHaveBeenCalledTimes(100); // 50 sync first applies + 50 released
   once.mockRestore();
@@ -191,8 +192,8 @@ it('a scope that ends mid-drain does not strand its later parked entries', async
   expect(log).toContain('free');
   expect(log).toContain('g1');
   expect(log).toContain('g2');
-  expect(S._parked.length).toBe(0);
-  expect(S._releaseArmed).toBe(false);
+  expect(S.parked.length).toBe(0);
+  expect(S.releaseArmed).toBe(false);
 });
 
 it('release lands measure before mutate even when a measure drain is already armed', async () => {
@@ -249,8 +250,8 @@ it('if arming the release throws, the entry runs once and is not left parked', a
   $a.set(1);
   await frame(raf);
   expect(applied).toHaveBeenCalledTimes(2); // sync first apply + one ungated fallback run
-  expect(S._parked.length).toBe(0);
-  expect(S._releaseArmed).toBe(false);
+  expect(S.parked.length).toBe(0);
+  expect(S.releaseArmed).toBe(false);
   once.mockRestore();
   err.mockRestore();
   end();
@@ -286,7 +287,7 @@ it('C1b: a throwing user once-callback registered before the release does not st
   $a.set(1);
   await frame(raf); // parks; the release `once` is registered after the user's
   end();
-  expect(rootScope._releaseArmed).toBe(false);
+  expect(rootScope.releaseArmed).toBe(false);
   await frame(raf);
   expect(applied).toHaveBeenLastCalledWith(1, 0);
   expect(err.mock.calls.some((c) => String(c[0]).includes('heavy-animation callback failed'))).toBe(true);

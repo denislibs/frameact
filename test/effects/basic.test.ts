@@ -1,4 +1,4 @@
-import { createEffect, NOT_APPLIED } from '../../src/core/effects';
+import { createEffect, getRunningEffect, NOT_APPLIED, type EffectNode } from '../../src/core/effects';
 import { computed, signal } from '../../src/core/signals';
 import { root, onDispose } from '../../src/core/core';
 import { flushMicrotasks } from '../helpers/micro';
@@ -203,4 +203,25 @@ describe('effect compute dispatch (perf: computeNode goes straight to update() w
     expect(onSignal).toHaveBeenCalledTimes(3);
     expect(onMemo).toHaveBeenCalledTimes(2);
   });
+});
+
+it('a custom Schedule gets one stable `run` per effect, created on its first booking; built-in queues never create it', async () => {
+  const $a = signal(0);
+  const runs: Array<() => void> = [];
+  const applied: number[] = [];
+  let custom: EffectNode | null = null;
+  let builtin: EffectNode | null = null;
+  root(() => {
+    createEffect(() => { custom = getRunningEffect(); return $a(); }, (v) => { applied.push(v); }, (run) => { runs.push(run); queueMicrotask(run); });
+    createEffect(() => { builtin = getRunningEffect(); return $a(); }, () => {});
+  });
+  await flushMicrotasks();
+  expect(applied).toEqual([0]);
+  $a.set(1);
+  await flushMicrotasks();
+  expect(applied).toEqual([0, 1]);
+  expect(runs.length).toBe(2);
+  expect(runs[0]).toBe(runs[1]);
+  expect(custom!._run).toBe(runs[0]);
+  expect(builtin!._run).toBeNull(); // tickEnd queues the node itself
 });

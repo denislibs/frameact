@@ -24,7 +24,7 @@ frameact 是一个面向"每一帧都很重要"的应用的响应式 UI 框架�
 
 > **状态：早期开发。** 响应式内核（[PR #1](https://github.com/denislibs/frameact/pull/1)）与 DOM 运行时已实现：
 > 面向 Solid 2.0 JSX 编译器（`@solidjs/babel-plugin@2.0.0-rc.14`）的 `frameact/dom`、`render`、
-> `For`（含 `order="manual"`）、`Show`/`Switch`/`Match`/`Dynamic`/`Portal`、受控输入（`use:value` / `use:checked`）、
+> `For` 与 `ManualFor`（手动排序列表）、`Show`/`Switch`/`Match`/`Dynamic`/`Portal`、受控输入（`use:value` / `use:checked`）、
 > `HeavyAnimationScope`、context `Provider`，以及 `frameact/vite` 插件；store（`frameact/store`：在重动画期间
 > 按原因停靠的 signal 树）也已完成，stricterdom（`frameact/stricterdom`：开发模式阶段检查并定位到 effect，运行分析器）也已完成。接下来是基准测试。尚未发布到 npm，API 可能变化。
 
@@ -115,6 +115,15 @@ render(() => <Composer />, document.getElementById('app')!);
 `class=` / `classList=` / 展开属性按 token 做 diff，因此命令式的 `addExtraClass` 在更新后依然保留；字符串形式的 `style=`
 会写入 `cssText`，之后 `setExtraStyles` 设置的声明会被重新叠加。受控输入使用 `use:value` / `use:checked` —— 响应式的 `value=` 会被当作属性直接写入，
 Vite 插件会在开发模式下给出警告。如需让值穿透正在进行的 IME 输入法组合（例如点击发送后清空输入框），请先更新信号，再在用户事件处理器中调用 `forceControlledValue(el)`（在你的 `blur`/`focus` 处理器中可用 `isForcingControlledValue` 识别该强制周期）。
+
+**`use:value` / `use:checked` 如何注册。** 运行时在加载时不会注册它们（没有受控输入的应用不会打包这部分代码），所以在第一次写入之前
+必须有人调用 `registerControlledDirectives()`。Vite 插件会替你完成：只要模块编译后的输出里含有字符串 `"use:value"` /
+`"use:checked"`（JSX 属性、`mergeProps(props, { 'use:value': v })`、`<input {...{ 'use:value': s }} />`），就会在模块开头加入该调用；
+对含有该字符串的普通 `.js`/`.mjs`/`.ts` 模块（包括 `node_modules` 中在别处编译好的组件库）也一样。不用 Vite 时请使用 Babel 插件：
+`plugins: babelPlugins(dev)`（编译器加注册），或只用 `registerControlledBabelPlugin`，二者均来自 `frameact/vite`。
+构建看不到的写入（运行时拼出的名字、Vite 开发模式下连同自带 frameact 副本一起预构建的依赖、被压缩到无法识别的库）可使用后备方案：启动时 `import 'frameact/dom/controlled'`
+一次，或调用 `frameact/dom` 的 `registerControlledDirectives()`。若仍写入了未注册的 `use:value`，开发模式会输出带修复提示的错误，
+生产环境对每个指令名只输出一条简短的 `console.error`。
 
 **安全。** 属性写入会拒绝 `javascript:` / `vbscript:` URL、非媒体类 `data:` URL、字符串形式的 `on*` 处理器以及 `srcdoc=`；
 受信任 HTML 的显式出口是 `prop:srcdoc`。生产环境中拒绝是静默的，开发模式下会输出 `console.error`。

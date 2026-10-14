@@ -1,13 +1,7 @@
 {
   "upstream": "bf894b681fb56433ccb6efb4a3c93e35eda2b20d",
   "checked": [
-    "keyed/frameact",
-    "keyed/solid",
-    "keyed/svelte",
-    "keyed/vue",
-    "keyed/preact-signals",
-    "keyed/preact-hooks",
-    "keyed/vanillajs"
+    "keyed/frameact"
   ],
   "checks": [
     {
@@ -24,12 +18,6 @@
     }
   ],
   "isKeyed": [
-    "frameact-v0.0.0-keyed is keyed for 'run benchmark' and keyed for 'remove row benchmark' and keyed for 'swap rows benchmark' . It'll appear as keyed in the results",
-    "preact-hooks-v11.0.0-keyed is keyed for 'run benchmark' and keyed for 'remove row benchmark' and keyed for 'swap rows benchmark' . It'll appear as keyed in the results",
-    "preact-signals-v11.0.0 + 2.3.1-keyed is keyed for 'run benchmark' and keyed for 'remove row benchmark' and keyed for 'swap rows benchmark' . It'll appear as keyed in the results",
-    "solid-v1.9.3-keyed is keyed for 'run benchmark' and keyed for 'remove row benchmark' and keyed for 'swap rows benchmark' . It'll appear as keyed in the results",
-    "svelte-v5.42.1-keyed is keyed for 'run benchmark' and keyed for 'remove row benchmark' and keyed for 'swap rows benchmark' . It'll appear as keyed in the results",
-    "vanillajs-keyed is keyed for 'run benchmark' and keyed for 'remove row benchmark' and keyed for 'swap rows benchmark' . It'll appear as keyed in the results",
-    "vue-v3.5.39-keyed is keyed for 'run benchmark' and keyed for 'remove row benchmark' and keyed for 'swap rows benchmark' . It'll appear as keyed in the results"
+    "frameact-v0.0.0-keyed is keyed for 'run benchmark' and keyed for 'remove row benchmark' and keyed for 'swap rows benchmark' . It'll appear as keyed in the results"
   ]
 }
