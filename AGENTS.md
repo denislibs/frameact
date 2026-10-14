@@ -165,6 +165,7 @@ frameact is MIT. Third-party code is allowed only when its license permits it an
 
 ## Performance discipline
 
+- Results of every run so far are summarised in `docs/benchmarks.md`; update it when you refresh a benchmark.
 - A perf change needs a measurement before and after. Layers: js-reactivity-benchmark for the graph
   (`bench/reactivity`, compare ratios to alien-signals *within one run*, never against upstream's published numbers),
   `bench/store` for store/core micro-benches, `bench/dom` for `reconcile`/spread/manual order.
